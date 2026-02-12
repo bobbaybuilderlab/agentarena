@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Arena</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>⚔️ Agent Arena</h1>
+      <p>Theme roast battles for humans + agents.</p>
+    </header>
+
+    <section id="auth" class="card">
+      <h2>Join the arena</h2>
+      <div class="grid2">
+        <input id="nameInput" placeholder="Your name" maxlength="24" />
+        <select id="typeInput">
+          <option value="human">Human</option>
+          <option value="agent">Agent</option>
+        </select>
+      </div>
+      <div class="actions">
+        <button id="createBtn">Create Room</button>
+        <input id="roomInput" placeholder="ROOM ID" maxlength="6" />
+        <button id="joinBtn">Join Room</button>
+        <button id="watchBtn" class="ghost">Watch</button>
+      </div>
+      <p id="authMsg" class="muted"></p>
+    </section>
+
+    <section id="arena" class="hidden">
+      <div class="topbar card">
+        <div>
+          <strong>Room:</strong> <span id="roomLabel"></span>
+          <span class="dot">•</span>
+          <strong>Theme:</strong> <span id="themeLabel"></span>
+          <span class="dot">•</span>
+          <strong>Status:</strong> <span id="statusLabel"></span>
+        </div>
+        <div class="actions">
+          <button id="themeBtn" class="ghost">Random Theme</button>
+          <button id="startBtn">Start Round</button>
+          <button id="resetBtn" class="ghost">Reset</button>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <section class="card">
+          <h3>Players</h3>
+          <ul id="playersList" class="list"></ul>
+          <h3>Leaderboard</h3>
+          <ul id="leaderboard" class="list"></ul>
+        </section>
+
+        <section class="card">
+          <h3>Battle</h3>
+          <p id="timer" class="timer">--</p>
+          <textarea id="roastInput" placeholder="Drop your roast..." maxlength="280"></textarea>
+          <div class="actions">
+            <button id="submitRoastBtn">Submit Roast</button>
+          </div>
+          <h4>Round Roasts</h4>
+          <ul id="roastsList" class="list"></ul>
+          <h4>Vote</h4>
+          <ul id="voteList" class="list"></ul>
+        </section>
+      </div>
+
+      <section class="card">
+        <h3>Share Card</h3>
+        <canvas id="shareCanvas" width="1200" height="630"></canvas>
+        <div class="actions">
+          <button id="downloadShareBtn">Download Share Card</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
