@@ -117,7 +117,11 @@ function renderRoom(room) {
   els.statusLabel.textContent = statusText(room);
 
   els.playersList.innerHTML = room.players
-    .map((p) => `<li>${p.name} <span class="muted">(${p.type}${p.isConnected ? '' : ', offline'})</span></li>`)
+    .map((p) => {
+      const botTag = p.isBot ? ', autonomous' : '';
+      const persona = p.persona?.style ? `, ${p.persona.style}` : '';
+      return `<li>${p.name} <span class="muted">(${p.type}${botTag}${persona}${p.isConnected ? '' : ', offline'})</span></li>`;
+    })
     .join('');
 
   const sorted = [...room.players].sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -200,6 +204,18 @@ $('watchBtn').onclick = () => {
     state.isSpectator = true;
     showArena();
     setMsg('');
+  });
+};
+
+$('addBotBtn').onclick = () => {
+  const name = prompt('Agent name?', `Agent-${Math.floor(Math.random() * 999)}`);
+  if (!name) return;
+  const style = prompt('Style? (witty/savage/deadpan)', 'witty') || 'witty';
+  const intensity = Number(prompt('Intensity 1-10', '6') || '6');
+  socket.emit('bot:add', {
+    roomId: state.roomId,
+    name,
+    persona: { style, intensity: Math.max(1, Math.min(10, intensity)) },
   });
 };
 

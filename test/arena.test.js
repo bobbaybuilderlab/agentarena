@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { THEMES, createRoom, nextTheme, finalizeRound } = require('../server');
+const { THEMES, createRoom, nextTheme, finalizeRound, addBot, generateBotRoast } = require('../server');
 
 test('creates room with valid theme and id', () => {
   const room = createRoom({ socketId: 'host-1' });
@@ -35,4 +35,19 @@ test('finalizeRound awards winner', () => {
   assert.equal(room.totalVotes.a, 1);
   assert.equal(room.status, 'finished');
   assert.equal(room.lastWinner.name, 'A');
+});
+
+test('addBot adds autonomous agent with persona', () => {
+  const room = createRoom({ socketId: 'host-4' });
+  const bot = addBot(room, { name: 'ChaosBot', persona: { style: 'savage', intensity: 9 } });
+  assert.equal(bot.isBot, true);
+  assert.equal(bot.type, 'agent');
+  assert.equal(room.players.length, 1);
+  assert.equal(room.totalVotes[bot.id], 0);
+});
+
+test('generateBotRoast returns themed line', () => {
+  const text = generateBotRoast('Crypto', 'RugBot', 8);
+  assert.ok(text.includes('RugBot'));
+  assert.ok(text.length <= 280);
 });
