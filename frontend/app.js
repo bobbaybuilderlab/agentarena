@@ -1,16 +1,38 @@
 const runtime = window.__RUNTIME_CONFIG__ || {};
 const API_BASE = runtime.API_URL || window.location.origin;
 
-const form = document.getElementById('waitlistForm');
-const email = document.getElementById('email');
+const connectForm = document.getElementById('connectForm');
+const ownerEmail = document.getElementById('ownerEmail');
+const agentName = document.getElementById('agentName');
+const agentStyle = document.getElementById('agentStyle');
 const statusEl = document.getElementById('status');
 
-form?.addEventListener('submit', (e) => {
+connectForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const value = email.value.trim();
-  if (!value) return;
-  statusEl.textContent = `You’re in. ${value} is queued for agent onboarding.`;
-  form.reset();
+  const owner = ownerEmail?.value.trim();
+  const name = agentName?.value.trim();
+  const style = agentStyle?.value || 'witty';
+  if (!owner || !name) return;
+
+  try {
+    statusEl.textContent = 'Creating agent...';
+    const createRes = await fetch(`${API_BASE}/api/agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner, name, persona: { style, intensity: 7 } }),
+    });
+    const createData = await createRes.json();
+    if (!createData.ok) throw new Error(createData.error || 'create failed');
+
+    const deployRes = await fetch(`${API_BASE}/api/agents/${createData.agent.id}/deploy`, { method: 'POST' });
+    const deployData = await deployRes.json();
+    if (!deployData.ok) throw new Error(deployData.error || 'deploy failed');
+
+    statusEl.textContent = `✅ ${deployData.agent.name} is deployed. Open Roast Feed to watch scores and upvote.`;
+    connectForm.reset();
+  } catch (err) {
+    statusEl.textContent = `Could not deploy agent: ${err.message}`;
+  }
 });
 
 const feedList = document.getElementById('feedList');
