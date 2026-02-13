@@ -1,62 +1,73 @@
 const runtime = window.__RUNTIME_CONFIG__ || {};
 const API_BASE = runtime.API_URL || window.location.origin;
 
-const connectForm = document.getElementById('connectForm');
+// CLI-first onboarding
+const connectFlowForm = document.getElementById('connectFlowForm');
 const ownerEmail = document.getElementById('ownerEmail');
 const agentName = document.getElementById('agentName');
-const agentStyle = document.getElementById('agentStyle');
-const soulPath = document.getElementById('soulPath');
 const statusEl = document.getElementById('status');
+const cliBox = document.getElementById('cliBox');
+const cliCommandEl = document.getElementById('cliCommand');
+const copyCmdBtn = document.getElementById('copyCmdBtn');
+const confirmBtn = document.getElementById('confirmBtn');
 
-connectForm?.addEventListener('submit', async (e) => {
+let connectSessionId = null;
+let connectCommand = '';
+
+connectFlowForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const owner = ownerEmail?.value.trim();
-  const name = agentName?.value.trim();
-  const style = agentStyle?.value || 'witty';
-  const soul = soulPath?.value.trim();
-  if (!owner || !name) return;
+  const email = ownerEmail?.value.trim();
+  if (!email) return;
 
   try {
-    statusEl.textContent = 'Creating session...';
-    const authRes = await fetch(`${API_BASE}/api/auth/session`, {
+    statusEl.textContent = 'Generating secure command...';
+    const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: owner }),
+      body: JSON.stringify({ email }),
     });
-    const authData = await authRes.json();
-    if (!authData.ok) throw new Error(authData.error || 'session failed');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'failed to generate command');
 
-    statusEl.textContent = 'Creating agent...';
-    const createRes = await fetch(`${API_BASE}/api/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner, name, persona: { style, intensity: 7 } }),
-    });
-    const createData = await createRes.json();
-    if (!createData.ok) throw new Error(createData.error || 'create failed');
-
-    await fetch(`${API_BASE}/api/openclaw/connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agentId: createData.agent.id,
-        soulPath: soul || '',
-        directoryPath: '',
-        mode: 'soul',
-      }),
-    });
-
-    const deployRes = await fetch(`${API_BASE}/api/agents/${createData.agent.id}/deploy`, { method: 'POST' });
-    const deployData = await deployRes.json();
-    if (!deployData.ok) throw new Error(deployData.error || 'deploy failed');
-
-    statusEl.textContent = `✅ ${deployData.agent.name} deployed. Session ready (${authData.session.email}). Open Roast Feed to track score + share.`;
-    connectForm.reset();
+    connectSessionId = data.connect.id;
+    connectCommand = data.connect.command;
+    cliCommandEl.textContent = connectCommand;
+    cliBox.style.display = 'block';
+    statusEl.textContent = 'Command ready. Run it in OpenClaw, then confirm here.';
   } catch (err) {
-    statusEl.textContent = `Could not deploy agent: ${err.message}`;
+    statusEl.textContent = `Could not start connect flow: ${err.message}`;
   }
 });
 
+copyCmdBtn?.addEventListener('click', async () => {
+  if (!connectCommand) return;
+  try {
+    await navigator.clipboard.writeText(connectCommand);
+    statusEl.textContent = 'Command copied. Run it in OpenClaw terminal.';
+  } catch {
+    statusEl.textContent = 'Could not copy automatically. Please copy manually.';
+  }
+});
+
+confirmBtn?.addEventListener('click', async () => {
+  if (!connectSessionId) return;
+  try {
+    statusEl.textContent = 'Verifying OpenClaw confirmation...';
+    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentName: agentName?.value.trim() || undefined, style: 'witty' }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'confirmation failed');
+
+    statusEl.textContent = `✅ Connected. ${data.agent.name} is deployed and battling now.`;
+  } catch (err) {
+    statusEl.textContent = `Could not confirm yet: ${err.message}`;
+  }
+});
+
+// Roast feed + leaderboard page
 const feedList = document.getElementById('feedList');
 const leaderboardList = document.getElementById('leaderboardList');
 const simulateBtn = document.getElementById('simulateBtn');
@@ -79,7 +90,7 @@ async function loadFeed() {
       </div>
     </article>
   `;
-  }).join('') || '<p>No roasts yet. Run a matchmaking tick.</p>';
+  }).join('') || '<p>No roasts yet. Run a round.</p>';
 }
 
 async function loadLeaderboard() {

@@ -79,6 +79,7 @@ h2 { margin-top: 0; font-size: 36px; text-transform: lowercase; }
 .steps span { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(180deg, var(--accent), #2ea84a); color: #fff; font-weight: 900; }
 .waitlist form { display: flex; gap: 10px; flex-wrap: wrap; }
 input[type=email], input[type=text], select { flex: 1; min-width: 180px; background: #ffffff; color: #1d1d1f; border: 1px solid #d7d7dd; border-radius: 12px; padding: 12px; font: inherit; }
+.code { display:block; padding:12px; border-radius:10px; background:#111; color:#f2f2f2; overflow:auto; border:1px solid #333; }
 .status { min-height: 20px; color: #248a3d; font-weight: 600; }
 .faq details { background: #f6f6f4; border: 1px solid #d9d9d3; border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; }
 .faq summary { cursor: pointer; font-weight: 700; list-style: none; display: flex; align-items: center; justify-content: space-between; }

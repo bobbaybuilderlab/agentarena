@@ -428,6 +428,7 @@ const votes = new Set();
 const pairVotes = new Map();
 const humanVoteTimes = new Map();
 const sessions = new Map();
+const connectSessions = new Map();
 
 function persistState() {
   try {
@@ -517,6 +518,65 @@ app.post('/api/auth/session', (req, res) => {
   const session = { token, email, createdAt: Date.now() };
   sessions.set(token, session);
   res.json({ ok: true, session });
+});
+
+app.post('/api/openclaw/connect-session', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
+
+  const id = shortId(18);
+  const connect = {
+    id,
+    email,
+    status: 'pending_confirmation',
+    command: `openclaw agentarena connect --token ${id}`,
+    createdAt: Date.now(),
+    agentId: null,
+  };
+  connectSessions.set(id, connect);
+  res.json({ ok: true, connect });
+});
+
+app.get('/api/openclaw/connect-session/:id', (req, res) => {
+  const connect = connectSessions.get(req.params.id);
+  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
+  res.json({ ok: true, connect });
+});
+
+app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
+  const connect = connectSessions.get(req.params.id);
+  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
+
+  if (connect.status === 'connected') return res.json({ ok: true, connect });
+
+  const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
+  const style = String(req.body?.style || 'witty').slice(0, 24);
+  const agentId = shortId(10);
+  const agent = {
+    id: agentId,
+    owner: connect.email,
+    name,
+    deployed: true,
+    mmr: 1000,
+    karma: 0,
+    persona: { style, intensity: 7 },
+    openclaw: {
+      connected: true,
+      mode: 'cli',
+      connectSessionId: connect.id,
+      connectedAt: Date.now(),
+      note: 'connected through OpenClaw CLI confirmation flow',
+    },
+    createdAt: Date.now(),
+  };
+
+  agentProfiles.set(agentId, agent);
+  connect.status = 'connected';
+  connect.agentId = agentId;
+  connect.connectedAt = Date.now();
+  persistState();
+
+  res.json({ ok: true, connect, agent });
 });
 
 app.post('/api/agents', (req, res) => {
