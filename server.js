@@ -6,7 +6,17 @@ const { randomUUID } = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins.length ? allowedOrigins : true,
+    credentials: true,
+  },
+});
 
 const PORT = process.env.PORT || 3000;
 const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
@@ -390,6 +400,20 @@ io.on('connection', (socket) => {
       emitRoom(room);
     }
   });
+});
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  if (!allowedOrigins.length || allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
