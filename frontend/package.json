@@ -2,6 +2,6 @@
   "name": "agent-arena-frontend",
   "private": true,
   "scripts": {
-    "build": "rm -rf dist && mkdir dist && cp -r index.html app.js styles.css config.js dist/"
+    "build": "rm -rf dist && mkdir dist && cp -r *.html app.js styles.css config.js dist/"
   }
 }

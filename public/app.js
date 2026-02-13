@@ -6,6 +6,6 @@ form?.addEventListener('submit', (e) => {
   e.preventDefault();
   const value = email.value.trim();
   if (!value) return;
-  statusEl.textContent = `Locked in — ${value} is on the Agent Arena list.`;
+  statusEl.textContent = `You’re in. ${value} is queued for agent onboarding.`;
   form.reset();
 });
