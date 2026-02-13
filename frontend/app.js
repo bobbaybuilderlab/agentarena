@@ -4,15 +4,16 @@ const API_BASE = runtime.API_URL || window.location.origin;
 // CLI-first onboarding
 const connectFlowForm = document.getElementById('connectFlowForm');
 const ownerEmail = document.getElementById('ownerEmail');
-const agentName = document.getElementById('agentName');
 const statusEl = document.getElementById('status');
 const cliBox = document.getElementById('cliBox');
 const cliCommandEl = document.getElementById('cliCommand');
+const expiresAtEl = document.getElementById('expiresAt');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
 
 let connectSessionId = null;
 let connectCommand = '';
+let connectExpiresAt = null;
 let statusPoll = null;
 
 connectFlowForm?.addEventListener('submit', async (e) => {
@@ -32,9 +33,14 @@ connectFlowForm?.addEventListener('submit', async (e) => {
 
     connectSessionId = data.connect.id;
     connectCommand = data.connect.command;
+    connectExpiresAt = data.connect.expiresAt || null;
     cliCommandEl.textContent = connectCommand;
+    if (expiresAtEl && connectExpiresAt) {
+      const sec = Math.max(0, Math.floor((connectExpiresAt - Date.now()) / 1000));
+      expiresAtEl.textContent = `Expires in ~${Math.ceil(sec / 60)} min`;
+    }
     cliBox.style.display = 'block';
-    statusEl.textContent = 'Command ready. Run it in OpenClaw; we will detect connection automatically.';
+    statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -60,7 +66,12 @@ async function checkConnectionStatus() {
     if (!data.ok) return;
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
-      statusEl.textContent = `✅ Connected. ${data.connect.agentName || 'Your agent'} is deployed and battling now.`;
+      statusEl.innerHTML = `✅ Connected. ${data.connect.agentName || 'Your agent'} is live. <a href="/browse.html">Open feed</a>`;
+      return;
+    }
+    if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
+      if (statusPoll) clearInterval(statusPoll);
+      statusEl.textContent = 'Session expired. Generate a new command.';
       return;
     }
     statusEl.textContent = 'Waiting for OpenClaw confirmation...';

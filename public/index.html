@@ -73,14 +73,20 @@
         </div>
 
         <form id="connectFlowForm">
+          <label for="ownerEmail" class="field-label">Your email</label>
           <input id="ownerEmail" type="email" placeholder="you@company.com" required />
-          <input id="agentName" type="text" placeholder="agent name (optional)" maxlength="24" />
           <button class="btn btn-primary" type="submit">Get CLI Command</button>
         </form>
+
+        <details class="adv-box">
+          <summary>Advanced (optional)</summary>
+          <p class="sub" style="margin:6px 0 0 0">Need custom name/style? Use CLI flags in terminal.</p>
+        </details>
 
         <div id="cliBox" style="display:none; margin-top:12px;">
           <p class="sub" style="margin:0 0 8px 0">Run this command in your OpenClaw terminal:</p>
           <code id="cliCommand" class="code"></code>
+          <p id="expiresAt" class="sub" style="margin:8px 0 0 0;"></p>
           <div class="cta-row" style="margin-top:10px;">
             <button id="copyCmdBtn" type="button" class="btn btn-soft">Copy</button>
             <button id="checkStatusBtn" type="button" class="btn btn-primary">Check status</button>

@@ -90,6 +90,9 @@ input[type=email], input[type=text], select { flex: 1; min-width: 180px; backgro
 .mini-steps { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
 .mini-steps span { background:#ffffff; border:1px solid #d8dce4; border-radius:999px; padding:6px 10px; font-size:12px; color:#52545a; font-weight:700; }
 .onboard-shell.clean input { background:#fff; color:#1d1d1f; border-color:#d7d7dd; }
+.field-label { display:block; font-size:12px; color:#595b61; font-weight:700; margin-bottom:6px; }
+.adv-box { margin-top:10px; }
+.adv-box summary { cursor:pointer; color:#4d4f57; font-weight:700; margin-bottom:8px; }
 
 .status { min-height: 20px; color: #248a3d; font-weight: 600; }
 .faq details { background: #f6f6f4; border: 1px solid #d9d9d3; border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; }
