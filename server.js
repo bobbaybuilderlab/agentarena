@@ -416,13 +416,154 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.json());
+
+const agentProfiles = new Map();
+const roastFeed = [];
+const votes = new Set();
+
+function registerRoast({ battleId, agentId, agentName, text }) {
+  const roast = {
+    id: shortId(10),
+    battleId,
+    agentId,
+    agentName,
+    text: String(text || '').slice(0, 280),
+    upvotes: 0,
+    createdAt: Date.now(),
+  };
+  roastFeed.unshift(roast);
+  if (roastFeed.length > 400) roastFeed.length = 400;
+  return roast;
+}
+
+function ensureSeedAgents() {
+  if (agentProfiles.size >= 3) return;
+  ['savage_ops', 'deadpan_rx', 'roastor_prime'].forEach((name, i) => {
+    const id = shortId(10);
+    agentProfiles.set(id, {
+      id,
+      owner: 'system',
+      name,
+      deployed: true,
+      mmr: 1000 + i * 8,
+      karma: 0,
+      persona: { style: i % 2 ? 'deadpan' : 'witty', intensity: 6 + i },
+      createdAt: Date.now(),
+    });
+  });
+}
+
+function runAutoBattle() {
+  ensureSeedAgents();
+  const deployed = [...agentProfiles.values()].filter((a) => a.deployed);
+  if (deployed.length < 2) return null;
+
+  const shuffled = deployed.sort(() => Math.random() - 0.5).slice(0, Math.min(4, deployed.length));
+  const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
+  const battleId = shortId(8);
+
+  for (const agent of shuffled) {
+    const intensity = Number(agent.persona?.intensity || 6);
+    const roastText = generateBotRoast(theme, agent.name, intensity);
+    registerRoast({ battleId, agentId: agent.id, agentName: agent.name, text: roastText });
+  }
+
+  return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
+}
+
+app.post('/api/agents', (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ ok: false, error: 'name required' });
+
+  const id = shortId(10);
+  const profile = {
+    id,
+    owner: String(req.body?.owner || 'anonymous').slice(0, 64),
+    name: name.slice(0, 24),
+    deployed: false,
+    mmr: 1000,
+    karma: 0,
+    persona: {
+      style: String(req.body?.persona?.style || 'witty').slice(0, 24),
+      intensity: Math.max(1, Math.min(10, Number(req.body?.persona?.intensity || 6))),
+    },
+    createdAt: Date.now(),
+  };
+  agentProfiles.set(id, profile);
+  res.json({ ok: true, agent: profile });
+});
+
+app.post('/api/agents/:id/deploy', (req, res) => {
+  const agent = agentProfiles.get(req.params.id);
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
+  agent.deployed = true;
+  res.json({ ok: true, agent });
+});
+
+app.post('/api/matchmaking/tick', (_req, res) => {
+  const result = runAutoBattle();
+  res.json({ ok: true, battle: result });
+});
+
+app.get('/api/feed', (req, res) => {
+  const sort = req.query.sort === 'new' ? 'new' : 'top';
+  const items = [...roastFeed];
+  if (sort === 'top') items.sort((a, b) => b.upvotes - a.upvotes || b.createdAt - a.createdAt);
+  else items.sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ ok: true, items: items.slice(0, 100) });
+});
+
+app.post('/api/roasts/:id/upvote', (req, res) => {
+  const roast = roastFeed.find((r) => r.id === req.params.id);
+  if (!roast) return res.status(404).json({ ok: false, error: 'roast not found' });
+
+  const voterAgentId = req.body?.voterAgentId ? String(req.body.voterAgentId) : null;
+  const voterHumanId = req.body?.voterHumanId ? String(req.body.voterHumanId) : null;
+  const voterKey = voterAgentId ? `a:${voterAgentId}` : voterHumanId ? `h:${voterHumanId}` : null;
+
+  if (!voterKey) return res.status(400).json({ ok: false, error: 'voter required' });
+  if (voterAgentId && voterAgentId === roast.agentId) {
+    return res.status(400).json({ ok: false, error: 'self vote blocked' });
+  }
+
+  const key = `${voterKey}:${roast.id}`;
+  if (votes.has(key)) return res.status(409).json({ ok: false, error: 'already voted' });
+  votes.add(key);
+
+  roast.upvotes += 1;
+  const ownerAgent = agentProfiles.get(roast.agentId);
+  if (ownerAgent) ownerAgent.karma += 1;
+
+  res.json({ ok: true, roast });
+});
+
+app.get('/api/leaderboard', (_req, res) => {
+  const agents = [...agentProfiles.values()];
+  const topAgents = [...agents]
+    .sort((a, b) => b.mmr - a.mmr || b.karma - a.karma)
+    .slice(0, 25)
+    .map(({ id, name, mmr, karma, deployed }) => ({ id, name, mmr, karma, deployed }));
+
+  const topRoasts = [...roastFeed]
+    .sort((a, b) => b.upvotes - a.upvotes || b.createdAt - a.createdAt)
+    .slice(0, 25);
+
+  res.json({ ok: true, topAgents, topRoasts });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size });
+  res.json({ ok: true, rooms: rooms.size, agents: agentProfiles.size, roasts: roastFeed.length });
 });
 
 if (require.main === module) {
+  runAutoBattle();
+  setInterval(() => {
+    runAutoBattle();
+  }, 20_000);
+
   server.listen(PORT, () => {
     console.log(`Agent Arena running on http://localhost:${PORT}`);
   });
