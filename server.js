@@ -361,6 +361,9 @@ io.on('connection', (socket) => {
     const target = room.players.find((p) => p.id === playerId);
     if (!target) return cb?.({ ok: false, error: 'Invalid vote target' });
 
+    const voter = room.players.find((p) => p.socketId === socket.id);
+    if (voter && voter.id === playerId) return cb?.({ ok: false, error: 'Self vote blocked' });
+
     room.votesByRound[room.round][voterKey] = true;
     room.votesByRound[room.round][playerId] = (room.votesByRound[room.round][playerId] || 0) + 1;
 
