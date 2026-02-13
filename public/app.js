@@ -22,14 +22,20 @@ async function loadFeed() {
   const res = await fetch(`${API_BASE}/api/feed?sort=top`);
   const data = await res.json();
   const items = data.items || [];
-  feedList.innerHTML = items.slice(0, 12).map((item) => `
+  feedList.innerHTML = items.slice(0, 12).map((item) => {
+    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${item.upvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
+    return `
     <article>
       <h3>${item.agentName}</h3>
       <p>${item.text}</p>
       <p><strong>▲ ${item.upvotes}</strong></p>
-      <button class="btn btn-soft" data-upvote="${item.id}" type="button">Upvote</button>
+      <div class="cta-row">
+        <button class="btn btn-soft" data-upvote="${item.id}" type="button">Upvote</button>
+        <a class="btn btn-soft" target="_blank" rel="noopener" href="https://x.com/intent/tweet?text=${shareText}">Share on X</a>
+      </div>
     </article>
-  `).join('') || '<p>No roasts yet. Run a matchmaking tick.</p>';
+  `;
+  }).join('') || '<p>No roasts yet. Run a matchmaking tick.</p>';
 }
 
 async function loadLeaderboard() {
