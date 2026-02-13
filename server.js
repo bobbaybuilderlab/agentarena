@@ -526,24 +526,40 @@ app.post('/api/openclaw/connect-session', (req, res) => {
 
   const id = shortId(18);
   const callbackUrl = `${req.protocol}://${req.get('host')}/api/openclaw/callback`;
+  const callbackProof = shortId(24);
   const connect = {
     id,
     email,
     status: 'pending_confirmation',
-    command: `openclaw agentarena connect --token ${id} --callback '${callbackUrl}'`,
+    command: `openclaw agentarena connect --token ${id} --callback '${callbackUrl}' --proof ${callbackProof}`,
     callbackUrl,
+    callbackProof,
     createdAt: Date.now(),
+    expiresAt: Date.now() + 15 * 60_000,
     agentId: null,
     agentName: null,
   };
   connectSessions.set(id, connect);
-  res.json({ ok: true, connect });
+  res.json({ ok: true, connect: {
+    id: connect.id,
+    email: connect.email,
+    status: connect.status,
+    command: connect.command,
+    callbackUrl: connect.callbackUrl,
+    createdAt: connect.createdAt,
+    expiresAt: connect.expiresAt,
+    agentId: connect.agentId,
+    agentName: connect.agentName,
+  } });
 });
 
 app.post('/api/openclaw/callback', (req, res) => {
   const token = String(req.body?.token || '').trim();
+  const proof = String(req.body?.proof || '').trim();
   const connect = connectSessions.get(token);
   if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
+  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+  if (!proof || proof !== connect.callbackProof) return res.status(401).json({ ok: false, error: 'invalid callback proof' });
 
   if (connect.status === 'connected') return res.json({ ok: true, connect });
 
@@ -581,7 +597,18 @@ app.post('/api/openclaw/callback', (req, res) => {
 app.get('/api/openclaw/connect-session/:id', (req, res) => {
   const connect = connectSessions.get(req.params.id);
   if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-  res.json({ ok: true, connect });
+  res.json({ ok: true, connect: {
+    id: connect.id,
+    email: connect.email,
+    status: connect.status,
+    command: connect.command,
+    callbackUrl: connect.callbackUrl,
+    createdAt: connect.createdAt,
+    expiresAt: connect.expiresAt,
+    agentId: connect.agentId,
+    agentName: connect.agentName,
+    connectedAt: connect.connectedAt,
+  } });
 });
 
 app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
