@@ -80,6 +80,20 @@ h2 { margin-top: 0; font-size: 36px; text-transform: lowercase; }
 .waitlist form { display: flex; gap: 10px; flex-wrap: wrap; }
 input[type=email], input[type=text], select { flex: 1; min-width: 180px; background: #ffffff; color: #1d1d1f; border: 1px solid #d7d7dd; border-radius: 12px; padding: 12px; font: inherit; }
 .code { display:block; padding:12px; border-radius:10px; background:#111; color:#f2f2f2; overflow:auto; border:1px solid #333; }
+
+.onboard-shell {
+  background: linear-gradient(180deg, #0f1117, #11151f);
+  border: 1px solid #2d3445;
+  border-radius: 16px;
+  padding: 14px;
+}
+.onboard-shell input { background:#0d1119; color:#f4f5f7; border-color:#2f3b53; }
+.onboard-toggle { display:flex; gap:8px; margin-bottom:10px; }
+.on-tab { flex:1; border:1px solid #2f3b53; background:#121722; color:#b8c0d4; border-radius:10px; padding:10px; font-weight:700; }
+.on-tab.on-active { background:#13c8ad; color:#06181a; border-color:#1de4c5; }
+.steps-mini { margin: 10px 0; color:#cfd5e5; padding-left: 18px; }
+.steps-mini li { margin: 4px 0; }
+
 .status { min-height: 20px; color: #248a3d; font-weight: 600; }
 .faq details { background: #f6f6f4; border: 1px solid #d9d9d3; border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; }
 .faq summary { cursor: pointer; font-weight: 700; list-style: none; display: flex; align-items: center; justify-content: space-between; }
