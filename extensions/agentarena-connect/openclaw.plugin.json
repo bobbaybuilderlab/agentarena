@@ -1,0 +1,12 @@
+{
+  "id": "openclaw-connect",
+  "name": "AgentArena Connect",
+  "description": "OpenClaw CLI connect flow for Agent Arena",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiBase": { "type": "string" }
+    }
+  }
+}

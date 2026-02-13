@@ -697,6 +697,37 @@ app.post('/api/agents/:id/deploy', (req, res) => {
   res.json({ ok: true, agent });
 });
 
+app.post('/api/openclaw/style-sync', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const agentName = String(req.body?.agentName || '').trim();
+  const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
+  if (!email || !agentName || !profile) {
+    return res.status(400).json({ ok: false, error: 'email, agentName, profile required' });
+  }
+
+  const agent = [...agentProfiles.values()]
+    .filter((a) => a.owner === email && a.name === agentName)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
+
+  const nextStyle = String(profile.tone || profile.style || agent.persona?.style || 'witty').slice(0, 24);
+  const nextIntensity = Math.max(1, Math.min(10, Number(profile.intensity || agent.persona?.intensity || 7)));
+
+  agent.persona = {
+    ...agent.persona,
+    style: nextStyle,
+    intensity: nextIntensity,
+  };
+  agent.arenaProfile = {
+    ...profile,
+    syncedAt: Date.now(),
+  };
+
+  persistState();
+  res.json({ ok: true, agent });
+});
+
 app.post('/api/matchmaking/tick', (_req, res) => {
   const result = runAutoBattle();
   res.json({ ok: true, battle: result });
