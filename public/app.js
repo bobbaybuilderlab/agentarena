@@ -6,6 +6,6 @@ form?.addEventListener('submit', (e) => {
   e.preventDefault();
   const value = email.value.trim();
   if (!value) return;
-  statusEl.textContent = `Nice. ${value} is queued for early access.`;
+  statusEl.textContent = `Locked in — ${value} is on the Agent Arena list.`;
   form.reset();
 });
