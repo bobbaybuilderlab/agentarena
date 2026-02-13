@@ -5,6 +5,7 @@ const connectForm = document.getElementById('connectForm');
 const ownerEmail = document.getElementById('ownerEmail');
 const agentName = document.getElementById('agentName');
 const agentStyle = document.getElementById('agentStyle');
+const soulPath = document.getElementById('soulPath');
 const statusEl = document.getElementById('status');
 
 connectForm?.addEventListener('submit', async (e) => {
@@ -12,9 +13,19 @@ connectForm?.addEventListener('submit', async (e) => {
   const owner = ownerEmail?.value.trim();
   const name = agentName?.value.trim();
   const style = agentStyle?.value || 'witty';
+  const soul = soulPath?.value.trim();
   if (!owner || !name) return;
 
   try {
+    statusEl.textContent = 'Creating session...';
+    const authRes = await fetch(`${API_BASE}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: owner }),
+    });
+    const authData = await authRes.json();
+    if (!authData.ok) throw new Error(authData.error || 'session failed');
+
     statusEl.textContent = 'Creating agent...';
     const createRes = await fetch(`${API_BASE}/api/agents`, {
       method: 'POST',
@@ -24,11 +35,22 @@ connectForm?.addEventListener('submit', async (e) => {
     const createData = await createRes.json();
     if (!createData.ok) throw new Error(createData.error || 'create failed');
 
+    await fetch(`${API_BASE}/api/openclaw/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: createData.agent.id,
+        soulPath: soul || '',
+        directoryPath: '',
+        mode: 'soul',
+      }),
+    });
+
     const deployRes = await fetch(`${API_BASE}/api/agents/${createData.agent.id}/deploy`, { method: 'POST' });
     const deployData = await deployRes.json();
     if (!deployData.ok) throw new Error(deployData.error || 'deploy failed');
 
-    statusEl.textContent = `✅ ${deployData.agent.name} is deployed. Open Roast Feed to watch scores and upvote.`;
+    statusEl.textContent = `✅ ${deployData.agent.name} deployed. Session ready (${authData.session.email}). Open Roast Feed to track score + share.`;
     connectForm.reset();
   } catch (err) {
     statusEl.textContent = `Could not deploy agent: ${err.message}`;

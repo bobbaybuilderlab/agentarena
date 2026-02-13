@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -418,9 +419,43 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+const DATA_DIR = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'state.json');
+
 const agentProfiles = new Map();
 const roastFeed = [];
 const votes = new Set();
+const pairVotes = new Map();
+const humanVoteTimes = new Map();
+const sessions = new Map();
+
+function persistState() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const serializable = {
+      agents: [...agentProfiles.values()],
+      roastFeed,
+      votes: [...votes],
+      pairVotes: [...pairVotes.entries()],
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(serializable, null, 2));
+  } catch (err) {
+    console.error('persistState failed', err.message);
+  }
+}
+
+function loadState() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    (parsed.agents || []).forEach((a) => agentProfiles.set(a.id, a));
+    (parsed.roastFeed || []).forEach((r) => roastFeed.push(r));
+    (parsed.votes || []).forEach((v) => votes.add(v));
+    (parsed.pairVotes || []).forEach(([k, v]) => pairVotes.set(k, v));
+  } catch (err) {
+    console.error('loadState failed', err.message);
+  }
+}
 
 function registerRoast({ battleId, agentId, agentName, text }) {
   const roast = {
@@ -434,6 +469,7 @@ function registerRoast({ battleId, agentId, agentName, text }) {
   };
   roastFeed.unshift(roast);
   if (roastFeed.length > 400) roastFeed.length = 400;
+  persistState();
   return roast;
 }
 
@@ -449,9 +485,11 @@ function ensureSeedAgents() {
       mmr: 1000 + i * 8,
       karma: 0,
       persona: { style: i % 2 ? 'deadpan' : 'witty', intensity: 6 + i },
+      openclaw: { connected: true, mode: 'seed' },
       createdAt: Date.now(),
     });
   });
+  persistState();
 }
 
 function runAutoBattle() {
@@ -472,6 +510,15 @@ function runAutoBattle() {
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
+app.post('/api/auth/session', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
+  const token = shortId(20);
+  const session = { token, email, createdAt: Date.now() };
+  sessions.set(token, session);
+  res.json({ ok: true, session });
+});
+
 app.post('/api/agents', (req, res) => {
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ ok: false, error: 'name required' });
@@ -488,16 +535,37 @@ app.post('/api/agents', (req, res) => {
       style: String(req.body?.persona?.style || 'witty').slice(0, 24),
       intensity: Math.max(1, Math.min(10, Number(req.body?.persona?.intensity || 6))),
     },
+    openclaw: { connected: false, mode: 'manual' },
     createdAt: Date.now(),
   };
   agentProfiles.set(id, profile);
+  persistState();
   res.json({ ok: true, agent: profile });
+});
+
+app.post('/api/openclaw/connect', (req, res) => {
+  const agent = agentProfiles.get(String(req.body?.agentId || ''));
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
+
+  const soulPath = String(req.body?.soulPath || '').trim();
+  const directoryPath = String(req.body?.directoryPath || '').trim();
+  agent.openclaw = {
+    connected: true,
+    mode: req.body?.mode === 'directory' ? 'directory' : 'soul',
+    soulPath,
+    directoryPath,
+    connectedAt: Date.now(),
+    note: 'stub connection until native OpenClaw handshake lands',
+  };
+  persistState();
+  res.json({ ok: true, agent });
 });
 
 app.post('/api/agents/:id/deploy', (req, res) => {
   const agent = agentProfiles.get(req.params.id);
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
   agent.deployed = true;
+  persistState();
   res.json({ ok: true, agent });
 });
 
@@ -529,11 +597,29 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
 
   const key = `${voterKey}:${roast.id}`;
   if (votes.has(key)) return res.status(409).json({ ok: false, error: 'already voted' });
+
+  if (voterHumanId) {
+    const now = Date.now();
+    const events = humanVoteTimes.get(voterHumanId) || [];
+    const recent = events.filter((t) => now - t < 60_000);
+    if (recent.length >= 20) return res.status(429).json({ ok: false, error: 'rate limit: too many votes/min' });
+    recent.push(now);
+    humanVoteTimes.set(voterHumanId, recent);
+  }
+
+  if (voterAgentId) {
+    const pairKey = `${voterAgentId}->${roast.agentId}`;
+    const count = pairVotes.get(pairKey) || 0;
+    if (count >= 3) return res.status(429).json({ ok: false, error: 'pair voting cap reached' });
+    pairVotes.set(pairKey, count + 1);
+  }
+
   votes.add(key);
 
   roast.upvotes += 1;
   const ownerAgent = agentProfiles.get(roast.agentId);
   if (ownerAgent) ownerAgent.karma += 1;
+  persistState();
 
   res.json({ ok: true, roast });
 });
@@ -543,7 +629,7 @@ app.get('/api/leaderboard', (_req, res) => {
   const topAgents = [...agents]
     .sort((a, b) => b.mmr - a.mmr || b.karma - a.karma)
     .slice(0, 25)
-    .map(({ id, name, mmr, karma, deployed }) => ({ id, name, mmr, karma, deployed }));
+    .map(({ id, name, mmr, karma, deployed, openclaw }) => ({ id, name, mmr, karma, deployed, openclawConnected: !!openclaw?.connected }));
 
   const topRoasts = [...roastFeed]
     .sort((a, b) => b.upvotes - a.upvotes || b.createdAt - a.createdAt)
@@ -551,6 +637,8 @@ app.get('/api/leaderboard', (_req, res) => {
 
   res.json({ ok: true, topAgents, topRoasts });
 });
+
+loadState();
 
 app.use(express.static(path.join(__dirname, 'public')));
 
