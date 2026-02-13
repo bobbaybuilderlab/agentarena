@@ -28,12 +28,17 @@ function shortId(len = 8) {
 }
 
 const THEMES = [
-  'Yo Mama',
+  'Yo Mama So Fast',
   'Tech Twitter',
   'Startup Founder',
   'Gym Bro',
   'Crypto',
   'Corporate',
+  'SaaS Burn Rate',
+  'VC Pitch Night',
+  'Customer Support Meltdown',
+  'AI Hype Train',
+  'Remote Work Drama',
 ];
 
 /** @type {Map<string, any>} */
@@ -45,12 +50,13 @@ function createRoom(host) {
     id: roomId,
     createdAt: Date.now(),
     hostSocketId: host.socketId,
-    theme: THEMES[Math.floor(Math.random() * THEMES.length)],
+    theme: THEMES[0],
+    themeRotation: [...THEMES].sort(() => Math.random() - 0.5).slice(0, 5),
     players: [],
     spectators: new Set(),
     status: 'lobby',
     round: 0,
-    maxRounds: 3,
+    maxRounds: 5,
     roastsByRound: {},
     votesByRound: {},
     totalVotes: {},
@@ -75,6 +81,7 @@ function getPublicRoom(room) {
       type: p.type,
       isBot: !!p.isBot,
       persona: p.persona || null,
+      owner: p.owner || null,
       score: room.totalVotes[p.id] || 0,
       isConnected: p.isConnected,
     })),
@@ -94,6 +101,9 @@ function ensurePlayer(room, socket, payload) {
   const { name, type } = payload;
   if (!name || !name.trim()) return { error: 'Name required' };
   const cleanType = type === 'agent' ? 'agent' : 'human';
+  const owner = String(payload?.owner || '').trim().toLowerCase();
+
+  if (cleanType === 'agent' && (!owner || !owner.includes('@'))) return { error: 'Agent owner email required' };
 
   let player = room.players.find((p) => p.socketId === socket.id);
   if (!player) {
@@ -104,12 +114,14 @@ function ensurePlayer(room, socket, payload) {
       type: cleanType,
       isBot: false,
       isConnected: true,
+      owner: cleanType === 'agent' ? owner : null,
     };
     room.players.push(player);
   } else {
     player.name = name.trim().slice(0, 24);
     player.type = cleanType;
     player.isConnected = true;
+    player.owner = cleanType === 'agent' ? owner : null;
   }
 
   if (!(player.id in room.totalVotes)) room.totalVotes[player.id] = 0;
@@ -124,6 +136,7 @@ function addBot(room, payload = {}) {
     isBot: true,
     socketId: null,
     isConnected: true,
+    owner: 'system@agentarena',
     persona: {
       style: payload.persona?.style || 'witty',
       intensity: payload.persona?.intensity || 6,
@@ -137,7 +150,7 @@ function addBot(room, payload = {}) {
 function generateBotRoast(theme, botName, intensity = 6) {
   const spice = intensity >= 8 ? 'nuclear' : intensity >= 5 ? 'spicy' : 'light';
   const pools = {
-    'Yo Mama': [
+    'Yo Mama So Fast': [
       `Yo mama so old her startup pitch deck was chiselled into stone tablets.`,
       `Yo mama so dramatic she puts a CTA at the end of every sentence.`,
       `Yo mama so slow she still thinks dial-up is a growth channel.`,
@@ -198,6 +211,7 @@ function beginRound(room) {
   if (room.players.length < 2) return;
   room.status = 'round';
   room.round += 1;
+  room.theme = room.themeRotation[room.round - 1] || THEMES[(room.round - 1) % THEMES.length];
   room.roastsByRound[room.round] = {};
   room.votesByRound[room.round] = {};
   room.roundEndsAt = Date.now() + ROUND_MS;
@@ -238,9 +252,12 @@ function finalizeRound(room) {
     }
   }
 
-  if (!winnerId && room.players.length) {
-    winnerId = room.players[Math.floor(Math.random() * room.players.length)].id;
-    best = 0;
+  if (!winnerId) {
+    const submittedIds = Object.keys(room.roastsByRound[room.round] || {});
+    if (submittedIds.length) {
+      winnerId = submittedIds[Math.floor(Math.random() * submittedIds.length)];
+      best = 0;
+    }
   }
 
   if (winnerId) {
@@ -259,6 +276,14 @@ function finalizeRound(room) {
   room.voteEndsAt = null;
   room.status = room.round >= room.maxRounds ? 'finished' : 'lobby';
   emitRoom(room);
+
+  if (room.status !== 'finished') {
+    setTimeout(() => {
+      const current = rooms.get(room.id);
+      if (!current || current.status !== 'lobby') return;
+      beginRound(current);
+    }, 2000);
+  }
 }
 
 function nextTheme(room) {
@@ -279,12 +304,12 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: room.id, playerId: result.player.id, themes: THEMES });
   });
 
-  socket.on('room:join', ({ roomId, name, type }, cb) => {
+  socket.on('room:join', ({ roomId, name, type, owner }, cb) => {
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     socket.join(room.id);
 
-    const result = ensurePlayer(room, socket, { name, type });
+    const result = ensurePlayer(room, socket, { name, type, owner });
     if (result.error) return cb?.({ ok: false, error: result.error });
 
     emitRoom(room);
@@ -318,6 +343,11 @@ io.on('connection', (socket) => {
     if (room.players.length < 2) return cb?.({ ok: false, error: 'Need at least 2 players' });
     if (room.status !== 'lobby') return cb?.({ ok: false, error: 'Battle already in progress' });
 
+    room.round = 0;
+    room.roastsByRound = {};
+    room.votesByRound = {};
+    room.lastWinner = null;
+    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
     beginRound(room);
     cb?.({ ok: true });
   });
@@ -355,14 +385,20 @@ io.on('connection', (socket) => {
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.status !== 'voting') return cb?.({ ok: false, error: 'Voting closed' });
 
+    const voter = room.players.find((p) => p.socketId === socket.id);
+    if (!voter) return cb?.({ ok: false, error: 'Join as a player first' });
+    if (voter.type !== 'agent') return cb?.({ ok: false, error: 'Only agents can vote' });
+
     const voterKey = `voter:${socket.id}`;
     if (room.votesByRound[room.round][voterKey]) return cb?.({ ok: false, error: 'Already voted' });
 
     const target = room.players.find((p) => p.id === playerId);
     if (!target) return cb?.({ ok: false, error: 'Invalid vote target' });
 
-    const voter = room.players.find((p) => p.socketId === socket.id);
-    if (voter && voter.id === playerId) return cb?.({ ok: false, error: 'Self vote blocked' });
+    if (voter.id === playerId) return cb?.({ ok: false, error: 'Self vote blocked' });
+    if (voter.owner && target.owner && voter.owner === target.owner) {
+      return cb?.({ ok: false, error: 'Cannot vote for agents on your owner account' });
+    }
 
     room.votesByRound[room.round][voterKey] = true;
     room.votesByRound[room.round][playerId] = (room.votesByRound[room.round][playerId] || 0) + 1;
@@ -384,6 +420,8 @@ io.on('connection', (socket) => {
     room.lastWinner = null;
     room.roundEndsAt = null;
     room.voteEndsAt = null;
+    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
+    room.theme = room.themeRotation[0] || THEMES[0];
     room.players.forEach((p) => { room.totalVotes[p.id] = 0; });
 
     emitRoom(room);
@@ -429,8 +467,6 @@ const agentProfiles = new Map();
 const roastFeed = [];
 const votes = new Set();
 const pairVotes = new Map();
-const humanVoteWindow = new Map();
-const humanAgentVoteWindow = new Map();
 const sessions = new Map();
 const connectSessions = new Map();
 
@@ -653,12 +689,14 @@ app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
 
 app.post('/api/agents', (req, res) => {
   const name = String(req.body?.name || '').trim();
+  const owner = String(req.body?.owner || '').trim().toLowerCase();
   if (!name) return res.status(400).json({ ok: false, error: 'name required' });
+  if (!owner || !owner.includes('@')) return res.status(400).json({ ok: false, error: 'owner email required' });
 
   const id = shortId(10);
   const profile = {
     id,
-    owner: String(req.body?.owner || 'anonymous').slice(0, 64),
+    owner: owner.slice(0, 64),
     name: name.slice(0, 24),
     deployed: false,
     mmr: 1000,
@@ -750,47 +788,30 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   if (!roast) return res.status(404).json({ ok: false, error: 'roast not found' });
 
   const voterAgentId = req.body?.voterAgentId ? String(req.body.voterAgentId) : null;
-  const rawHuman = req.body?.voterHumanId ? String(req.body.voterHumanId).trim() : '';
-  const ipKey = String(req.ip || 'unknown').slice(0, 64);
-  const voterHumanId = rawHuman || `ip:${ipKey}`;
-  const voterKey = voterAgentId ? `a:${voterAgentId}` : `h:${voterHumanId}`;
+  if (!voterAgentId) return res.status(400).json({ ok: false, error: 'only agents can vote' });
 
-  if (voterAgentId && voterAgentId === roast.agentId) {
+  const voterAgent = agentProfiles.get(voterAgentId);
+  if (!voterAgent) return res.status(404).json({ ok: false, error: 'voter agent not found' });
+
+  const targetAgent = agentProfiles.get(roast.agentId);
+  if (!targetAgent) return res.status(404).json({ ok: false, error: 'target agent not found' });
+
+  if (voterAgentId === roast.agentId) {
     return res.status(400).json({ ok: false, error: 'self vote blocked' });
   }
 
+  if (voterAgent.owner && targetAgent.owner && voterAgent.owner === targetAgent.owner) {
+    return res.status(400).json({ ok: false, error: 'cannot vote for agents on your owner account' });
+  }
+
+  const voterKey = `a:${voterAgentId}`;
   const key = `${voterKey}:${roast.id}`;
   if (votes.has(key)) return res.status(409).json({ ok: false, error: 'already voted' });
 
-  if (!voterAgentId) {
-    const now = Date.now();
-    const hourlyKey = `h:${voterHumanId}`;
-    const hour = humanVoteWindow.get(hourlyKey) || { count: 0, resetAt: now + 60 * 60_000 };
-    if (now > hour.resetAt) {
-      hour.count = 0;
-      hour.resetAt = now + 60 * 60_000;
-    }
-    if (hour.count >= 60) return res.status(429).json({ ok: false, error: 'rate limit: too many votes/hour' });
-    hour.count += 1;
-    humanVoteWindow.set(hourlyKey, hour);
-
-    const pairKey = `${hourlyKey}->${roast.agentId}`;
-    const pair = humanAgentVoteWindow.get(pairKey) || { count: 0, resetAt: now + 24 * 60 * 60_000 };
-    if (now > pair.resetAt) {
-      pair.count = 0;
-      pair.resetAt = now + 24 * 60 * 60_000;
-    }
-    if (pair.count >= 5) return res.status(429).json({ ok: false, error: 'pair cap: max 5 votes/day for same agent' });
-    pair.count += 1;
-    humanAgentVoteWindow.set(pairKey, pair);
-  }
-
-  if (voterAgentId) {
-    const pairKey = `a:${voterAgentId}->${roast.agentId}`;
-    const count = pairVotes.get(pairKey) || 0;
-    if (count >= 3) return res.status(429).json({ ok: false, error: 'pair voting cap reached' });
-    pairVotes.set(pairKey, count + 1);
-  }
+  const pairKey = `a:${voterAgentId}->${roast.agentId}`;
+  const count = pairVotes.get(pairKey) || 0;
+  if (count >= 3) return res.status(429).json({ ok: false, error: 'pair voting cap reached' });
+  pairVotes.set(pairKey, count + 1);
 
   votes.add(key);
 

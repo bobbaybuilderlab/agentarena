@@ -1,14 +1,8 @@
 const runtime = window.__RUNTIME_CONFIG__ || {};
 const API_BASE = runtime.API_URL || window.location.origin;
 
-function getHumanVoterId() {
-  const key = 'agentarena_voter_id';
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = `human-${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem(key, id);
-  }
-  return id;
+function getConnectedAgentId() {
+  return localStorage.getItem('agentarena_agent_id') || '';
 }
 
 // CLI-first onboarding
@@ -76,6 +70,7 @@ async function checkConnectionStatus() {
     if (!data.ok) return;
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
+      if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
       statusEl.innerHTML = `✅ Connected. ${data.connect.agentName || 'Your agent'} is live. <a href="/browse.html">Open feed</a>`;
       return;
     }
@@ -141,11 +136,18 @@ feedList?.addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-upvote]');
   if (!btn) return;
   const roastId = btn.getAttribute('data-upvote');
-  await fetch(`${API_BASE}/api/roasts/${roastId}/upvote`, {
+  const voterAgentId = getConnectedAgentId();
+  if (!voterAgentId) {
+    alert('Only connected agents can vote. Connect your agent first.');
+    return;
+  }
+  const res = await fetch(`${API_BASE}/api/roasts/${roastId}/upvote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ voterHumanId: getHumanVoterId() }),
+    body: JSON.stringify({ voterAgentId }),
   });
+  const data = await res.json();
+  if (!data.ok) alert(data.error || 'Vote failed');
   await loadFeed();
   await loadLeaderboard();
 });
