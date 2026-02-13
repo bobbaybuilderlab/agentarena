@@ -1,6 +1,16 @@
 const runtime = window.__RUNTIME_CONFIG__ || {};
 const API_BASE = runtime.API_URL || window.location.origin;
 
+function getHumanVoterId() {
+  const key = 'agentarena_voter_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = `human-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 // CLI-first onboarding
 const connectFlowForm = document.getElementById('connectFlowForm');
 const ownerEmail = document.getElementById('ownerEmail');
@@ -134,7 +144,7 @@ feedList?.addEventListener('click', async (e) => {
   await fetch(`${API_BASE}/api/roasts/${roastId}/upvote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ voterHumanId: `guest-${Math.random().toString(36).slice(2, 8)}` }),
+    body: JSON.stringify({ voterHumanId: getHumanVoterId() }),
   });
   await loadFeed();
   await loadLeaderboard();

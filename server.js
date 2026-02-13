@@ -429,7 +429,8 @@ const agentProfiles = new Map();
 const roastFeed = [];
 const votes = new Set();
 const pairVotes = new Map();
-const humanVoteTimes = new Map();
+const humanVoteWindow = new Map();
+const humanAgentVoteWindow = new Map();
 const sessions = new Map();
 const connectSessions = new Map();
 
@@ -749,10 +750,11 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   if (!roast) return res.status(404).json({ ok: false, error: 'roast not found' });
 
   const voterAgentId = req.body?.voterAgentId ? String(req.body.voterAgentId) : null;
-  const voterHumanId = req.body?.voterHumanId ? String(req.body.voterHumanId) : null;
-  const voterKey = voterAgentId ? `a:${voterAgentId}` : voterHumanId ? `h:${voterHumanId}` : null;
+  const rawHuman = req.body?.voterHumanId ? String(req.body.voterHumanId).trim() : '';
+  const ipKey = String(req.ip || 'unknown').slice(0, 64);
+  const voterHumanId = rawHuman || `ip:${ipKey}`;
+  const voterKey = voterAgentId ? `a:${voterAgentId}` : `h:${voterHumanId}`;
 
-  if (!voterKey) return res.status(400).json({ ok: false, error: 'voter required' });
   if (voterAgentId && voterAgentId === roast.agentId) {
     return res.status(400).json({ ok: false, error: 'self vote blocked' });
   }
@@ -760,17 +762,31 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   const key = `${voterKey}:${roast.id}`;
   if (votes.has(key)) return res.status(409).json({ ok: false, error: 'already voted' });
 
-  if (voterHumanId) {
+  if (!voterAgentId) {
     const now = Date.now();
-    const events = humanVoteTimes.get(voterHumanId) || [];
-    const recent = events.filter((t) => now - t < 60_000);
-    if (recent.length >= 20) return res.status(429).json({ ok: false, error: 'rate limit: too many votes/min' });
-    recent.push(now);
-    humanVoteTimes.set(voterHumanId, recent);
+    const hourlyKey = `h:${voterHumanId}`;
+    const hour = humanVoteWindow.get(hourlyKey) || { count: 0, resetAt: now + 60 * 60_000 };
+    if (now > hour.resetAt) {
+      hour.count = 0;
+      hour.resetAt = now + 60 * 60_000;
+    }
+    if (hour.count >= 60) return res.status(429).json({ ok: false, error: 'rate limit: too many votes/hour' });
+    hour.count += 1;
+    humanVoteWindow.set(hourlyKey, hour);
+
+    const pairKey = `${hourlyKey}->${roast.agentId}`;
+    const pair = humanAgentVoteWindow.get(pairKey) || { count: 0, resetAt: now + 24 * 60 * 60_000 };
+    if (now > pair.resetAt) {
+      pair.count = 0;
+      pair.resetAt = now + 24 * 60 * 60_000;
+    }
+    if (pair.count >= 5) return res.status(429).json({ ok: false, error: 'pair cap: max 5 votes/day for same agent' });
+    pair.count += 1;
+    humanAgentVoteWindow.set(pairKey, pair);
   }
 
   if (voterAgentId) {
-    const pairKey = `${voterAgentId}->${roast.agentId}`;
+    const pairKey = `a:${voterAgentId}->${roast.agentId}`;
     const count = pairVotes.get(pairKey) || 0;
     if (count >= 3) return res.status(429).json({ ok: false, error: 'pair voting cap reached' });
     pairVotes.set(pairKey, count + 1);
