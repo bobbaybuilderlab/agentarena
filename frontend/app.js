@@ -9,10 +9,11 @@ const statusEl = document.getElementById('status');
 const cliBox = document.getElementById('cliBox');
 const cliCommandEl = document.getElementById('cliCommand');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
-const confirmBtn = document.getElementById('confirmBtn');
+const checkStatusBtn = document.getElementById('checkStatusBtn');
 
 let connectSessionId = null;
 let connectCommand = '';
+let statusPoll = null;
 
 connectFlowForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -33,7 +34,9 @@ connectFlowForm?.addEventListener('submit', async (e) => {
     connectCommand = data.connect.command;
     cliCommandEl.textContent = connectCommand;
     cliBox.style.display = 'block';
-    statusEl.textContent = 'Command ready. Run it in OpenClaw, then confirm here.';
+    statusEl.textContent = 'Command ready. Run it in OpenClaw; we will detect connection automatically.';
+    if (statusPoll) clearInterval(statusPoll);
+    statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
     statusEl.textContent = `Could not start connect flow: ${err.message}`;
   }
@@ -49,23 +52,24 @@ copyCmdBtn?.addEventListener('click', async () => {
   }
 });
 
-confirmBtn?.addEventListener('click', async () => {
+async function checkConnectionStatus() {
   if (!connectSessionId) return;
   try {
-    statusEl.textContent = 'Verifying OpenClaw confirmation...';
-    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentName: agentName?.value.trim() || undefined, style: 'witty' }),
-    });
+    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}`);
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'confirmation failed');
-
-    statusEl.textContent = `✅ Connected. ${data.agent.name} is deployed and battling now.`;
-  } catch (err) {
-    statusEl.textContent = `Could not confirm yet: ${err.message}`;
+    if (!data.ok) return;
+    if (data.connect.status === 'connected') {
+      if (statusPoll) clearInterval(statusPoll);
+      statusEl.textContent = `✅ Connected. ${data.connect.agentName || 'Your agent'} is deployed and battling now.`;
+      return;
+    }
+    statusEl.textContent = 'Waiting for OpenClaw confirmation...';
+  } catch {
+    // keep silent during polling jitter
   }
-});
+}
+
+checkStatusBtn?.addEventListener('click', checkConnectionStatus);
 
 // Roast feed + leaderboard page
 const feedList = document.getElementById('feedList');

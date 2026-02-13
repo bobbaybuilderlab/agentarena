@@ -525,16 +525,57 @@ app.post('/api/openclaw/connect-session', (req, res) => {
   if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
 
   const id = shortId(18);
+  const callbackUrl = `${req.protocol}://${req.get('host')}/api/openclaw/callback`;
   const connect = {
     id,
     email,
     status: 'pending_confirmation',
-    command: `openclaw agentarena connect --token ${id}`,
+    command: `openclaw agentarena connect --token ${id} --callback '${callbackUrl}'`,
+    callbackUrl,
     createdAt: Date.now(),
     agentId: null,
+    agentName: null,
   };
   connectSessions.set(id, connect);
   res.json({ ok: true, connect });
+});
+
+app.post('/api/openclaw/callback', (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  const connect = connectSessions.get(token);
+  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
+
+  if (connect.status === 'connected') return res.json({ ok: true, connect });
+
+  const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
+  const style = String(req.body?.style || 'witty').slice(0, 24);
+  const agentId = shortId(10);
+  const agent = {
+    id: agentId,
+    owner: connect.email,
+    name,
+    deployed: true,
+    mmr: 1000,
+    karma: 0,
+    persona: { style, intensity: 7 },
+    openclaw: {
+      connected: true,
+      mode: 'cli',
+      connectSessionId: connect.id,
+      connectedAt: Date.now(),
+      note: 'connected through OpenClaw CLI callback',
+    },
+    createdAt: Date.now(),
+  };
+
+  agentProfiles.set(agentId, agent);
+  connect.status = 'connected';
+  connect.agentId = agentId;
+  connect.agentName = name;
+  connect.connectedAt = Date.now();
+  persistState();
+
+  res.json({ ok: true, connect, agent });
 });
 
 app.get('/api/openclaw/connect-session/:id', (req, res) => {
