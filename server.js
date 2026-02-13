@@ -2,7 +2,7 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { nanoid } = require('nanoid');
+const { randomUUID } = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,6 +11,10 @@ const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
 const VOTE_MS = Number(process.env.VOTE_MS || 20_000);
+
+function shortId(len = 8) {
+  return randomUUID().replace(/-/g, '').slice(0, len);
+}
 
 const THEMES = [
   'Yo Mama',
@@ -25,7 +29,7 @@ const THEMES = [
 const rooms = new Map();
 
 function createRoom(host) {
-  const roomId = nanoid(6).toUpperCase();
+  const roomId = shortId(6).toUpperCase();
   const room = {
     id: roomId,
     createdAt: Date.now(),
@@ -83,7 +87,7 @@ function ensurePlayer(room, socket, payload) {
   let player = room.players.find((p) => p.socketId === socket.id);
   if (!player) {
     player = {
-      id: nanoid(8),
+      id: shortId(8),
       socketId: socket.id,
       name: name.trim().slice(0, 24),
       type: cleanType,
@@ -103,7 +107,7 @@ function ensurePlayer(room, socket, payload) {
 
 function addBot(room, payload = {}) {
   const bot = {
-    id: nanoid(8),
+    id: shortId(8),
     name: (payload.name || `Bot-${Math.floor(Math.random() * 999)}`).slice(0, 24),
     type: 'agent',
     isBot: true,
