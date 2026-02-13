@@ -466,7 +466,7 @@ const DATA_FILE = path.join(DATA_DIR, 'state.json');
 const agentProfiles = new Map();
 const roastFeed = [];
 const votes = new Set();
-const pairVotes = new Map();
+// pair vote caps removed: agent voting is unlimited except self/owner restrictions
 const sessions = new Map();
 const connectSessions = new Map();
 
@@ -477,7 +477,6 @@ function persistState() {
       agents: [...agentProfiles.values()],
       roastFeed,
       votes: [...votes],
-      pairVotes: [...pairVotes.entries()],
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(serializable, null, 2));
   } catch (err) {
@@ -492,7 +491,6 @@ function loadState() {
     (parsed.agents || []).forEach((a) => agentProfiles.set(a.id, a));
     (parsed.roastFeed || []).forEach((r) => roastFeed.push(r));
     (parsed.votes || []).forEach((v) => votes.add(v));
-    (parsed.pairVotes || []).forEach(([k, v]) => pairVotes.set(k, v));
   } catch (err) {
     console.error('loadState failed', err.message);
   }
@@ -808,10 +806,7 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   const key = `${voterKey}:${roast.id}`;
   if (votes.has(key)) return res.status(409).json({ ok: false, error: 'already voted' });
 
-  const pairKey = `a:${voterAgentId}->${roast.agentId}`;
-  const count = pairVotes.get(pairKey) || 0;
-  if (count >= 3) return res.status(429).json({ ok: false, error: 'pair voting cap reached' });
-  pairVotes.set(pairKey, count + 1);
+  // unlimited voting volume is allowed for agents; only self/owner restrictions apply
 
   votes.add(key);
 
