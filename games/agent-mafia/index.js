@@ -8,6 +8,33 @@ function createStore() {
   return new Map();
 }
 
+const PHASE_TRANSITIONS = {
+  lobby: new Set(['night']),
+  night: new Set(['discussion', 'finished']),
+  discussion: new Set(['voting', 'finished']),
+  voting: new Set(['night', 'finished']),
+  finished: new Set(),
+};
+
+function transitionRoomState(room, nextPhase, options = {}) {
+  const fromPhase = room.phase;
+  const allowed = PHASE_TRANSITIONS[fromPhase] || new Set();
+  if (!allowed.has(nextPhase)) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_PHASE_TRANSITION',
+        message: `Invalid phase transition: ${fromPhase} -> ${nextPhase}`,
+        details: { fromPhase, toPhase: nextPhase },
+      },
+    };
+  }
+
+  room.phase = nextPhase;
+  if (options.nextStatus) room.status = options.nextStatus;
+  return { ok: true, room };
+}
+
 function toPublic(room) {
   return {
     id: room.id,
@@ -110,8 +137,9 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (room.status !== 'lobby') return { ok: false, error: { code: 'INVALID_STATE', message: 'Game already started' } };
   if (room.players.length < 4) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 4 players' } };
 
-  room.status = 'in_progress';
-  room.phase = 'night';
+  const transitioned = transitionRoomState(room, 'night', { nextStatus: 'in_progress' });
+  if (!transitioned.ok) return transitioned;
+
   room.day = 1;
   room.winner = null;
   room.actions = { night: {}, vote: {} };
@@ -129,8 +157,10 @@ function startGame(store, { roomId, hostPlayerId }) {
 }
 
 function transitionPhase(room, nextPhase) {
-  room.phase = nextPhase;
+  const transitioned = transitionRoomState(room, nextPhase);
+  if (!transitioned.ok) return transitioned;
   room.events.push({ type: 'PHASE', phase: nextPhase, day: room.day, at: Date.now() });
+  return transitioned;
 }
 
 function submitAction(store, { roomId, playerId, type, targetId }) {
@@ -154,7 +184,8 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
     const aliveCount = alivePlayers(room).length;
     if (Object.keys(room.actions.vote).length >= aliveCount) {
       room.actions.vote = {};
-      transitionPhase(room, 'voting');
+      const transitioned = transitionPhase(room, 'voting');
+      if (!transitioned.ok) return transitioned;
     }
     return { ok: true, room };
   }
@@ -165,7 +196,8 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
     room.actions.vote[actor.id] = target.id;
     const aliveCount = alivePlayers(room).length;
     if (Object.keys(room.actions.vote).length >= aliveCount) {
-      resolveVote(room);
+      const resolved = resolveVote(room);
+      if (resolved && resolved.ok === false) return resolved;
     }
     return { ok: true, room };
   }
@@ -178,12 +210,15 @@ function maybeAutoAdvance(room) {
   const aliveMafia = room.players.filter((p) => p.alive && p.role === 'mafia');
   if (aliveMafia.length === 0) {
     const w = checkWin(room);
-    if (w) finish(room, w);
+    if (w) return finish(room, w);
     return { ok: true, room };
   }
 
   const allActed = aliveMafia.every((p) => room.actions.night[p.id]);
-  if (allActed) resolveNight(room);
+  if (allActed) {
+    const resolved = resolveNight(room);
+    if (resolved && resolved.ok === false) return resolved;
+  }
   return { ok: true, room };
 }
 
@@ -192,11 +227,17 @@ function forceAdvance(store, { roomId }) {
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'in_progress') return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'Game not active' } };
 
-  if (room.phase === 'night') resolveNight(room);
-  else if (room.phase === 'discussion') {
+  if (room.phase === 'night') {
+    const resolved = resolveNight(room);
+    if (resolved && resolved.ok === false) return resolved;
+  } else if (room.phase === 'discussion') {
     room.actions.vote = {};
-    transitionPhase(room, 'voting');
-  } else if (room.phase === 'voting') resolveVote(room);
+    const transitioned = transitionPhase(room, 'voting');
+    if (!transitioned.ok) return transitioned;
+  } else if (room.phase === 'voting') {
+    const resolved = resolveVote(room);
+    if (resolved && resolved.ok === false) return resolved;
+  }
   return { ok: true, room };
 }
 
@@ -215,8 +256,12 @@ function resolveNight(room) {
 
   const winner = checkWin(room);
   if (winner) return finish(room, winner);
-  transitionPhase(room, 'discussion');
+
+  const transitioned = transitionPhase(room, 'discussion');
+  if (!transitioned.ok) return transitioned;
+
   room.actions.vote = {};
+  return { ok: true, room };
 }
 
 function resolveVote(room) {
@@ -244,14 +289,17 @@ function resolveVote(room) {
   }
 
   room.day += 1;
-  transitionPhase(room, 'night');
+  const transitioned = transitionPhase(room, 'night');
+  if (!transitioned.ok) return transitioned;
+  return { ok: true, room };
 }
 
 function finish(room, winner) {
-  room.status = 'finished';
-  room.phase = 'finished';
+  const transitioned = transitionRoomState(room, 'finished', { nextStatus: 'finished' });
+  if (!transitioned.ok) return transitioned;
   room.winner = winner;
   room.events.push({ type: 'GAME_FINISHED', winner, day: room.day, at: Date.now() });
+  return { ok: true, room };
 }
 
 function disconnectPlayer(store, { roomId, socketId }) {
@@ -269,5 +317,6 @@ module.exports = {
   submitAction,
   forceAdvance,
   disconnectPlayer,
+  transitionRoomState,
   toPublic,
 };

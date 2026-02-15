@@ -8,6 +8,32 @@ function createStore() {
   return new Map();
 }
 
+const PHASE_TRANSITIONS = {
+  lobby: new Set(['tasks']),
+  tasks: new Set(['meeting', 'finished']),
+  meeting: new Set(['tasks', 'finished']),
+  finished: new Set(),
+};
+
+function transitionRoomState(room, nextPhase, options = {}) {
+  const fromPhase = room.phase;
+  const allowed = PHASE_TRANSITIONS[fromPhase] || new Set();
+  if (!allowed.has(nextPhase)) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_PHASE_TRANSITION',
+        message: `Invalid phase transition: ${fromPhase} -> ${nextPhase}`,
+        details: { fromPhase, toPhase: nextPhase },
+      },
+    };
+  }
+
+  room.phase = nextPhase;
+  if (options.nextStatus) room.status = options.nextStatus;
+  return { ok: true, room };
+}
+
 function toPublic(room) {
   return {
     id: room.id,
@@ -117,8 +143,9 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (room.status !== 'lobby') return { ok: false, error: { code: 'INVALID_STATE', message: 'Game already started' } };
   if (room.players.length < 4) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 4 players' } };
 
-  room.status = 'in_progress';
-  room.phase = 'tasks';
+  const transitioned = transitionRoomState(room, 'tasks', { nextStatus: 'in_progress' });
+  if (!transitioned.ok) return transitioned;
+
   room.winner = null;
   room.meetingReason = null;
   room.votes = {};
@@ -161,7 +188,8 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
 
     target.alive = false;
     room.events.push({ type: 'KILL', actorId: actor.id, targetId: target.id, at: Date.now() });
-    room.phase = 'meeting';
+    const transitionedToMeeting = transitionRoomState(room, 'meeting');
+    if (!transitionedToMeeting.ok) return transitionedToMeeting;
     room.meetingReason = 'body_reported';
     room.votes = {};
 
@@ -171,7 +199,8 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
   }
 
   if (type === 'callMeeting') {
-    room.phase = 'meeting';
+    const transitionedToMeeting = transitionRoomState(room, 'meeting');
+    if (!transitionedToMeeting.ok) return transitionedToMeeting;
     room.meetingReason = 'called';
     room.votes = {};
     room.events.push({ type: 'MEETING_CALLED', playerId: actor.id, at: Date.now() });
@@ -184,7 +213,8 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
 
     room.votes[actor.id] = target.id;
     if (Object.keys(room.votes).length >= alive(room).length) {
-      resolveMeeting(room);
+      const resolved = resolveMeeting(room);
+      if (resolved && resolved.ok === false) return resolved;
     }
     return { ok: true, room };
   }
@@ -198,12 +228,14 @@ function forceAdvance(store, { roomId }) {
   if (room.status !== 'in_progress') return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'Game not active' } };
 
   if (room.phase === 'tasks') {
-    room.phase = 'meeting';
+    const transitionedToMeeting = transitionRoomState(room, 'meeting');
+    if (!transitionedToMeeting.ok) return transitionedToMeeting;
     room.meetingReason = 'timer';
     room.votes = {};
     room.events.push({ type: 'MEETING_TIMER', at: Date.now() });
   } else if (room.phase === 'meeting') {
-    resolveMeeting(room);
+    const resolved = resolveMeeting(room);
+    if (resolved && resolved.ok === false) return resolved;
   }
 
   return { ok: true, room };
@@ -226,13 +258,15 @@ function resolveMeeting(room) {
   const winner = checkWin(room);
   if (winner) return finish(room, winner);
 
-  room.phase = 'tasks';
+  const transitionedToTasks = transitionRoomState(room, 'tasks');
+  if (!transitionedToTasks.ok) return transitionedToTasks;
   room.events.push({ type: 'MEETING_RESOLVED', at: Date.now() });
+  return { ok: true, room };
 }
 
 function finish(room, winner) {
-  room.status = 'finished';
-  room.phase = 'finished';
+  const transitioned = transitionRoomState(room, 'finished', { nextStatus: 'finished' });
+  if (!transitioned.ok) return transitioned;
   room.winner = winner;
   room.events.push({ type: 'GAME_FINISHED', winner, at: Date.now() });
   return { ok: true, room };
@@ -253,5 +287,6 @@ module.exports = {
   submitAction,
   forceAdvance,
   disconnectPlayer,
+  transitionRoomState,
   toPublic,
 };

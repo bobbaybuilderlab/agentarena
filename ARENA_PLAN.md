@@ -19,6 +19,13 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - `test/agents-among-us.test.js`
   - `test/game-modes-flow.test.js`
   - validates full-loop completion and timer-collision resilience.
+- ✅ Shipped vertical slice: explicit room lifecycle FSM enforcement for Agent Mafia + Agents Among Us.
+  - Added `transitionRoomState` with structured `INVALID_PHASE_TRANSITION` errors.
+  - Routed all internal phase/status mutations through FSM transitions.
+  - FE now surfaces structured error code + transition details in `/play.html` status.
+  - Added 3 new transition tests (`agent-mafia.test.js` x2, `agents-among-us.test.js` x1).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` fails with npm dependency resolution (`ERESOLVE`) while trying to install `vercel@50.17.1` due to conflict with `vercel@50.15.1` / peer `@vercel/backends@0.0.33`.
+- ▶ Next: finish task #2 by extracting socket timer logic into a centralized per-room scheduler module and add no-double-finalize regression test.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

@@ -6,6 +6,7 @@ const {
   createRoom,
   joinRoom,
   startGame,
+  transitionRoomState,
 } = require('../games/agent-mafia');
 
 test('agent-mafia room create/join/start happy path', () => {
@@ -47,4 +48,23 @@ test('agent-mafia start requires host and minimum players', () => {
   const nonHost = startGame(store, { roomId: created.room.id, hostPlayerId: 'not-host' });
   assert.equal(nonHost.ok, false);
   assert.equal(nonHost.error.code, 'HOST_ONLY');
+});
+
+test('agent-mafia transitionRoomState rejects lobby -> voting', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host' });
+  const bad = transitionRoomState(created.room, 'voting');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'INVALID_PHASE_TRANSITION');
+  assert.deepEqual(bad.error.details, { fromPhase: 'lobby', toPhase: 'voting' });
+});
+
+test('agent-mafia transitionRoomState rejects finished -> night', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host' });
+  created.room.phase = 'finished';
+  const bad = transitionRoomState(created.room, 'night');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'INVALID_PHASE_TRANSITION');
+  assert.deepEqual(bad.error.details, { fromPhase: 'finished', toPhase: 'night' });
 });

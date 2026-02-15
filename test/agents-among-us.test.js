@@ -46,3 +46,12 @@ test('agents-among-us meeting resolves back to tasks when no winner yet', () => 
   assert.equal(room.status, 'in_progress');
   assert.equal(room.phase, 'tasks');
 });
+
+test('agents-among-us transitionRoomState rejects lobby -> meeting', () => {
+  const store = amongUs.createStore();
+  const created = amongUs.createRoom(store, { hostName: 'Host' });
+  const bad = amongUs.transitionRoomState(created.room, 'meeting');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'INVALID_PHASE_TRANSITION');
+  assert.deepEqual(bad.error.details, { fromPhase: 'lobby', toPhase: 'meeting' });
+});

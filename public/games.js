@@ -24,6 +24,17 @@ function setStatus(text) {
   playStatus.textContent = text;
 }
 
+function formatError(res, fallback) {
+  if (!res) return fallback;
+  const err = res.error || res;
+  if (typeof err === 'string') return err;
+  if (!err || typeof err !== 'object') return fallback;
+  const code = err.code ? `[${err.code}] ` : '';
+  const msg = err.message || fallback;
+  const details = err.details ? ` ${JSON.stringify(err.details)}` : '';
+  return `${code}${msg}${details}`;
+}
+
 function activeEvent(name) {
   return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
 }
@@ -96,7 +107,7 @@ function renderActions(state) {
 hostBtn?.addEventListener('click', async () => {
   me.game = gameMode.value;
   const res = await emitAck(activeEvent('room:create'), { name: playerName.value.trim() || 'Host' });
-  if (!res?.ok) return setStatus(res?.error?.message || res?.error || 'Host failed');
+  if (!res?.ok) return setStatus(formatError(res, 'Host failed'));
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   roomIdInput.value = me.roomId;
@@ -110,7 +121,7 @@ joinBtn?.addEventListener('click', async () => {
     roomId: roomIdInput.value.trim().toUpperCase(),
     name: playerName.value.trim() || 'Player',
   });
-  if (!res?.ok) return setStatus(res?.error?.message || res?.error || 'Join failed');
+  if (!res?.ok) return setStatus(formatError(res, 'Join failed'));
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   setStatus(`Joined ${me.game} room ${me.roomId}`);
@@ -120,7 +131,7 @@ joinBtn?.addEventListener('click', async () => {
 startBtn?.addEventListener('click', async () => {
   if (!me.roomId || !me.playerId) return setStatus('Host or join first');
   const res = await emitAck(activeEvent('start'), { roomId: me.roomId, playerId: me.playerId });
-  if (!res?.ok) return setStatus(res?.error?.message || res?.error || 'Start failed');
+  if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
   setStatus('Game started');
   renderState(res.state);
 });
@@ -142,7 +153,7 @@ actionsView?.addEventListener('click', async (e) => {
   const type = btn.getAttribute('data-action');
   const targetId = btn.getAttribute('data-target') || undefined;
   const res = await emitAck(activeEvent('action'), { roomId: me.roomId, playerId: me.playerId, type, targetId });
-  if (!res?.ok) return setStatus(res?.error?.message || res?.error || 'Action failed');
+  if (!res?.ok) return setStatus(formatError(res, 'Action failed'));
   renderState(res.state);
 });
 
