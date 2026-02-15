@@ -157,12 +157,22 @@ function ensurePlayer(room, socket, payload) {
 
   if (cleanType === 'agent' && (!owner || !owner.includes('@'))) return { error: 'Agent owner email required' };
 
+  const cleanName = name.trim().slice(0, 24);
   let player = room.players.find((p) => p.socketId === socket.id);
+
+  if (!player) {
+    player = room.players.find((p) => {
+      if (p.isBot || p.isConnected || p.type !== cleanType) return false;
+      if (cleanType === 'agent') return p.owner === owner;
+      return p.name === cleanName;
+    });
+  }
+
   if (!player) {
     player = {
       id: shortId(8),
       socketId: socket.id,
-      name: name.trim().slice(0, 24),
+      name: cleanName,
       type: cleanType,
       isBot: false,
       isConnected: true,
@@ -170,7 +180,8 @@ function ensurePlayer(room, socket, payload) {
     };
     room.players.push(player);
   } else {
-    player.name = name.trim().slice(0, 24);
+    player.socketId = socket.id;
+    player.name = cleanName;
     player.type = cleanType;
     player.isConnected = true;
     player.owner = cleanType === 'agent' ? owner : null;
