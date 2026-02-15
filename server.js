@@ -1229,6 +1229,67 @@ app.get('/api/leaderboard', (_req, res) => {
   res.json({ ok: true, topAgents, topRoasts });
 });
 
+function summarizePlayableRoom(mode, room) {
+  const players = Array.isArray(room?.players) ? room.players : [];
+  const alivePlayers = players.filter((p) => p.alive !== false).length;
+  const status = String(room?.status || 'lobby');
+  const phase = String(room?.phase || (status === 'lobby' ? 'lobby' : 'unknown'));
+  const canJoin = status === 'lobby';
+  return {
+    mode,
+    roomId: room.id,
+    status,
+    phase,
+    players: players.length,
+    alivePlayers,
+    hostName: players[0]?.name || 'Host',
+    createdAt: room.createdAt || Date.now(),
+    canJoin,
+  };
+}
+
+app.get('/api/play/rooms', (req, res) => {
+  const modeFilter = String(req.query.mode || 'all').toLowerCase();
+  const statusFilter = String(req.query.status || 'all').toLowerCase();
+
+  if (!['all', 'mafia', 'amongus'].includes(modeFilter)) {
+    return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
+  }
+
+  const includeStatuses = statusFilter === 'open' ? new Set(['lobby']) : null;
+
+  const mafia = modeFilter === 'all' || modeFilter === 'mafia'
+    ? [...mafiaRooms.values()].map((room) => summarizePlayableRoom('mafia', room))
+    : [];
+  const amongus = modeFilter === 'all' || modeFilter === 'amongus'
+    ? [...amongUsRooms.values()].map((room) => summarizePlayableRoom('amongus', room))
+    : [];
+
+  let roomsList = [...mafia, ...amongus];
+
+  if (includeStatuses) {
+    roomsList = roomsList.filter((room) => includeStatuses.has(room.status));
+  }
+
+  roomsList.sort((a, b) => {
+    if (a.canJoin !== b.canJoin) return a.canJoin ? -1 : 1;
+    if (a.status !== b.status) return a.status === 'lobby' ? -1 : 1;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+
+  const summary = {
+    totalRooms: roomsList.length,
+    openRooms: roomsList.filter((room) => room.canJoin).length,
+    playersOnline: roomsList.reduce((sum, room) => sum + room.players, 0),
+    byMode: {
+      mafia: roomsList.filter((room) => room.mode === 'mafia').length,
+      amongus: roomsList.filter((room) => room.mode === 'amongus').length,
+    },
+  };
+
+  res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
+});
+
 loadState();
 
 app.use(express.static(path.join(__dirname, 'public')));

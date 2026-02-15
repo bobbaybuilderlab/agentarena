@@ -8,6 +8,7 @@ const playersView = document.getElementById('playersView');
 const actionsView = document.getElementById('actionsView');
 const stateJson = document.getElementById('stateJson');
 const eventQueueStatus = document.getElementById('eventQueueStatus');
+const canaryStatus = document.getElementById('canaryStatus');
 const flushEventsBtn = document.getElementById('flushEventsBtn');
 
 const hostBtn = document.getElementById('hostBtn');
@@ -20,6 +21,25 @@ const evalStatus = document.getElementById('evalStatus');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
+let attemptedAutoJoin = false;
+
+function parseQueryConfig() {
+  const params = new URLSearchParams(window.location.search || '');
+  const queryGame = params.get('game');
+  const queryRoom = params.get('room');
+  const queryName = params.get('name');
+  const autojoin = params.get('autojoin') === '1';
+
+  if (queryGame === 'mafia' || queryGame === 'amongus') {
+    me.game = queryGame;
+    if (gameMode) gameMode.value = queryGame;
+  }
+
+  if (queryRoom && roomIdInput) roomIdInput.value = String(queryRoom).trim().toUpperCase();
+  if (queryName && playerName) playerName.value = String(queryName).trim().slice(0, 24);
+
+  return { autojoin };
+}
 
 function emitAck(event, payload = {}) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -44,14 +64,29 @@ function activeEvent(name) {
   return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
 }
 
-async function refreshEventQueueStatus() {
-  if (!eventQueueStatus) return;
-  try {
-    const res = await fetch('/api/ops/events');
-    const data = await res.json();
-    if (data?.ok) eventQueueStatus.textContent = `Event queue: ${data.pending}`;
-  } catch (_err) {
-    eventQueueStatus.textContent = 'Event queue: unavailable';
+async function refreshOpsStatus() {
+  if (eventQueueStatus) {
+    try {
+      const res = await fetch('/api/ops/events');
+      const data = await res.json();
+      if (data?.ok) eventQueueStatus.textContent = `Event queue: ${data.pending}`;
+    } catch (_err) {
+      eventQueueStatus.textContent = 'Event queue: unavailable';
+    }
+  }
+
+  if (canaryStatus) {
+    try {
+      const res = await fetch('/api/ops/canary');
+      const data = await res.json();
+      if (data?.ok) {
+        const cfg = data.config || {};
+        const stats = data.stats || {};
+        canaryStatus.textContent = `Canary policy: ${cfg.enabled ? 'on' : 'off'} @ ${cfg.percent || 0}% · decisions c=${stats.control?.decisions || 0} k=${stats.canary?.decisions || 0}`;
+      }
+    } catch (_err) {
+      canaryStatus.textContent = 'Canary policy: unavailable';
+    }
   }
 }
 
@@ -193,7 +228,7 @@ flushEventsBtn?.addEventListener('click', async () => {
   } catch (_err) {
     setStatus('Failed to flush event queue');
   }
-  await refreshEventQueueStatus();
+  await refreshOpsStatus();
 });
 
 async function runEvalApi(pathname) {
@@ -230,8 +265,34 @@ runCiGateBtn?.addEventListener('click', async () => {
   await runEvalApi('/api/evals/ci');
 });
 
+async function autoJoinFromQuery() {
+  const { autojoin } = parseQueryConfig();
+  if (!autojoin || attemptedAutoJoin) return;
+  attemptedAutoJoin = true;
+
+  const roomId = roomIdInput?.value?.trim().toUpperCase();
+  if (!roomId) return;
+
+  me.game = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const res = await emitAck(activeEvent('room:join'), {
+    roomId,
+    name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+  });
+
+  if (!res?.ok) {
+    setStatus(formatError(res, `Quick-join failed for room ${roomId}`));
+    return;
+  }
+
+  me.roomId = res.roomId;
+  me.playerId = res.playerId;
+  setStatus(`Quick-joined ${me.game} room ${me.roomId}`);
+  renderState(res.state);
+}
+
 setInterval(() => {
-  void refreshEventQueueStatus();
+  void refreshOpsStatus();
 }, 3000);
 
-void refreshEventQueueStatus();
+void refreshOpsStatus();
+void autoJoinFromQuery();

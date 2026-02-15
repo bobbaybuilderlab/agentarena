@@ -102,8 +102,14 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
     - `test/canary-mode.test.js`
     - `test/roast-policy.test.js` canary stricter-rule coverage
     - `test/observability.test.js` canary endpoint + health assertions.
+- ✅ Shipped vertical slice: cross-mode room discovery + quick-join from front page (Agent Mafia + Agents Among Us MVP loop UX).
+  - Added backend room discovery API: `GET /api/play/rooms?mode=all|mafia|amongus&status=all|open`.
+  - API returns normalized room cards (`mode`, `roomId`, `status`, `phase`, `players`, `canJoin`) + summary counts.
+  - Added home-page “live game rooms” panel with auto-refresh + quick-join links.
+  - Added `play.html` URL-driven join (`?game=mafia|amongus&room=ABC123&autojoin=1`) for one-click lobby entry.
+  - Added regression coverage: `test/play-rooms.test.js` (cross-mode listing + open-room filter behavior).
 - 🚫 Blocker (deploy): still blocked by Vercel CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts to install `vercel@50.17.1` with peer `@vercel/backends@0.0.33` against existing `vercel@50.15.1` graph.
-- ▶ Next: ship cross-mode matchmaking/front-page surfacing for Agent Mafia + Agents Among Us room discovery and quick-join flow.
+- ▶ Next: ship server-side quick-match endpoint (`POST /api/play/quick-join`) that joins best-fit open room or creates one, then returns join ticket for zero-friction play entry.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

@@ -91,6 +91,9 @@ checkStatusBtn?.addEventListener('click', checkConnectionStatus);
 const feedList = document.getElementById('feedList');
 const leaderboardList = document.getElementById('leaderboardList');
 const simulateBtn = document.getElementById('simulateBtn');
+const liveRoomsList = document.getElementById('liveRoomsList');
+const liveRoomsSummary = document.getElementById('liveRoomsSummary');
+const refreshLiveRoomsBtn = document.getElementById('refreshLiveRoomsBtn');
 
 async function loadFeed() {
   if (!feedList) return;
@@ -152,7 +155,57 @@ feedList?.addEventListener('click', async (e) => {
   await loadLeaderboard();
 });
 
+function roomModeLabel(mode) {
+  return mode === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+}
+
+function roomJumpUrl(room) {
+  const params = new URLSearchParams({ game: room.mode, room: room.roomId, autojoin: '1' });
+  return `/play.html?${params.toString()}`;
+}
+
+async function loadLiveRooms() {
+  if (!liveRoomsList) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/play/rooms?status=open`);
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'Failed to load room list');
+
+    const rooms = data.rooms || [];
+    if (liveRoomsSummary) {
+      const summary = data.summary || {};
+      liveRoomsSummary.textContent = `${summary.openRooms || 0} open rooms · ${summary.playersOnline || 0} players waiting.`;
+    }
+
+    liveRoomsList.innerHTML = rooms.map((room) => `
+      <article>
+        <h3>${roomModeLabel(room.mode)} · ${room.roomId}</h3>
+        <p>${room.players}/4 players · phase: ${room.phase}</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>
+          <a class="btn btn-soft" href="/play.html?game=${room.mode}&room=${room.roomId}">Open room</a>
+        </div>
+      </article>
+    `).join('') || '<p>No open rooms right now. Host one and start chaos.</p>';
+  } catch (err) {
+    if (liveRoomsSummary) liveRoomsSummary.textContent = 'Room discovery unavailable';
+    liveRoomsList.innerHTML = `<p>Could not load rooms: ${err.message}</p>`;
+  }
+}
+
+refreshLiveRoomsBtn?.addEventListener('click', async () => {
+  await loadLiveRooms();
+});
+
 if (feedList) {
   loadFeed();
   loadLeaderboard();
+}
+
+if (liveRoomsList) {
+  loadLiveRooms();
+  setInterval(() => {
+    void loadLiveRooms();
+  }, 7000);
 }
