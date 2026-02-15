@@ -4,6 +4,8 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
+const mafiaGame = require('./games/agent-mafia');
+const amongUsGame = require('./games/agents-among-us');
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +45,26 @@ const THEMES = [
 
 /** @type {Map<string, any>} */
 const rooms = new Map();
+
+const mafiaRooms = mafiaGame.createStore();
+const amongUsRooms = amongUsGame.createStore();
+const mafiaTimers = new Map();
+const amongUsTimers = new Map();
+
+function clearGameTimer(timerMap, roomId) {
+  const current = timerMap.get(roomId);
+  if (current?.timeout) clearTimeout(current.timeout);
+}
+
+function scheduleGameTimer(timerMap, roomId, token, ms, fn) {
+  clearGameTimer(timerMap, roomId);
+  const timeout = setTimeout(() => {
+    const current = timerMap.get(roomId);
+    if (!current || current.token !== token) return;
+    fn();
+  }, ms);
+  timerMap.set(roomId, { token, timeout });
+}
 
 const ROOM_TRANSITIONS = {
   BATTLE_RESET: {
@@ -361,7 +383,117 @@ function nextTheme(room) {
   emitRoom(room);
 }
 
+function emitMafiaRoom(room) {
+  io.to(`mafia:${room.id}`).emit('mafia:state', mafiaGame.toPublic(room));
+}
+
+function emitAmongUsRoom(room) {
+  io.to(`amongus:${room.id}`).emit('amongus:state', amongUsGame.toPublic(room));
+}
+
+function scheduleMafiaPhase(room) {
+  if (room.status !== 'in_progress') {
+    clearGameTimer(mafiaTimers, room.id);
+    return;
+  }
+
+  const token = `${room.phase}:${Date.now()}`;
+  const ms = room.phase === 'night' ? 7000 : room.phase === 'discussion' ? 5000 : room.phase === 'voting' ? 7000 : 0;
+  if (!ms) return;
+
+  scheduleGameTimer(mafiaTimers, room.id, token, ms, () => {
+    const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
+    if (advanced.ok) {
+      emitMafiaRoom(room);
+      scheduleMafiaPhase(room);
+    }
+  });
+}
+
+function scheduleAmongUsPhase(room) {
+  if (room.status !== 'in_progress') {
+    clearGameTimer(amongUsTimers, room.id);
+    return;
+  }
+
+  const token = `${room.phase}:${Date.now()}`;
+  const ms = room.phase === 'tasks' ? 8000 : room.phase === 'meeting' ? 6000 : 0;
+  if (!ms) return;
+
+  scheduleGameTimer(amongUsTimers, room.id, token, ms, () => {
+    const advanced = amongUsGame.forceAdvance(amongUsRooms, { roomId: room.id });
+    if (advanced.ok) {
+      emitAmongUsRoom(room);
+      scheduleAmongUsPhase(room);
+    }
+  });
+}
+
 io.on('connection', (socket) => {
+  socket.on('mafia:room:create', ({ name }, cb) => {
+    const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
+    if (!created.ok) return cb?.(created);
+    socket.join(`mafia:${created.room.id}`);
+    emitMafiaRoom(created.room);
+    cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: mafiaGame.toPublic(created.room) });
+  });
+
+  socket.on('mafia:room:join', ({ roomId, name }, cb) => {
+    const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name, socketId: socket.id });
+    if (!joined.ok) return cb?.(joined);
+    socket.join(`mafia:${joined.room.id}`);
+    emitMafiaRoom(joined.room);
+    cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
+  });
+
+  socket.on('mafia:start', ({ roomId, playerId }, cb) => {
+    const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    emitMafiaRoom(started.room);
+    scheduleMafiaPhase(started.room);
+    cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
+  });
+
+  socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
+    const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
+    if (!result.ok) return cb?.(result);
+    emitMafiaRoom(result.room);
+    scheduleMafiaPhase(result.room);
+    cb?.({ ok: true, state: mafiaGame.toPublic(result.room) });
+  });
+
+  socket.on('amongus:room:create', ({ name }, cb) => {
+    const created = amongUsGame.createRoom(amongUsRooms, { hostName: name, hostSocketId: socket.id });
+    if (!created.ok) return cb?.(created);
+    socket.join(`amongus:${created.room.id}`);
+    emitAmongUsRoom(created.room);
+    cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: amongUsGame.toPublic(created.room) });
+  });
+
+  socket.on('amongus:room:join', ({ roomId, name }, cb) => {
+    const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name, socketId: socket.id });
+    if (!joined.ok) return cb?.(joined);
+    socket.join(`amongus:${joined.room.id}`);
+    emitAmongUsRoom(joined.room);
+    cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: amongUsGame.toPublic(joined.room) });
+  });
+
+  socket.on('amongus:start', ({ roomId, playerId }, cb) => {
+    const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    emitAmongUsRoom(started.room);
+    scheduleAmongUsPhase(started.room);
+    cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
+  });
+
+  socket.on('amongus:action', ({ roomId, playerId, type, targetId }, cb) => {
+    const result = amongUsGame.submitAction(amongUsRooms, { roomId, playerId, type, targetId });
+    if (!result.ok) return cb?.(result);
+    emitAmongUsRoom(result.room);
+    scheduleAmongUsPhase(result.room);
+    cb?.({ ok: true, state: amongUsGame.toPublic(result.room) });
+  });
+
   socket.on('room:create', (payload, cb) => {
     const room = createRoom({ socketId: socket.id });
     socket.join(room.id);
@@ -512,6 +644,16 @@ io.on('connection', (socket) => {
       }
 
       emitRoom(room);
+    }
+
+    for (const room of mafiaRooms.values()) {
+      mafiaGame.disconnectPlayer(mafiaRooms, { roomId: room.id, socketId: socket.id });
+      emitMafiaRoom(room);
+    }
+
+    for (const room of amongUsRooms.values()) {
+      amongUsGame.disconnectPlayer(amongUsRooms, { roomId: room.id, socketId: socket.id });
+      emitAmongUsRoom(room);
     }
   });
 });
@@ -940,4 +1082,7 @@ module.exports = {
   addBot,
   generateBotRoast,
   rooms,
+  mafiaRooms,
+  amongUsRooms,
+  clearGameTimer,
 };

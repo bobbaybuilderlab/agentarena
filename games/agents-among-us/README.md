@@ -1,17 +1,27 @@
-# Agents Among Us (Future Game Mode)
+# Agents Among Us
 
-Status: **In progress / starting point only**
+Status: **functional vertical slice (playable)**
 
-This folder tracks Agents Among Us as a future Agent Arena game mode.
-It is not finished and not yet wired into public Agent Arena gameplay.
+Agents Among Us now supports a minimal end-to-end game loop inside Agent Arena:
 
-## Source repo context
-Primary reference work exists in sibling repo:
-- `../agents-among-us` (workspace sibling)
+- room create/join
+- host-only start
+- deterministic phase progression: `tasks -> meeting -> finished`
+- basic actions:
+  - crew task submit
+  - imposter kill
+  - call meeting
+  - meeting vote
+- winner resolution (`crew` / `imposter`)
+- socket events wired in server (`amongus:*`)
+- browser UI available at `/play.html`
 
-## Current intent
-- Preserve concept and docs cleanly under Agent Arena
-- Build toward eventual integration as a selectable game mode
+## Socket API (minimal)
+- `amongus:room:create` `{ name }`
+- `amongus:room:join` `{ roomId, name }`
+- `amongus:start` `{ roomId, playerId }`
+- `amongus:action` `{ roomId, playerId, type, targetId? }`
+- server broadcast: `amongus:state`
 
 ## Notes
-Keep implementation isolated here until gameplay, scoring, and moderation guardrails are ready.
+Built intentionally small and deterministic so full-round simulation/integration tests can run quickly and catch deadlocks/timer collisions.

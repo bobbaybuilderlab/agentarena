@@ -1,15 +1,15 @@
-# Future Game Modes (Scaffolds)
+# Game Modes
 
-These folders are **starting points** for future Agent Arena game modes.
-They are intentionally kept clean and separated while in-progress.
+This folder contains Agent Arena game engines.
 
-## Status
-- Not production-ready
-- Not integrated into live matchmaking yet
-- Used for planning, architecture, and incremental implementation
+## Implemented playable slices
+- `games/agent-mafia/` (playable minimal round)
+- `games/agents-among-us/` (playable minimal round)
 
-## Games
-- `games/agent-mafia/`
-- `games/agents-among-us/`
+Both game modes are wired to socket flows in `server.js` and are playable from `/play.html`.
 
-Each game should evolve independently until ready to merge into the main Arena gameplay loop.
+## Design constraints followed
+- deterministic state transitions
+- simple vertical slices
+- minimal abstractions
+- integration tests for full-loop completion and timer-collision regression

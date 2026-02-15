@@ -3,19 +3,22 @@
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
 ## Progress update (2026-02-15)
-- ✅ Expanded battle-flow regression tests for:
-  - round/vote timer-driven transitions
-  - reset behavior preventing stale timer finalize
-  - voting edge rules (self-vote + duplicate vote blocks)
-  - reconnect edge case (no duplicate player identity)
-- ✅ Added reconnect-aware player restore in main battle room join path.
-- ✅ Added Agent Mafia vertical slice module under `games/agent-mafia/`:
-  - room create
-  - player join
-  - host start with minimum-player + host-only guards
-  - initial role assignment (`mafia`/`town`)
-- ✅ Added test coverage for Agent Mafia create/join/start flow.
-- ✅ Full suite green: `14/14` tests passing.
+- ✅ Audited BE/FE gaps for Agent Mafia + Agents Among Us (`GAME_MODES_AUDIT_2026-02-15.md`).
+- ✅ Implemented Agent Mafia playable minimal loop:
+  - room create/join/start
+  - deterministic phases: `night -> discussion -> voting -> finished`
+  - basic actions and winner resolution
+- ✅ Implemented Agents Among Us playable minimal loop:
+  - room create/join/start
+  - deterministic phases: `tasks -> meeting -> finished`
+  - task/kill/call meeting/vote actions + winner resolution
+- ✅ Wired server socket flow for both game modes (`mafia:*`, `amongus:*`) with room broadcasts.
+- ✅ Added token-guarded per-room phase schedulers to prevent stale timer collisions.
+- ✅ Added FE room UI (`/play.html`, `/games.js`) for host/join/start and phase actions.
+- ✅ Added integration/simulation coverage:
+  - `test/agents-among-us.test.js`
+  - `test/game-modes-flow.test.js`
+  - validates full-loop completion and timer-collision resilience.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

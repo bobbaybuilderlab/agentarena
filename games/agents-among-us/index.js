@@ -13,16 +13,17 @@ function toPublic(room) {
     id: room.id,
     status: room.status,
     phase: room.phase,
-    day: room.day,
     winner: room.winner,
+    meetingReason: room.meetingReason,
     players: room.players.map((p) => ({
       id: p.id,
       name: p.name,
       alive: p.alive,
       role: room.status === 'finished' ? p.role : undefined,
+      tasksDone: p.tasksDone,
       isConnected: p.isConnected,
     })),
-    tally: room.tally,
+    votes: room.votes,
     events: room.events.slice(-8),
   };
 }
@@ -38,6 +39,7 @@ function createRoom(store, { hostName, hostSocketId }) {
     isConnected: true,
     alive: true,
     role: null,
+    tasksDone: 0,
   };
 
   const room = {
@@ -45,16 +47,11 @@ function createRoom(store, { hostName, hostSocketId }) {
     status: 'lobby',
     phase: 'lobby',
     hostPlayerId: host.id,
-    createdAt: Date.now(),
-    day: 0,
     players: [host],
     winner: null,
-    maxDays: 1,
-    actions: {
-      night: {}, // mafiaPlayerId -> targetId
-      vote: {}, // voterId -> targetId
-    },
-    tally: {},
+    meetingReason: null,
+    tasksToWin: 1,
+    votes: {},
     events: [],
   };
 
@@ -79,6 +76,7 @@ function joinRoom(store, { roomId, name, socketId }) {
       isConnected: true,
       alive: true,
       role: null,
+      tasksDone: 0,
     };
     room.players.push(player);
   } else {
@@ -89,17 +87,26 @@ function joinRoom(store, { roomId, name, socketId }) {
   return { ok: true, room, player };
 }
 
-function alivePlayers(room) {
+function alive(room) {
   return room.players.filter((p) => p.alive);
 }
 
-function checkWin(room) {
-  const alive = alivePlayers(room);
-  const mafia = alive.filter((p) => p.role === 'mafia').length;
-  const town = alive.filter((p) => p.role === 'town').length;
+function counts(room) {
+  const alivePlayers = alive(room);
+  const imposters = alivePlayers.filter((p) => p.role === 'imposter').length;
+  const crew = alivePlayers.filter((p) => p.role === 'crew').length;
+  return { imposters, crew };
+}
 
-  if (mafia === 0) return 'town';
-  if (mafia >= town) return 'mafia';
+function checkWin(room) {
+  const { imposters, crew } = counts(room);
+  const totalCrewTasks = room.players
+    .filter((p) => p.role === 'crew' && p.alive)
+    .reduce((n, p) => n + p.tasksDone, 0);
+
+  if (imposters === 0) return 'crew';
+  if (imposters >= crew) return 'imposter';
+  if (totalCrewTasks >= room.tasksToWin * Math.max(1, crew)) return 'crew';
   return null;
 }
 
@@ -111,26 +118,21 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (room.players.length < 4) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 4 players' } };
 
   room.status = 'in_progress';
-  room.phase = 'night';
-  room.day = 1;
+  room.phase = 'tasks';
   room.winner = null;
-  room.actions = { night: {}, vote: {} };
-  room.tally = {};
-  room.events = [{ type: 'GAME_STARTED', at: Date.now(), day: room.day }];
+  room.meetingReason = null;
+  room.votes = {};
+  room.events = [{ type: 'GAME_STARTED', at: Date.now() }];
 
   const shuffled = [...room.players].sort(() => Math.random() - 0.5);
-  const mafiaCount = Math.max(1, Math.floor(room.players.length / 4));
-  shuffled.forEach((p, idx) => {
-    p.role = idx < mafiaCount ? 'mafia' : 'town';
+  const imposterCount = 1;
+  shuffled.forEach((p, i) => {
+    p.role = i < imposterCount ? 'imposter' : 'crew';
     p.alive = true;
+    p.tasksDone = 0;
   });
 
   return { ok: true, room };
-}
-
-function transitionPhase(room, nextPhase) {
-  room.phase = nextPhase;
-  room.events.push({ type: 'PHASE', phase: nextPhase, day: room.day, at: Date.now() });
 }
 
 function submitAction(store, { roomId, playerId, type, targetId }) {
@@ -141,31 +143,48 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
   const actor = room.players.find((p) => p.id === playerId);
   if (!actor || !actor.alive) return { ok: false, error: { code: 'INVALID_PLAYER', message: 'Invalid player' } };
 
-  if (room.phase === 'night' && type === 'nightKill') {
-    if (actor.role !== 'mafia') return { ok: false, error: { code: 'ROLE_FORBIDDEN', message: 'Only mafia can kill at night' } };
-    const target = room.players.find((p) => p.id === targetId);
-    if (!target || !target.alive || target.id === actor.id) return { ok: false, error: { code: 'INVALID_TARGET', message: 'Invalid target' } };
-    room.actions.night[actor.id] = target.id;
-    return maybeAutoAdvance(room);
-  }
+  if (room.phase === 'tasks' && type === 'task') {
+    if (actor.role !== 'crew') return { ok: false, error: { code: 'ROLE_FORBIDDEN', message: 'Only crew can do tasks' } };
+    actor.tasksDone = Math.min(room.tasksToWin, actor.tasksDone + 1);
+    room.events.push({ type: 'TASK_DONE', playerId: actor.id, at: Date.now() });
 
-  if (room.phase === 'discussion' && type === 'ready') {
-    room.actions.vote[actor.id] = '__READY__';
-    const aliveCount = alivePlayers(room).length;
-    if (Object.keys(room.actions.vote).length >= aliveCount) {
-      room.actions.vote = {};
-      transitionPhase(room, 'voting');
-    }
+    const winner = checkWin(room);
+    if (winner) return finish(room, winner);
     return { ok: true, room };
   }
 
-  if (room.phase === 'voting' && type === 'vote') {
+  if (room.phase === 'tasks' && type === 'kill') {
+    if (actor.role !== 'imposter') return { ok: false, error: { code: 'ROLE_FORBIDDEN', message: 'Only imposters can kill' } };
+    const target = room.players.find((p) => p.id === targetId);
+    if (!target || !target.alive || target.id === actor.id) return { ok: false, error: { code: 'INVALID_TARGET', message: 'Invalid target' } };
+    if (target.role !== 'crew') return { ok: false, error: { code: 'INVALID_TARGET', message: 'Can only kill crew' } };
+
+    target.alive = false;
+    room.events.push({ type: 'KILL', actorId: actor.id, targetId: target.id, at: Date.now() });
+    room.phase = 'meeting';
+    room.meetingReason = 'body_reported';
+    room.votes = {};
+
+    const winner = checkWin(room);
+    if (winner) return finish(room, winner);
+    return { ok: true, room };
+  }
+
+  if (type === 'callMeeting') {
+    room.phase = 'meeting';
+    room.meetingReason = 'called';
+    room.votes = {};
+    room.events.push({ type: 'MEETING_CALLED', playerId: actor.id, at: Date.now() });
+    return { ok: true, room };
+  }
+
+  if (room.phase === 'meeting' && type === 'vote') {
     const target = room.players.find((p) => p.id === targetId);
     if (!target || !target.alive) return { ok: false, error: { code: 'INVALID_TARGET', message: 'Invalid target' } };
-    room.actions.vote[actor.id] = target.id;
-    const aliveCount = alivePlayers(room).length;
-    if (Object.keys(room.actions.vote).length >= aliveCount) {
-      resolveVote(room);
+
+    room.votes[actor.id] = target.id;
+    if (Object.keys(room.votes).length >= alive(room).length) {
+      resolveMeeting(room);
     }
     return { ok: true, room };
   }
@@ -173,85 +192,50 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
   return { ok: false, error: { code: 'INVALID_ACTION', message: 'Action not allowed in current phase' } };
 }
 
-function maybeAutoAdvance(room) {
-  if (room.phase !== 'night') return { ok: true, room };
-  const aliveMafia = room.players.filter((p) => p.alive && p.role === 'mafia');
-  if (aliveMafia.length === 0) {
-    const w = checkWin(room);
-    if (w) finish(room, w);
-    return { ok: true, room };
-  }
-
-  const allActed = aliveMafia.every((p) => room.actions.night[p.id]);
-  if (allActed) resolveNight(room);
-  return { ok: true, room };
-}
-
 function forceAdvance(store, { roomId }) {
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'in_progress') return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'Game not active' } };
 
-  if (room.phase === 'night') resolveNight(room);
-  else if (room.phase === 'discussion') {
-    room.actions.vote = {};
-    transitionPhase(room, 'voting');
-  } else if (room.phase === 'voting') resolveVote(room);
+  if (room.phase === 'tasks') {
+    room.phase = 'meeting';
+    room.meetingReason = 'timer';
+    room.votes = {};
+    room.events.push({ type: 'MEETING_TIMER', at: Date.now() });
+  } else if (room.phase === 'meeting') {
+    resolveMeeting(room);
+  }
+
   return { ok: true, room };
 }
 
-function resolveNight(room) {
+function resolveMeeting(room) {
   const counts = {};
-  for (const targetId of Object.values(room.actions.night)) counts[targetId] = (counts[targetId] || 0) + 1;
-  room.actions.night = {};
-
+  for (const targetId of Object.values(room.votes)) counts[targetId] = (counts[targetId] || 0) + 1;
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-  const victimId = sorted[0]?.[0] || null;
-  if (victimId) {
-    const victim = room.players.find((p) => p.id === victimId);
-    if (victim && victim.alive) victim.alive = false;
-    room.events.push({ type: 'NIGHT_ELIMINATION', targetId: victimId, at: Date.now(), day: room.day });
+  const ejectedId = sorted[0]?.[0] || null;
+  if (ejectedId) {
+    const p = room.players.find((x) => x.id === ejectedId);
+    if (p && p.alive) p.alive = false;
+    room.events.push({ type: 'EJECTED', playerId: ejectedId, at: Date.now() });
   }
 
-  const winner = checkWin(room);
-  if (winner) return finish(room, winner);
-  transitionPhase(room, 'discussion');
-  room.actions.vote = {};
-}
-
-function resolveVote(room) {
-  const counts = {};
-  for (const targetId of Object.values(room.actions.vote)) {
-    if (targetId === '__READY__') continue;
-    counts[targetId] = (counts[targetId] || 0) + 1;
-  }
-  room.tally = counts;
-  room.actions.vote = {};
-
-  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-  const executedId = sorted[0]?.[0] || null;
-  if (executedId) {
-    const target = room.players.find((p) => p.id === executedId);
-    if (target && target.alive) target.alive = false;
-    room.events.push({ type: 'DAY_EXECUTION', targetId: executedId, at: Date.now(), day: room.day });
-  }
+  room.votes = {};
+  room.meetingReason = null;
 
   const winner = checkWin(room);
   if (winner) return finish(room, winner);
 
-  if (room.day >= room.maxDays) {
-    return finish(room, 'town');
-  }
-
-  room.day += 1;
-  transitionPhase(room, 'night');
+  room.phase = 'tasks';
+  room.events.push({ type: 'MEETING_RESOLVED', at: Date.now() });
 }
 
 function finish(room, winner) {
   room.status = 'finished';
   room.phase = 'finished';
   room.winner = winner;
-  room.events.push({ type: 'GAME_FINISHED', winner, day: room.day, at: Date.now() });
+  room.events.push({ type: 'GAME_FINISHED', winner, at: Date.now() });
+  return { ok: true, room };
 }
 
 function disconnectPlayer(store, { roomId, socketId }) {
