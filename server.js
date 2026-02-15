@@ -44,6 +44,58 @@ const THEMES = [
 /** @type {Map<string, any>} */
 const rooms = new Map();
 
+const ROOM_TRANSITIONS = {
+  BATTLE_RESET: {
+    lobby: 'lobby',
+    round: 'lobby',
+    voting: 'lobby',
+    finished: 'lobby',
+  },
+  BEGIN_ROUND: {
+    lobby: 'round',
+  },
+  BEGIN_VOTING: {
+    round: 'voting',
+  },
+  ROUND_COMPLETE_CONTINUE: {
+    voting: 'lobby',
+  },
+  ROUND_COMPLETE_FINISH: {
+    voting: 'finished',
+  },
+};
+
+function transitionRoomState(room, event) {
+  const transitions = ROOM_TRANSITIONS[event];
+  if (!transitions) {
+    return {
+      ok: false,
+      error: {
+        code: 'UNKNOWN_TRANSITION_EVENT',
+        message: `Unknown room transition event: ${event}`,
+        event,
+      },
+    };
+  }
+
+  const from = room.status;
+  const to = transitions[from];
+  if (!to) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ROOM_TRANSITION',
+        message: `Cannot transition room from ${from} using ${event}`,
+        from,
+        event,
+      },
+    };
+  }
+
+  room.status = to;
+  return { ok: true, from, to, event };
+}
+
 function createRoom(host) {
   const roomId = shortId(6).toUpperCase();
   const room = {
@@ -208,8 +260,11 @@ function maybeAdvanceToVoting(room) {
 }
 
 function beginRound(room) {
-  if (room.players.length < 2) return;
-  room.status = 'round';
+  if (room.players.length < 2) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players' } };
+
+  const transition = transitionRoomState(room, 'BEGIN_ROUND');
+  if (!transition.ok) return transition;
+
   room.round += 1;
   room.theme = room.themeRotation[room.round - 1] || THEMES[(room.round - 1) % THEMES.length];
   room.roastsByRound[room.round] = {};
@@ -228,8 +283,9 @@ function beginRound(room) {
 }
 
 function beginVoting(room) {
-  if (room.status === 'voting') return;
-  room.status = 'voting';
+  const transition = transitionRoomState(room, 'BEGIN_VOTING');
+  if (!transition.ok) return transition;
+
   room.voteEndsAt = Date.now() + VOTE_MS;
   emitRoom(room);
 
@@ -274,7 +330,9 @@ function finalizeRound(room) {
 
   room.roundEndsAt = null;
   room.voteEndsAt = null;
-  room.status = room.round >= room.maxRounds ? 'finished' : 'lobby';
+  const transition = transitionRoomState(room, room.round >= room.maxRounds ? 'ROUND_COMPLETE_FINISH' : 'ROUND_COMPLETE_CONTINUE');
+  if (!transition.ok) return transition;
+
   emitRoom(room);
 
   if (room.status !== 'finished') {
@@ -348,7 +406,8 @@ io.on('connection', (socket) => {
     room.votesByRound = {};
     room.lastWinner = null;
     room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
-    beginRound(room);
+    const started = beginRound(room);
+    if (started && started.ok === false) return cb?.({ ok: false, error: started.error.message, code: started.error.code });
     cb?.({ ok: true });
   });
 
@@ -412,7 +471,9 @@ io.on('connection', (socket) => {
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.hostSocketId !== socket.id) return cb?.({ ok: false, error: 'Host only' });
 
-    room.status = 'lobby';
+    const transition = transitionRoomState(room, 'BATTLE_RESET');
+    if (!transition.ok) return cb?.({ ok: false, error: transition.error.message, code: transition.error.code });
+
     room.round = 0;
     room.roastsByRound = {};
     room.votesByRound = {};
@@ -860,6 +921,7 @@ module.exports = {
   VOTE_MS,
   createRoom,
   getPublicRoom,
+  transitionRoomState,
   beginRound,
   beginVoting,
   finalizeRound,

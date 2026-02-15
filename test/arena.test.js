@@ -1,7 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { THEMES, createRoom, nextTheme, finalizeRound, addBot, generateBotRoast } = require('../server');
+const {
+  THEMES,
+  createRoom,
+  transitionRoomState,
+  beginVoting,
+  nextTheme,
+  finalizeRound,
+  addBot,
+  generateBotRoast,
+} = require('../server');
 
 test('creates room with valid theme and id', () => {
   const room = createRoom({ socketId: 'host-1' });
@@ -50,4 +59,32 @@ test('generateBotRoast returns themed line', () => {
   const text = generateBotRoast('Crypto', 'RugBot', 8);
   assert.ok(text.includes('RugBot'));
   assert.ok(text.length <= 280);
+});
+
+test('transitionRoomState rejects invalid transition with structured error', () => {
+  const room = createRoom({ socketId: 'host-5' });
+  const result = transitionRoomState(room, 'BEGIN_VOTING');
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'INVALID_ROOM_TRANSITION');
+  assert.equal(result.error.from, 'lobby');
+  assert.equal(result.error.event, 'BEGIN_VOTING');
+});
+
+test('transitionRoomState rejects unknown event with structured error', () => {
+  const room = createRoom({ socketId: 'host-6' });
+  const result = transitionRoomState(room, 'TIME_TRAVEL');
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'UNKNOWN_TRANSITION_EVENT');
+  assert.equal(result.error.event, 'TIME_TRAVEL');
+});
+
+test('beginVoting surfaces structured invalid transition errors', () => {
+  const room = createRoom({ socketId: 'host-7' });
+  const result = beginVoting(room);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'INVALID_ROOM_TRANSITION');
+  assert.equal(room.status, 'lobby');
 });
