@@ -29,7 +29,14 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Removed direct `setTimeout` usage from `server.js` gameplay flows.
   - Added room-scoped cancellation on battle start/reset to prevent stale callbacks.
   - Added regression test: unanimous early voting does not double-finalize when vote deadline timer later fires (`test/battle-flow.test.js`).
-- ▶ Next: implement append-only normalized room event log + per-room query endpoint/replay scaffold (#3).
+- ✅ Shipped vertical slice: append-only normalized room event log + replay scaffold (#3).
+  - Added `lib/room-events.js` with per-room bounded event history (last 1,000) and NDJSON append sink (`data/room-events.ndjson`).
+  - Instrumented Arena + Agent Mafia + Agents Among Us room lifecycle/actions to emit normalized events.
+  - Added room debugging APIs:
+    - `GET /api/rooms/:roomId/events?mode=arena|mafia|amongus&limit=...`
+    - `GET /api/rooms/:roomId/replay?mode=arena|mafia|amongus`
+  - Added docs (`docs/room-events.md`) and test coverage (`test/room-events.test.js`).
+- ▶ Next: async persistence pipeline for non-blocking writes (#4).
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

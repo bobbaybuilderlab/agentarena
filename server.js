@@ -7,6 +7,7 @@ const { randomUUID } = require('crypto');
 const mafiaGame = require('./games/agent-mafia');
 const amongUsGame = require('./games/agents-among-us');
 const { createRoomScheduler } = require('./lib/room-scheduler');
+const { createRoomEventLog } = require('./lib/room-events');
 
 const app = express();
 const server = http.createServer(app);
@@ -50,6 +51,7 @@ const rooms = new Map();
 const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
 const roomScheduler = createRoomScheduler();
+const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
 
 function clearAllGameTimers() {
   roomScheduler.clearAll();
@@ -128,6 +130,7 @@ function createRoom(host) {
     lastWinner: null,
   };
   rooms.set(roomId, room);
+  logRoomEvent('arena', room, 'ROOM_CREATED', { status: room.status, round: room.round });
   return room;
 }
 
@@ -158,6 +161,11 @@ function getPublicRoom(room) {
 
 function emitRoom(room) {
   io.to(room.id).emit('room:update', getPublicRoom(room));
+}
+
+function logRoomEvent(mode, room, type, payload = {}) {
+  if (!room?.id) return;
+  roomEvents.append(mode, room.id, type, payload);
 }
 
 function ensurePlayer(room, socket, payload) {
@@ -298,6 +306,12 @@ function beginRound(room) {
   room.roastsByRound[room.round] = {};
   room.votesByRound[room.round] = {};
   room.roundEndsAt = Date.now() + ROUND_MS;
+  logRoomEvent('arena', room, 'ROUND_STARTED', {
+    status: room.status,
+    phase: 'round',
+    round: room.round,
+    theme: room.theme,
+  });
 
   autoSubmitBotRoasts(room);
 
@@ -321,6 +335,11 @@ function beginVoting(room) {
   if (!transition.ok) return transition;
 
   room.voteEndsAt = Date.now() + VOTE_MS;
+  logRoomEvent('arena', room, 'VOTING_STARTED', {
+    status: room.status,
+    phase: 'voting',
+    round: room.round,
+  });
   emitRoom(room);
 
   roomScheduler.schedule({
@@ -372,6 +391,14 @@ function finalizeRound(room) {
   room.voteEndsAt = null;
   const transition = transitionRoomState(room, room.round >= room.maxRounds ? 'ROUND_COMPLETE_FINISH' : 'ROUND_COMPLETE_CONTINUE');
   if (!transition.ok) return transition;
+
+  logRoomEvent('arena', room, room.status === 'finished' ? 'BATTLE_FINISHED' : 'ROUND_FINISHED', {
+    status: room.status,
+    phase: room.status,
+    round: room.round,
+    winner: room.lastWinner?.id || null,
+    winnerName: room.lastWinner?.name || null,
+  });
 
   emitRoom(room);
 
@@ -447,6 +474,7 @@ io.on('connection', (socket) => {
     const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`mafia:${created.room.id}`);
+    logRoomEvent('mafia', created.room, 'ROOM_CREATED', { status: created.room.status, phase: created.room.phase });
     emitMafiaRoom(created.room);
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: mafiaGame.toPublic(created.room) });
   });
@@ -455,6 +483,7 @@ io.on('connection', (socket) => {
     const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`mafia:${joined.room.id}`);
+    logRoomEvent('mafia', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitMafiaRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
   });
@@ -462,6 +491,7 @@ io.on('connection', (socket) => {
   socket.on('mafia:start', ({ roomId, playerId }, cb) => {
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
+    logRoomEvent('mafia', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
     emitMafiaRoom(started.room);
     scheduleMafiaPhase(started.room);
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
@@ -470,6 +500,15 @@ io.on('connection', (socket) => {
   socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
+    logRoomEvent('mafia', result.room, 'ACTION_SUBMITTED', {
+      actorId: playerId,
+      action: type,
+      targetId: targetId || null,
+      status: result.room.status,
+      phase: result.room.phase,
+      day: result.room.day,
+      winner: result.room.winner || null,
+    });
     emitMafiaRoom(result.room);
     scheduleMafiaPhase(result.room);
     cb?.({ ok: true, state: mafiaGame.toPublic(result.room) });
@@ -479,6 +518,7 @@ io.on('connection', (socket) => {
     const created = amongUsGame.createRoom(amongUsRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`amongus:${created.room.id}`);
+    logRoomEvent('amongus', created.room, 'ROOM_CREATED', { status: created.room.status, phase: created.room.phase });
     emitAmongUsRoom(created.room);
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: amongUsGame.toPublic(created.room) });
   });
@@ -487,6 +527,7 @@ io.on('connection', (socket) => {
     const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`amongus:${joined.room.id}`);
+    logRoomEvent('amongus', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitAmongUsRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: amongUsGame.toPublic(joined.room) });
   });
@@ -494,6 +535,7 @@ io.on('connection', (socket) => {
   socket.on('amongus:start', ({ roomId, playerId }, cb) => {
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
+    logRoomEvent('amongus', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, round: started.room.round });
     emitAmongUsRoom(started.room);
     scheduleAmongUsPhase(started.room);
     cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
@@ -502,6 +544,15 @@ io.on('connection', (socket) => {
   socket.on('amongus:action', ({ roomId, playerId, type, targetId }, cb) => {
     const result = amongUsGame.submitAction(amongUsRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
+    logRoomEvent('amongus', result.room, 'ACTION_SUBMITTED', {
+      actorId: playerId,
+      action: type,
+      targetId: targetId || null,
+      status: result.room.status,
+      phase: result.room.phase,
+      round: result.room.round,
+      winner: result.room.winner || null,
+    });
     emitAmongUsRoom(result.room);
     scheduleAmongUsPhase(result.room);
     cb?.({ ok: true, state: amongUsGame.toPublic(result.room) });
@@ -514,6 +565,7 @@ io.on('connection', (socket) => {
     const result = ensurePlayer(room, socket, payload || {});
     if (result.error) return cb?.({ ok: false, error: result.error });
 
+    logRoomEvent('arena', room, 'PLAYER_JOINED', { playerId: result.player.id, playerName: result.player.name, status: room.status, round: room.round });
     emitRoom(room);
     cb?.({ ok: true, roomId: room.id, playerId: result.player.id, themes: THEMES });
   });
@@ -526,6 +578,7 @@ io.on('connection', (socket) => {
     const result = ensurePlayer(room, socket, { name, type, owner });
     if (result.error) return cb?.({ ok: false, error: result.error });
 
+    logRoomEvent('arena', room, 'PLAYER_JOINED', { playerId: result.player.id, playerName: result.player.name, status: room.status, round: room.round });
     emitRoom(room);
     cb?.({ ok: true, roomId: room.id, playerId: result.player.id, themes: THEMES });
   });
@@ -535,6 +588,7 @@ io.on('connection', (socket) => {
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     socket.join(room.id);
     room.spectators.add(socket.id);
+    logRoomEvent('arena', room, 'SPECTATOR_JOINED', { socketId: socket.id, status: room.status, round: room.round });
     emitRoom(room);
     cb?.({ ok: true, roomId: room.id });
   });
@@ -546,6 +600,7 @@ io.on('connection', (socket) => {
     if (room.status !== 'lobby') return cb?.({ ok: false, error: 'Only in lobby' });
 
     const bot = addBot(room, { name, persona });
+    logRoomEvent('arena', room, 'BOT_ADDED', { playerId: bot.id, playerName: bot.name, status: room.status, round: room.round });
     emitRoom(room);
     cb?.({ ok: true, botId: bot.id });
   });
@@ -565,6 +620,7 @@ io.on('connection', (socket) => {
     room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
     const started = beginRound(room);
     if (started && started.ok === false) return cb?.({ ok: false, error: started.error.message, code: started.error.code });
+    logRoomEvent('arena', room, 'BATTLE_STARTED', { status: room.status, round: room.round, theme: room.theme });
     cb?.({ ok: true });
   });
 
@@ -575,6 +631,7 @@ io.on('connection', (socket) => {
     if (room.status !== 'lobby') return cb?.({ ok: false, error: 'Can only change theme in lobby' });
 
     nextTheme(room);
+    logRoomEvent('arena', room, 'THEME_CHANGED', { status: room.status, round: room.round, theme: room.theme });
     cb?.({ ok: true, theme: room.theme });
   });
 
@@ -590,6 +647,12 @@ io.on('connection', (socket) => {
     if (!cleaned) return cb?.({ ok: false, error: 'Roast required' });
 
     room.roastsByRound[room.round][player.id] = cleaned;
+    logRoomEvent('arena', room, 'ROAST_SUBMITTED', {
+      actorId: player.id,
+      actorName: player.name,
+      round: room.round,
+      status: room.status,
+    });
     maybeAdvanceToVoting(room);
     emitRoom(room);
 
@@ -619,6 +682,12 @@ io.on('connection', (socket) => {
     room.votesByRound[room.round][voterKey] = true;
     room.votesByRound[room.round][playerId] = (room.votesByRound[room.round][playerId] || 0) + 1;
 
+    logRoomEvent('arena', room, 'VOTE_CAST', {
+      actorId: voter.id,
+      targetId: playerId,
+      round: room.round,
+      status: room.status,
+    });
     emitRoom(room);
     cb?.({ ok: true });
   });
@@ -643,6 +712,7 @@ io.on('connection', (socket) => {
     room.theme = room.themeRotation[0] || THEMES[0];
     room.players.forEach((p) => { room.totalVotes[p.id] = 0; });
 
+    logRoomEvent('arena', room, 'BATTLE_RESET', { status: room.status, round: room.round });
     emitRoom(room);
     cb?.({ ok: true });
   });
@@ -1065,6 +1135,30 @@ loadState();
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/api/rooms/:roomId/events', (req, res) => {
+  const roomId = String(req.params.roomId || '').toUpperCase();
+  const mode = String(req.query.mode || 'arena').toLowerCase();
+  const limit = Number(req.query.limit || 1000);
+  if (!['arena', 'mafia', 'amongus'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: 'Invalid mode' });
+  }
+
+  const events = roomEvents.list(mode, roomId, limit);
+  res.json({ ok: true, mode, roomId, count: events.length, events });
+});
+
+app.get('/api/rooms/:roomId/replay', (req, res) => {
+  const roomId = String(req.params.roomId || '').toUpperCase();
+  const mode = String(req.query.mode || 'arena').toLowerCase();
+  if (!['arena', 'mafia', 'amongus'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: 'Invalid mode' });
+  }
+
+  const replay = roomEvents.replay(mode, roomId);
+  if (!replay.ok) return res.status(404).json({ ok: false, error: 'No events for room', mode, roomId });
+  res.json({ ok: true, ...replay });
+});
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size, agents: agentProfiles.size, roasts: roastFeed.length });
 });
@@ -1099,5 +1193,6 @@ module.exports = {
   rooms,
   mafiaRooms,
   amongUsRooms,
+  roomEvents,
   clearAllGameTimers,
 };

@@ -66,7 +66,15 @@ Open:
 npm test
 ```
 
-Includes an integration test that spins up a real server, adds autonomous agents, runs a live roast round, and verifies a winner is produced.
+Includes integration tests that spin up a real server and validate room/game loops.
+
+## Debugging room timelines
+
+Append-only normalized room events are available for all game modes:
+- `GET /api/rooms/:roomId/events?mode=arena|mafia|amongus&limit=1000`
+- `GET /api/rooms/:roomId/replay?mode=arena|mafia|amongus`
+
+See `docs/room-events.md`.
 
 ## OpenClaw commands (AgentArena plugin)
 If using the OpenClaw plugin in `extensions/agentarena-connect/`:

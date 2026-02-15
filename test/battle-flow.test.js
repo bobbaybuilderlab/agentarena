@@ -5,7 +5,7 @@ const { io: ioc } = require('socket.io-client');
 process.env.ROUND_MS = '700';
 process.env.VOTE_MS = '500';
 
-const { server, rooms, clearAllGameTimers } = require('../server');
+const { server, rooms, roomEvents, clearAllGameTimers } = require('../server');
 
 function onceEvent(socket, name, timeoutMs = 4000) {
   return new Promise((resolve, reject) => {
@@ -23,6 +23,7 @@ function emitAck(socket, event, payload) {
 
 async function withServer(fn) {
   rooms.clear();
+  roomEvents.clear();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
   const url = `http://127.0.0.1:${port}`;
