@@ -1234,7 +1234,7 @@ function summarizePlayableRoom(mode, room) {
   const alivePlayers = players.filter((p) => p.alive !== false).length;
   const status = String(room?.status || 'lobby');
   const phase = String(room?.phase || (status === 'lobby' ? 'lobby' : 'unknown'));
-  const canJoin = status === 'lobby';
+  const canJoin = status === 'lobby' && players.length < 8;
   return {
     mode,
     roomId: room.id,
@@ -1248,14 +1248,7 @@ function summarizePlayableRoom(mode, room) {
   };
 }
 
-app.get('/api/play/rooms', (req, res) => {
-  const modeFilter = String(req.query.mode || 'all').toLowerCase();
-  const statusFilter = String(req.query.status || 'all').toLowerCase();
-
-  if (!['all', 'mafia', 'amongus'].includes(modeFilter)) {
-    return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
-  }
-
+function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
   const includeStatuses = statusFilter === 'open' ? new Set(['lobby']) : null;
 
   const mafia = modeFilter === 'all' || modeFilter === 'mafia'
@@ -1277,6 +1270,33 @@ app.get('/api/play/rooms', (req, res) => {
     return (b.createdAt || 0) - (a.createdAt || 0);
   });
 
+  return roomsList;
+}
+
+function pickQuickJoinMode(mode) {
+  if (mode === 'mafia' || mode === 'amongus') return mode;
+  const openMafia = listPlayableRooms('mafia', 'open').length;
+  const openAmongUs = listPlayableRooms('amongus', 'open').length;
+  return openMafia <= openAmongUs ? 'mafia' : 'amongus';
+}
+
+function createQuickJoinRoom(mode, hostName) {
+  const socketId = null;
+  if (mode === 'amongus') {
+    return amongUsGame.createRoom(amongUsRooms, { hostName, hostSocketId: socketId });
+  }
+  return mafiaGame.createRoom(mafiaRooms, { hostName, hostSocketId: socketId });
+}
+
+app.get('/api/play/rooms', (req, res) => {
+  const modeFilter = String(req.query.mode || 'all').toLowerCase();
+  const statusFilter = String(req.query.status || 'all').toLowerCase();
+
+  if (!['all', 'mafia', 'amongus'].includes(modeFilter)) {
+    return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
+  }
+
+  const roomsList = listPlayableRooms(modeFilter, statusFilter);
   const summary = {
     totalRooms: roomsList.length,
     openRooms: roomsList.filter((room) => room.canJoin).length,
@@ -1288,6 +1308,44 @@ app.get('/api/play/rooms', (req, res) => {
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
+});
+
+app.post('/api/play/quick-join', (req, res) => {
+  const modeInput = String(req.body?.mode || 'all').toLowerCase();
+  const playerName = String(req.body?.name || '').trim().slice(0, 24) || `Player-${Math.floor(Math.random() * 900) + 100}`;
+
+  if (!['all', 'mafia', 'amongus'].includes(modeInput)) {
+    return res.status(400).json({ ok: false, error: 'Invalid mode' });
+  }
+
+  const selectedMode = pickQuickJoinMode(modeInput);
+  const candidates = listPlayableRooms(selectedMode, 'open')
+    .filter((room) => room.canJoin)
+    .sort((a, b) => b.players - a.players || (b.createdAt || 0) - (a.createdAt || 0));
+
+  let targetRoom = candidates[0] || null;
+  let created = false;
+
+  if (!targetRoom) {
+    const createdRoom = createQuickJoinRoom(selectedMode, `${selectedMode === 'mafia' ? 'Mafia' : 'AmongUs'} Host`);
+    if (!createdRoom.ok) return res.status(400).json(createdRoom);
+    logRoomEvent(selectedMode, createdRoom.room, 'ROOM_CREATED', { status: createdRoom.room.status, phase: createdRoom.room.phase });
+    if (selectedMode === 'mafia') emitMafiaRoom(createdRoom.room);
+    if (selectedMode === 'amongus') emitAmongUsRoom(createdRoom.room);
+    targetRoom = summarizePlayableRoom(selectedMode, createdRoom.room);
+    created = true;
+  }
+
+  const joinTicket = {
+    mode: targetRoom.mode,
+    roomId: targetRoom.roomId,
+    name: playerName,
+    autojoin: true,
+    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}`,
+    issuedAt: Date.now(),
+  };
+
+  res.json({ ok: true, created, room: targetRoom, joinTicket });
 });
 
 loadState();

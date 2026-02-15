@@ -109,7 +109,18 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added `play.html` URL-driven join (`?game=mafia|amongus&room=ABC123&autojoin=1`) for one-click lobby entry.
   - Added regression coverage: `test/play-rooms.test.js` (cross-mode listing + open-room filter behavior).
 - 🚫 Blocker (deploy): still blocked by Vercel CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts to install `vercel@50.17.1` with peer `@vercel/backends@0.0.33` against existing `vercel@50.15.1` graph.
-- ▶ Next: ship server-side quick-match endpoint (`POST /api/play/quick-join`) that joins best-fit open room or creates one, then returns join ticket for zero-friction play entry.
+- ✅ Shipped vertical slice: server-side quick-match API + FE one-click entry for Agent Mafia + Agents Among Us MVP loop.
+  - Added backend endpoint: `POST /api/play/quick-join`.
+  - Endpoint behavior:
+    - selects best-fit open room (prefers fullest lobby in selected mode), or
+    - creates a new room when none are available,
+    - returns `joinTicket` (`joinUrl`, `mode`, `roomId`, `name`) for zero-friction redirect.
+  - Added FE quick-match triggers:
+    - home page “Quick Match Me” button (`/`)
+    - play page “Quick Match” button (`/play.html`)
+  - Added regression coverage: `test/play-rooms.test.js` quick-join selection + room-creation cases.
+- 🚫 Blocker (deploy): Vercel deploy still fails at CLI install step with npm resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` auto-installs `vercel@50.17.1` and hits peer conflict with `@vercel/backends@0.0.33` while `vercel@50.15.1` exists in the graph.
+- ▶ Next: ship host-side bot autofill for Mafia/AmongUs lobbies (optional bot seats to auto-reach 4 players) so quick-match users can start immediately.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

@@ -74,3 +74,43 @@ test('play rooms API lists cross-mode room discovery with open-room filtering', 
     s5.disconnect();
   });
 });
+
+test('quick-join API picks fullest open room or creates one with join ticket', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const p2 = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+    await emitAck(p2, 'mafia:room:join', { roomId: created.roomId, name: 'M2' });
+
+    const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+    });
+    const quickJoinData = await quickJoinRes.json();
+
+    assert.equal(quickJoinData.ok, true);
+    assert.equal(quickJoinData.created, false);
+    assert.equal(quickJoinData.room.roomId, created.roomId);
+    assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${created.roomId}`));
+    assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
+
+    host.disconnect();
+    p2.disconnect();
+  });
+
+  await withServer(async (url) => {
+    const res = await fetch(`${url}/api/play/quick-join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'amongus', name: 'FreshPlayer' }),
+    });
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.created, true);
+    assert.equal(data.room.mode, 'amongus');
+    assert.match(data.joinTicket.joinUrl, /game=amongus/);
+  });
+});

@@ -15,6 +15,7 @@ const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
 const startBtn = document.getElementById('startBtn');
 const advanceBtn = document.getElementById('advanceBtn');
+const quickMatchBtn = document.getElementById('quickMatchBtn');
 const runEvalsBtn = document.getElementById('runEvalsBtn');
 const runCiGateBtn = document.getElementById('runCiGateBtn');
 const evalStatus = document.getElementById('evalStatus');
@@ -177,6 +178,26 @@ joinBtn?.addEventListener('click', async () => {
   me.playerId = res.playerId;
   setStatus(`Joined ${me.game} room ${me.roomId}`);
   renderState(res.state);
+});
+
+quickMatchBtn?.addEventListener('click', async () => {
+  try {
+    const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+    const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
+    const res = await fetch('/api/play/quick-join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, name }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.joinTicket?.joinUrl) {
+      setStatus(formatError(data, 'Quick match failed'));
+      return;
+    }
+    window.location.href = data.joinTicket.joinUrl;
+  } catch (_err) {
+    setStatus('Quick match failed');
+  }
 });
 
 startBtn?.addEventListener('click', async () => {

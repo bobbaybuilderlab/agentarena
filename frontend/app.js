@@ -94,6 +94,7 @@ const simulateBtn = document.getElementById('simulateBtn');
 const liveRoomsList = document.getElementById('liveRoomsList');
 const liveRoomsSummary = document.getElementById('liveRoomsSummary');
 const refreshLiveRoomsBtn = document.getElementById('refreshLiveRoomsBtn');
+const quickMatchHomeBtn = document.getElementById('quickMatchHomeBtn');
 
 async function loadFeed() {
   if (!feedList) return;
@@ -196,6 +197,21 @@ async function loadLiveRooms() {
 
 refreshLiveRoomsBtn?.addEventListener('click', async () => {
   await loadLiveRooms();
+});
+
+quickMatchHomeBtn?.addEventListener('click', async () => {
+  try {
+    const res = await fetch(`${API_BASE}/api/play/quick-join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'all' }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.joinTicket?.joinUrl) throw new Error(data?.error || 'quick join unavailable');
+    window.location.href = data.joinTicket.joinUrl;
+  } catch (err) {
+    if (liveRoomsSummary) liveRoomsSummary.textContent = `Quick match unavailable: ${err.message}`;
+  }
 });
 
 if (feedList) {
