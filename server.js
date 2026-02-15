@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
 const mafiaGame = require('./games/agent-mafia');
 const amongUsGame = require('./games/agents-among-us');
+const { createRoomScheduler } = require('./lib/room-scheduler');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,28 +49,10 @@ const rooms = new Map();
 
 const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
-const mafiaTimers = new Map();
-const amongUsTimers = new Map();
-
-function clearGameTimer(timerMap, roomId) {
-  const current = timerMap.get(roomId);
-  if (current?.timeout) clearTimeout(current.timeout);
-  timerMap.delete(roomId);
-}
+const roomScheduler = createRoomScheduler();
 
 function clearAllGameTimers() {
-  for (const roomId of mafiaTimers.keys()) clearGameTimer(mafiaTimers, roomId);
-  for (const roomId of amongUsTimers.keys()) clearGameTimer(amongUsTimers, roomId);
-}
-
-function scheduleGameTimer(timerMap, roomId, token, ms, fn) {
-  clearGameTimer(timerMap, roomId);
-  const timeout = setTimeout(() => {
-    const current = timerMap.get(roomId);
-    if (!current || current.token !== token) return;
-    fn();
-  }, ms);
-  timerMap.set(roomId, { token, timeout });
+  roomScheduler.clearAll();
 }
 
 const ROOM_TRANSITIONS = {
@@ -281,7 +264,13 @@ function autoSubmitBotRoasts(room) {
   const bots = room.players.filter((p) => p.isBot);
   for (const bot of bots) {
     const delay = 1000 + Math.floor(Math.random() * 7000);
-    setTimeout(() => {
+    roomScheduler.schedule({
+      namespace: 'arena',
+      roomId: room.id,
+      slot: `bot-roast:${room.round}:${bot.id}`,
+      delayMs: delay,
+      token: `${room.round}:round`,
+    }, () => {
       const current = rooms.get(room.id);
       if (!current || current.status !== 'round' || current.round !== room.round) return;
       if (current.roastsByRound[current.round][bot.id]) return;
@@ -289,7 +278,7 @@ function autoSubmitBotRoasts(room) {
       current.roastsByRound[current.round][bot.id] = roast;
       maybeAdvanceToVoting(current);
       emitRoom(current);
-    }, delay);
+    });
   }
 }
 
@@ -312,11 +301,17 @@ function beginRound(room) {
 
   autoSubmitBotRoasts(room);
 
-  setTimeout(() => {
+  roomScheduler.schedule({
+    namespace: 'arena',
+    roomId: room.id,
+    slot: 'round-deadline',
+    delayMs: ROUND_MS,
+    token: `${room.round}:round`,
+  }, () => {
     const current = rooms.get(room.id);
     if (!current || current.status !== 'round' || current.round !== room.round) return;
     beginVoting(current);
-  }, ROUND_MS);
+  });
 
   emitRoom(room);
 }
@@ -328,11 +323,17 @@ function beginVoting(room) {
   room.voteEndsAt = Date.now() + VOTE_MS;
   emitRoom(room);
 
-  setTimeout(() => {
+  roomScheduler.schedule({
+    namespace: 'arena',
+    roomId: room.id,
+    slot: 'vote-deadline',
+    delayMs: VOTE_MS,
+    token: `${room.round}:vote`,
+  }, () => {
     const current = rooms.get(room.id);
     if (!current || current.status !== 'voting' || current.round !== room.round) return;
     finalizeRound(current);
-  }, VOTE_MS);
+  });
 }
 
 function finalizeRound(room) {
@@ -375,11 +376,17 @@ function finalizeRound(room) {
   emitRoom(room);
 
   if (room.status !== 'finished') {
-    setTimeout(() => {
+    roomScheduler.schedule({
+      namespace: 'arena',
+      roomId: room.id,
+      slot: 'next-round',
+      delayMs: 2000,
+      token: `${room.round}:next`,
+    }, () => {
       const current = rooms.get(room.id);
       if (!current || current.status !== 'lobby') return;
       beginRound(current);
-    }, 2000);
+    });
   }
 }
 
@@ -399,7 +406,7 @@ function emitAmongUsRoom(room) {
 
 function scheduleMafiaPhase(room) {
   if (room.status !== 'in_progress') {
-    clearGameTimer(mafiaTimers, room.id);
+    roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
     return;
   }
 
@@ -407,7 +414,7 @@ function scheduleMafiaPhase(room) {
   const ms = room.phase === 'night' ? 7000 : room.phase === 'discussion' ? 5000 : room.phase === 'voting' ? 7000 : 0;
   if (!ms) return;
 
-  scheduleGameTimer(mafiaTimers, room.id, token, ms, () => {
+  roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
     const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
     if (advanced.ok) {
       emitMafiaRoom(room);
@@ -418,7 +425,7 @@ function scheduleMafiaPhase(room) {
 
 function scheduleAmongUsPhase(room) {
   if (room.status !== 'in_progress') {
-    clearGameTimer(amongUsTimers, room.id);
+    roomScheduler.clear({ namespace: 'amongus', roomId: room.id, slot: 'phase' });
     return;
   }
 
@@ -426,7 +433,7 @@ function scheduleAmongUsPhase(room) {
   const ms = room.phase === 'tasks' ? 8000 : room.phase === 'meeting' ? 6000 : 0;
   if (!ms) return;
 
-  scheduleGameTimer(amongUsTimers, room.id, token, ms, () => {
+  roomScheduler.schedule({ namespace: 'amongus', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
     const advanced = amongUsGame.forceAdvance(amongUsRooms, { roomId: room.id });
     if (advanced.ok) {
       emitAmongUsRoom(room);
@@ -550,6 +557,7 @@ io.on('connection', (socket) => {
     if (room.players.length < 2) return cb?.({ ok: false, error: 'Need at least 2 players' });
     if (room.status !== 'lobby') return cb?.({ ok: false, error: 'Battle already in progress' });
 
+    roomScheduler.clearRoom(room.id, 'arena');
     room.round = 0;
     room.roastsByRound = {};
     room.votesByRound = {};
@@ -623,6 +631,7 @@ io.on('connection', (socket) => {
     const transition = transitionRoomState(room, 'BATTLE_RESET');
     if (!transition.ok) return cb?.({ ok: false, error: transition.error.message, code: transition.error.code });
 
+    roomScheduler.clearRoom(room.id, 'arena');
     room.round = 0;
     room.roastsByRound = {};
     room.votesByRound = {};
@@ -1090,6 +1099,5 @@ module.exports = {
   rooms,
   mafiaRooms,
   amongUsRooms,
-  clearGameTimer,
   clearAllGameTimers,
 };

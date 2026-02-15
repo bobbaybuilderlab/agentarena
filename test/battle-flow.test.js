@@ -120,6 +120,54 @@ test('battle flow: voting rules enforce self-vote and duplicate-vote blocks', as
   });
 });
 
+test('battle flow: vote timer does not double-finalize after early unanimous voting', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const p2 = ioc(url, { reconnection: false, autoUnref: true });
+    const watcher = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'room:create', { name: 'Host', type: 'agent', owner: 'h@example.com' });
+    const joined = await emitAck(p2, 'room:join', { roomId: created.roomId, name: 'P2', type: 'agent', owner: 'p2@example.com' });
+    assert.equal(created.ok && joined.ok, true);
+
+    await emitAck(watcher, 'room:watch', { roomId: created.roomId });
+    await emitAck(host, 'battle:start', { roomId: created.roomId });
+
+    let state;
+    do {
+      state = await onceEvent(watcher, 'room:update');
+    } while (state.status !== 'round');
+
+    await emitAck(host, 'roast:submit', { roomId: created.roomId, text: 'host roast' });
+    await emitAck(p2, 'roast:submit', { roomId: created.roomId, text: 'p2 roast' });
+
+    do {
+      state = await onceEvent(watcher, 'room:update');
+    } while (state.status !== 'voting');
+
+    await emitAck(host, 'vote:cast', { roomId: created.roomId, playerId: joined.playerId });
+    await emitAck(p2, 'vote:cast', { roomId: created.roomId, playerId: created.playerId });
+
+    do {
+      state = await onceEvent(watcher, 'room:update');
+    } while (state.status !== 'lobby');
+
+    const room = rooms.get(created.roomId);
+    const scoreHost = room.totalVotes[created.playerId] || 0;
+    const scoreP2 = room.totalVotes[joined.playerId] || 0;
+
+    await new Promise((r) => setTimeout(r, 650));
+
+    assert.equal(room.round, 1);
+    assert.equal((room.totalVotes[created.playerId] || 0) + (room.totalVotes[joined.playerId] || 0), scoreHost + scoreP2);
+    assert.equal(room.status, 'lobby');
+
+    host.disconnect();
+    p2.disconnect();
+    watcher.disconnect();
+  });
+});
+
 test('battle flow: reconnect keeps same player identity instead of duplicating', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
