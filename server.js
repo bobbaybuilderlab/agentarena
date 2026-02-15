@@ -1159,8 +1159,17 @@ app.get('/api/rooms/:roomId/replay', (req, res) => {
   res.json({ ok: true, ...replay });
 });
 
+app.get('/api/ops/events', (_req, res) => {
+  res.json({ ok: true, pending: roomEvents.pending() });
+});
+
+app.post('/api/ops/events/flush', async (_req, res) => {
+  await roomEvents.flush();
+  res.json({ ok: true, pending: roomEvents.pending() });
+});
+
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size, agents: agentProfiles.size, roasts: roastFeed.length });
+  res.json({ ok: true, rooms: rooms.size, agents: agentProfiles.size, roasts: roastFeed.length, eventQueueDepth: roomEvents.pending() });
 });
 
 if (require.main === module) {

@@ -7,6 +7,8 @@ const playStatus = document.getElementById('playStatus');
 const playersView = document.getElementById('playersView');
 const actionsView = document.getElementById('actionsView');
 const stateJson = document.getElementById('stateJson');
+const eventQueueStatus = document.getElementById('eventQueueStatus');
+const flushEventsBtn = document.getElementById('flushEventsBtn');
 
 const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
@@ -37,6 +39,17 @@ function formatError(res, fallback) {
 
 function activeEvent(name) {
   return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
+}
+
+async function refreshEventQueueStatus() {
+  if (!eventQueueStatus) return;
+  try {
+    const res = await fetch('/api/ops/events');
+    const data = await res.json();
+    if (data?.ok) eventQueueStatus.textContent = `Event queue: ${data.pending}`;
+  } catch (_err) {
+    eventQueueStatus.textContent = 'Event queue: unavailable';
+  }
 }
 
 function renderState(state) {
@@ -168,3 +181,20 @@ socket.on('amongus:state', (state) => {
   if (state.id !== me.roomId) return;
   renderState(state);
 });
+
+flushEventsBtn?.addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/ops/events/flush', { method: 'POST' });
+    const data = await res.json();
+    if (data?.ok) setStatus(`Event queue flushed (${data.pending} pending)`);
+  } catch (_err) {
+    setStatus('Failed to flush event queue');
+  }
+  await refreshEventQueueStatus();
+});
+
+setInterval(() => {
+  void refreshEventQueueStatus();
+}, 3000);
+
+void refreshEventQueueStatus();

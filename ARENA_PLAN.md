@@ -36,7 +36,17 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
     - `GET /api/rooms/:roomId/events?mode=arena|mafia|amongus&limit=...`
     - `GET /api/rooms/:roomId/replay?mode=arena|mafia|amongus`
   - Added docs (`docs/room-events.md`) and test coverage (`test/room-events.test.js`).
-- ▶ Next: async persistence pipeline for non-blocking writes (#4).
+- ✅ Shipped vertical slice: async room-event persistence pipeline (#4) with FE ops visibility.
+  - Replaced sync NDJSON writes with buffered async batches in `lib/room-events.js` (`fs/promises`, default 250ms flush, best-effort retry queue).
+  - Added durability controls: `roomEvents.flush()`, `roomEvents.close()`, queue depth introspection.
+  - Added ops APIs + health signal:
+    - `GET /api/ops/events` (pending queue depth)
+    - `POST /api/ops/events/flush` (manual flush)
+    - `/health` now includes `eventQueueDepth`.
+  - Added `/play.html` queue status + manual flush button for live verification during room runs.
+  - Added persistence regression test: `test/room-events-persistence.test.js` (parseable NDJSON across close/reopen).
+- 🚫 Blocker (deploy): unchanged Vercel CLI install conflict (`ERESOLVE`) when `npx vercel --prod --yes` tries to install `vercel@50.17.1` against existing dependency graph (`vercel@50.15.1`/peer `@vercel/backends@0.0.33`).
+- ▶ Next: reliability/observability baseline (#9): correlation IDs + richer health metrics (scheduler timers + queue depth by subsystem).
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.
