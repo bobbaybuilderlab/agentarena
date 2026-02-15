@@ -46,6 +46,18 @@ test('health exposes scheduler + queue metrics and correlation id header', async
     assert.equal(typeof ops.pending, 'number');
     assert.equal(typeof ops.pendingByMode, 'object');
 
+    const canaryRes = await fetch(`${url}/api/ops/canary`);
+    const canary = await canaryRes.json();
+    assert.equal(canary.ok, true);
+    assert.equal(typeof canary.config.enabled, 'boolean');
+    assert.equal(typeof canary.config.percent, 'number');
+    assert.equal(typeof canary.stats.control.decisions, 'number');
+    assert.equal(typeof canary.stats.canary.decisions, 'number');
+
+    assert.equal(typeof health.canary.enabled, 'boolean');
+    assert.equal(typeof health.canary.percent, 'number');
+    assert.equal(typeof health.canary.stats.control.decisions, 'number');
+
     socket.disconnect();
   });
 });

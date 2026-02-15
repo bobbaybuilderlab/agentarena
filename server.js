@@ -13,6 +13,7 @@ const { moderateRoast } = require('./bots/roast-policy');
 const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory');
 const { runEval } = require('./lib/eval-harness');
 const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
+const { createCanaryMode } = require('./lib/canary-mode');
 
 const app = express();
 const server = http.createServer(app);
@@ -72,6 +73,10 @@ const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
 const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
+const arenaCanary = createCanaryMode({
+  enabled: process.env.ARENA_CANARY_ENABLED !== '0',
+  percent: Number(process.env.ARENA_CANARY_PERCENT || 0),
+});
 
 function clearAllGameTimers() {
   roomScheduler.clearAll();
@@ -131,9 +136,11 @@ function transitionRoomState(room, event) {
 
 function createRoom(host) {
   const roomId = shortId(6).toUpperCase();
+  const canaryBucket = arenaCanary.assignRoom(roomId);
   const room = {
     id: roomId,
     createdAt: Date.now(),
+    canaryBucket,
     hostSocketId: host.socketId,
     theme: THEMES[0],
     themeRotation: [...THEMES].sort(() => Math.random() - 0.5).slice(0, 5),
@@ -150,7 +157,7 @@ function createRoom(host) {
     lastWinner: null,
   };
   rooms.set(roomId, room);
-  logRoomEvent('arena', room, 'ROOM_CREATED', { status: room.status, round: room.round });
+  logRoomEvent('arena', room, 'ROOM_CREATED', { status: room.status, round: room.round, canaryBucket: room.canaryBucket });
   return room;
 }
 
@@ -161,6 +168,7 @@ function getPublicRoom(room) {
     status: room.status,
     round: room.round,
     maxRounds: room.maxRounds,
+    canaryBucket: room.canaryBucket || 'control',
     players: room.players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -658,7 +666,8 @@ io.on('connection', (socket) => {
     const player = room.players.find((p) => p.socketId === socket.id);
     if (!player) return cb?.({ ok: false, error: 'Join as a player first' });
 
-    const moderated = moderateRoast(text, { maxLength: 280 });
+    const policyVariant = room.canaryBucket === 'canary' ? 'canary' : 'control';
+    const moderated = moderateRoast(text, { maxLength: 280, variant: policyVariant });
     logRoomEvent('arena', room, 'ROAST_POLICY_CHECKED', {
       actorId: player.id,
       actorName: player.name,
@@ -666,7 +675,10 @@ io.on('connection', (socket) => {
       status: room.status,
       policyCode: moderated.code,
       policyOk: moderated.ok,
+      policyVariant,
     });
+
+    arenaCanary.recordDecision(policyVariant, moderated.ok);
 
     if (!moderated.ok) {
       logRoomEvent('arena', room, 'ROAST_REJECTED_POLICY', {
@@ -675,12 +687,14 @@ io.on('connection', (socket) => {
         round: room.round,
         status: room.status,
         policyCode: moderated.code,
+        policyVariant,
       });
       logStructured('roast_policy_decision', {
         source: 'arena-room-submit',
         roomId: room.id,
         actorId: player.id,
         policyCode: moderated.code,
+        policyVariant,
         allowed: false,
       });
       return cb?.({ ok: false, error: 'Roast blocked by safety policy', code: moderated.code });
@@ -692,6 +706,7 @@ io.on('connection', (socket) => {
       roomId: room.id,
       actorId: player.id,
       policyCode: moderated.code,
+      policyVariant,
       allowed: true,
     });
     logRoomEvent('arena', room, 'ROAST_SUBMITTED', {
@@ -700,6 +715,7 @@ io.on('connection', (socket) => {
       round: room.round,
       status: room.status,
       policyCode: moderated.code,
+      policyVariant,
     });
     maybeAdvanceToVoting(room);
     emitRoom(room);
@@ -859,16 +875,20 @@ function loadState() {
 }
 
 function registerRoast({ battleId, agentId, agentName, text }) {
-  const moderated = moderateRoast(text, { maxLength: 280 });
+  const policyVariant = arenaCanary.assignRoom(battleId);
+  const moderated = moderateRoast(text, { maxLength: 280, variant: policyVariant });
   const safeText = moderated.ok
     ? moderated.text
     : `[${String(agentName || 'Bot').slice(0, 24)} • light] Your pitch deck has side effects.`;
+
+  arenaCanary.recordDecision(policyVariant, moderated.ok);
 
   logStructured('roast_policy_decision', {
     source: 'arena-auto-battle',
     battleId,
     actorId: agentId,
     policyCode: moderated.code,
+    policyVariant,
     allowed: moderated.ok,
   });
 
@@ -881,6 +901,7 @@ function registerRoast({ battleId, agentId, agentName, text }) {
     upvotes: 0,
     createdAt: Date.now(),
     policyCode: moderated.code,
+    policyVariant,
   };
   roastFeed.unshift(roast);
   if (roastFeed.length > 400) roastFeed.length = 400;
@@ -1245,6 +1266,10 @@ app.post('/api/ops/events/flush', async (_req, res) => {
   res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
 });
 
+app.get('/api/ops/canary', (_req, res) => {
+  res.json({ ok: true, config: arenaCanary.config(), stats: arenaCanary.stats() });
+});
+
 app.get('/api/evals/run', (_req, res) => {
   const report = runEval();
   res.json(report);
@@ -1280,6 +1305,10 @@ app.get('/health', (_req, res) => {
     schedulerTimers: scheduler,
     eventQueueDepth,
     eventQueueByMode,
+    canary: {
+      ...arenaCanary.config(),
+      stats: arenaCanary.stats(),
+    },
   });
 });
 
@@ -1314,5 +1343,6 @@ module.exports = {
   mafiaRooms,
   amongUsRooms,
   roomEvents,
+  arenaCanary,
   clearAllGameTimers,
 };

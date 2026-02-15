@@ -88,7 +88,22 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added FE controls on `/play.html` + `/games.js` for “Run CI Gate” with per-metric ✅/❌ output.
   - Added regression coverage for threshold gate + CI API shape (`test/eval-harness.test.js`).
 - 🚫 Blocker (deploy): Vercel deploy remains blocked by CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing resolution (`vercel@50.15.1`).
-- ▶ Next: implement canary mode for behavior/policy updates (#10) with deterministic room hash targeting + safe rollback switch.
+- ✅ Shipped vertical slice: canary mode for roast policy updates (#10) with deterministic room hash targeting + rollback switch.
+  - Added deterministic canary assigner (`lib/canary-mode.js`) using stable room hash + `%` rollout controls.
+  - Added safe rollback/config flags:
+    - `ARENA_CANARY_ENABLED=0|1` (off forces full control path)
+    - `ARENA_CANARY_PERCENT=0-100` (default 0)
+  - Arena room roast moderation now uses per-room `policyVariant` (`control|canary`) and emits variant-tagged policy decisions/logs.
+  - Added control vs canary decision counters and ops surfaces:
+    - `GET /api/ops/canary`
+    - `/health.canary` summary
+    - `/play.html` ops status line for canary config + decision totals.
+  - Added tests:
+    - `test/canary-mode.test.js`
+    - `test/roast-policy.test.js` canary stricter-rule coverage
+    - `test/observability.test.js` canary endpoint + health assertions.
+- 🚫 Blocker (deploy): still blocked by Vercel CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts to install `vercel@50.17.1` with peer `@vercel/backends@0.0.33` against existing `vercel@50.15.1` graph.
+- ▶ Next: ship cross-mode matchmaking/front-page surfacing for Agent Mafia + Agents Among Us room discovery and quick-join flow.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

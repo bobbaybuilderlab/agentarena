@@ -8,6 +8,7 @@ const playersView = document.getElementById('playersView');
 const actionsView = document.getElementById('actionsView');
 const stateJson = document.getElementById('stateJson');
 const eventQueueStatus = document.getElementById('eventQueueStatus');
+const canaryStatus = document.getElementById('canaryStatus');
 const flushEventsBtn = document.getElementById('flushEventsBtn');
 
 const hostBtn = document.getElementById('hostBtn');
@@ -44,14 +45,29 @@ function activeEvent(name) {
   return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
 }
 
-async function refreshEventQueueStatus() {
-  if (!eventQueueStatus) return;
-  try {
-    const res = await fetch('/api/ops/events');
-    const data = await res.json();
-    if (data?.ok) eventQueueStatus.textContent = `Event queue: ${data.pending}`;
-  } catch (_err) {
-    eventQueueStatus.textContent = 'Event queue: unavailable';
+async function refreshOpsStatus() {
+  if (eventQueueStatus) {
+    try {
+      const res = await fetch('/api/ops/events');
+      const data = await res.json();
+      if (data?.ok) eventQueueStatus.textContent = `Event queue: ${data.pending}`;
+    } catch (_err) {
+      eventQueueStatus.textContent = 'Event queue: unavailable';
+    }
+  }
+
+  if (canaryStatus) {
+    try {
+      const res = await fetch('/api/ops/canary');
+      const data = await res.json();
+      if (data?.ok) {
+        const cfg = data.config || {};
+        const stats = data.stats || {};
+        canaryStatus.textContent = `Canary policy: ${cfg.enabled ? 'on' : 'off'} @ ${cfg.percent || 0}% · decisions c=${stats.control?.decisions || 0} k=${stats.canary?.decisions || 0}`;
+      }
+    } catch (_err) {
+      canaryStatus.textContent = 'Canary policy: unavailable';
+    }
   }
 }
 
@@ -193,7 +209,7 @@ flushEventsBtn?.addEventListener('click', async () => {
   } catch (_err) {
     setStatus('Failed to flush event queue');
   }
-  await refreshEventQueueStatus();
+  await refreshOpsStatus();
 });
 
 async function runEvalApi(pathname) {
@@ -231,7 +247,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 setInterval(() => {
-  void refreshEventQueueStatus();
+  void refreshOpsStatus();
 }, 3000);
 
-void refreshEventQueueStatus();
+void refreshOpsStatus();

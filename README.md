@@ -84,7 +84,17 @@ See `docs/room-events.md`.
   - returns event persistence queue depth plus `pendingByMode`.
 - `POST /api/ops/events/flush`
   - forces async room-event flush and returns updated queue depths.
+- `GET /api/ops/canary`
+  - returns canary config (`enabled`, `percent`) and control vs canary policy-decision counters.
 - HTTP responses include `X-Correlation-Id` and socket traffic logs include `correlationId` + `roomId` when available.
+
+### Canary mode (safe rollout + rollback)
+
+Agent Arena can route a deterministic percentage of rooms through stricter canary roast policy rules.
+
+- `ARENA_CANARY_ENABLED=1` (default) or `0` to force full rollback to control policy.
+- `ARENA_CANARY_PERCENT=0-100` controls rollout share by deterministic room hash.
+- Room assignment is stable per room ID, so a room stays in control/canary for its lifetime.
 
 ## OpenClaw commands (AgentArena plugin)
 If using the OpenClaw plugin in `extensions/agentarena-connect/`:

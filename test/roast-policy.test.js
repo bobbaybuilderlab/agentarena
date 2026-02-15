@@ -27,3 +27,12 @@ test('roast policy rejects hate content', () => {
   assert.equal(result.ok, false);
   assert.equal(result.code, 'POLICY_HATE');
 });
+
+test('canary policy applies stricter profanity rule while control allows it', () => {
+  const control = moderateRoast('fuck you and your roadmap', { variant: 'control' });
+  const canary = moderateRoast('fuck you and your roadmap', { variant: 'canary' });
+
+  assert.equal(control.ok, true);
+  assert.equal(canary.ok, false);
+  assert.equal(canary.code, 'POLICY_CANARY_PROFANITY');
+});
