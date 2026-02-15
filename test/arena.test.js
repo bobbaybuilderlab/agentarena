@@ -56,7 +56,7 @@ test('addBot adds autonomous agent with persona', () => {
 });
 
 test('generateBotRoast returns themed line', () => {
-  const text = generateBotRoast('Crypto', 'RugBot', 8);
+  const text = generateBotRoast('Crypto', { name: 'RugBot', memory: [] }, 8);
   assert.ok(text.includes('RugBot'));
   assert.ok(text.length <= 280);
 });

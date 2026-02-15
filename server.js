@@ -9,6 +9,7 @@ const amongUsGame = require('./games/agents-among-us');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { runBotTurn } = require('./bots/turn-loop');
+const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory');
 
 const app = express();
 const server = http.createServer(app);
@@ -239,14 +240,17 @@ function addBot(room, payload = {}) {
       style: payload.persona?.style || 'witty',
       intensity: payload.persona?.intensity || 6,
     },
+    memory: [],
   };
   room.players.push(bot);
   room.totalVotes[bot.id] = 0;
   return bot;
 }
 
-function generateBotRoast(theme, botName, intensity = 6, style = 'witty') {
-  const turn = runBotTurn({ theme, botName, intensity, style });
+function generateBotRoast(theme, bot, intensity = 6, style = 'witty') {
+  const memorySummary = summarizeBotMemory(bot);
+  const recentRoasts = Array.isArray(bot?.memory) ? bot.memory.map((entry) => entry.roast).filter(Boolean) : [];
+  const turn = runBotTurn({ theme, botName: bot?.name || 'Bot', intensity, style, memorySummary, recentRoasts });
   return turn.text;
 }
 
@@ -264,7 +268,7 @@ function autoSubmitBotRoasts(room) {
       const current = rooms.get(room.id);
       if (!current || current.status !== 'round' || current.round !== room.round) return;
       if (current.roastsByRound[current.round][bot.id]) return;
-      const roast = generateBotRoast(current.theme, bot.name, bot.persona?.intensity || 6, bot.persona?.style || 'witty');
+      const roast = generateBotRoast(current.theme, bot, bot.persona?.intensity || 6, bot.persona?.style || 'witty');
       current.roastsByRound[current.round][bot.id] = roast;
       maybeAdvanceToVoting(current);
       emitRoom(current);
@@ -367,6 +371,17 @@ function finalizeRound(room) {
       votes: best,
       quote: room.roastsByRound[room.round]?.[winnerId] || '',
     };
+  }
+
+  for (const player of room.players) {
+    if (!player.isBot) continue;
+    rememberBotRound(player, {
+      round: room.round,
+      theme: room.theme,
+      roast: room.roastsByRound[room.round]?.[player.id] || '',
+      votes: Number(roundVotes[player.id] || 0),
+      winner: player.id === winnerId,
+    });
   }
 
   room.roundEndsAt = null;

@@ -39,7 +39,7 @@ function pickSpice(intensity = 6) {
   return 'light';
 }
 
-function planBotTurn({ theme, botName, intensity = 6, style = 'witty' }) {
+function planBotTurn({ theme, botName, intensity = 6, style = 'witty', memorySummary = '', recentRoasts = [] }) {
   return {
     theme: theme || 'Tech Twitter',
     botName: String(botName || 'Bot').slice(0, 24),
@@ -47,12 +47,17 @@ function planBotTurn({ theme, botName, intensity = 6, style = 'witty' }) {
     style: String(style || 'witty').slice(0, 20),
     maxLength: DEFAULT_MAX_LENGTH,
     policyTags: ['humor', 'no-hate', 'no-threats'],
+    memorySummary: String(memorySummary || '').slice(0, 500),
+    recentRoasts: Array.isArray(recentRoasts) ? recentRoasts.map((line) => String(line || '').slice(0, DEFAULT_MAX_LENGTH)) : [],
   };
 }
 
 function draftBotRoast(plan) {
   const lines = ROAST_POOLS[plan.theme] || ROAST_POOLS['Tech Twitter'];
-  const line = lines[Math.floor(Math.random() * lines.length)];
+  const recent = new Set(plan.recentRoasts.map((line) => line.toLowerCase()));
+  const candidates = lines.filter((line) => !recent.has(line.toLowerCase()));
+  const pool = candidates.length ? candidates : lines;
+  const line = pool[Math.floor(Math.random() * pool.length)];
   return `[${plan.botName} • ${pickSpice(plan.intensity)}] ${line}`;
 }
 
@@ -79,6 +84,8 @@ function submitBotTurn({ plan, checked }) {
     meta: {
       theme: plan.theme,
       style: plan.style,
+      memorySummary: plan.memorySummary,
+      memoryRounds: plan.recentRoasts.length,
       policyTags: checked.policyTags,
       checks: checked.checks,
     },

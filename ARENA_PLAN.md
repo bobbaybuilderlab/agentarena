@@ -62,7 +62,13 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Server now routes arena auto-roasts + auto-battle generation through the shared bot module.
   - Self-check enforces max roast length (280) and required policy tags (`humor`, `no-hate`, `no-threats`).
   - Added focused module tests: `test/bot-turn-loop.test.js`.
-- ▶ Next: lightweight episodic memory for bots (#6): keep last 3 round outcomes per bot and inject concise memory context into generation.
+- ✅ Shipped vertical slice: lightweight episodic bot memory (#6) with generation context.
+  - Added `bots/episodic-memory.js` to persist per-bot rolling memory (last 3 rounds): `theme`, `roast`, `votes`, `winner`.
+  - Arena `finalizeRound` now records round outcomes for every bot and trims memory window automatically.
+  - `generateBotRoast` now injects memory summary + recent roasts into `runBotTurn`, reducing exact repeat lines when alternatives exist.
+  - Added regression coverage: `test/bot-memory.test.js` + updated `test/arena.test.js` signature usage.
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails with npm dependency resolution (`ERESOLVE`) when trying to install `vercel@50.17.1`, conflicting with peer graph (`@vercel/backends@0.0.33`) and existing `vercel@50.15.1` resolution.
+- ▶ Next: roast safety/policy gate (#7): structured moderation reason codes before publish + audit logging + edge-case tests.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.
