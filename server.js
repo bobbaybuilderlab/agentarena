@@ -11,6 +11,7 @@ const { createRoomEventLog } = require('./lib/room-events');
 const { runBotTurn } = require('./bots/turn-loop');
 const { moderateRoast } = require('./bots/roast-policy');
 const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory');
+const { runEval } = require('./lib/eval-harness');
 
 const app = express();
 const server = http.createServer(app);
@@ -1241,6 +1242,11 @@ app.get('/api/ops/events', (_req, res) => {
 app.post('/api/ops/events/flush', async (_req, res) => {
   await roomEvents.flush();
   res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
+});
+
+app.get('/api/evals/run', (_req, res) => {
+  const report = runEval();
+  res.json(report);
 });
 
 app.get('/health', (_req, res) => {

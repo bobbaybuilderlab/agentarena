@@ -9,6 +9,8 @@ const actionsView = document.getElementById('actionsView');
 const stateJson = document.getElementById('stateJson');
 const eventQueueStatus = document.getElementById('eventQueueStatus');
 const flushEventsBtn = document.getElementById('flushEventsBtn');
+const runEvalsBtn = document.getElementById('runEvalsBtn');
+const evalStatus = document.getElementById('evalStatus');
 
 const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
@@ -191,6 +193,34 @@ flushEventsBtn?.addEventListener('click', async () => {
     setStatus('Failed to flush event queue');
   }
   await refreshEventQueueStatus();
+});
+
+runEvalsBtn?.addEventListener('click', async () => {
+  if (evalStatus) evalStatus.textContent = 'Running eval fixtures...';
+  try {
+    const res = await fetch('/api/evals/run');
+    const data = await res.json();
+    if (!data?.ok) {
+      if (evalStatus) evalStatus.textContent = 'Eval run failed';
+      return;
+    }
+    const t = data.totals || {};
+    const failedIds = (data.failures || []).map((f) => f.id).join(', ') || 'none';
+    if (evalStatus) {
+      evalStatus.textContent = [
+        `fixtures: ${t.fixtures}`,
+        `passed: ${t.passed}`,
+        `failed: ${t.failed}`,
+        `completionRate: ${t.completionRate}`,
+        `winnerDeterminism: ${t.winnerDeterminism}`,
+        `voteIntegrityErrors: ${t.voteIntegrityErrors}`,
+        `meanRoundSteps: ${t.meanRoundSteps}`,
+        `failedIds: ${failedIds}`,
+      ].join('\n');
+    }
+  } catch (_err) {
+    if (evalStatus) evalStatus.textContent = 'Eval run request failed';
+  }
 });
 
 setInterval(() => {

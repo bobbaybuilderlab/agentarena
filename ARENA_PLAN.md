@@ -74,7 +74,14 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added policy audit logging via structured logs (`event=roast_policy_decision`) for both room submissions and auto-battle roast registration.
   - Added unit edge-case coverage (`test/roast-policy.test.js`) for allowed text + disallowed threat/self-harm/hate cases.
 - 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails with npm resolver conflict (`ERESOLVE`) while auto-installing `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing `vercel@50.15.1` resolution.
-- ▶ Next: eval harness + CI metrics (#8): fixture-driven simulated matches with thresholded regressions in CI output.
+- ✅ Shipped vertical slice: eval harness + ops UI baseline (#8) with 20 deterministic fixtures.
+  - Added fixture set (`test/fixtures/eval-fixtures.json`) covering Agent Mafia + Agents Among Us deterministic outcomes.
+  - Added `lib/eval-harness.js` to compute baseline metrics: completion rate, winner determinism, vote-integrity errors, mean round steps.
+  - Added backend eval API: `GET /api/evals/run`.
+  - Added FE controls on `/play.html` to run evals and display metric summary/failed fixture IDs.
+  - Added regression coverage: `test/eval-harness.test.js` (fixture count/metrics + API payload shape).
+- 🚫 Blocker (deploy): Vercel deploy remains blocked by CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing resolution (`vercel@50.15.1`).
+- ▶ Next: wire eval thresholds into CI gate (`npm run eval:ci`) so regressions fail build automatically.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

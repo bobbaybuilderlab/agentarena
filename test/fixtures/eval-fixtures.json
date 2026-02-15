@@ -1,0 +1,23 @@
+[
+  { "id": "mafia-01", "mode": "mafia", "players": 4, "mafiaIndex": 0, "nightKillTarget": 1, "voteTarget": 0, "expectedWinner": "town" },
+  { "id": "mafia-02", "mode": "mafia", "players": 4, "mafiaIndex": 1, "nightKillTarget": 2, "voteTarget": 0, "expectedWinner": "mafia" },
+  { "id": "mafia-03", "mode": "mafia", "players": 5, "mafiaIndex": 2, "nightKillTarget": 4, "voteTarget": 2, "expectedWinner": "town" },
+  { "id": "mafia-04", "mode": "mafia", "players": 5, "mafiaIndex": 3, "nightKillTarget": 1, "voteTarget": 0, "expectedWinner": "mafia" },
+  { "id": "mafia-05", "mode": "mafia", "players": 6, "mafiaIndex": 5, "nightKillTarget": 2, "voteTarget": 5, "expectedWinner": "town" },
+  { "id": "mafia-06", "mode": "mafia", "players": 6, "mafiaIndex": 0, "nightKillTarget": 3, "voteTarget": 1, "expectedWinner": "mafia" },
+  { "id": "mafia-07", "mode": "mafia", "players": 4, "mafiaIndex": 2, "nightKillTarget": 0, "voteTarget": 2, "expectedWinner": "town" },
+  { "id": "mafia-08", "mode": "mafia", "players": 5, "mafiaIndex": 4, "nightKillTarget": 3, "voteTarget": 1, "expectedWinner": "mafia" },
+  { "id": "mafia-09", "mode": "mafia", "players": 5, "mafiaIndex": 0, "nightKillTarget": 4, "voteTarget": 0, "expectedWinner": "town" },
+  { "id": "mafia-10", "mode": "mafia", "players": 6, "mafiaIndex": 1, "nightKillTarget": 5, "voteTarget": 3, "expectedWinner": "mafia" },
+
+  { "id": "amongus-01", "mode": "amongus", "players": 4, "imposterIndex": 0, "tasksCompleted": 3, "expectedWinner": "crew" },
+  { "id": "amongus-02", "mode": "amongus", "players": 4, "imposterIndex": 1, "killTarget": 0, "meetingVoteTarget": 1, "expectedWinner": "crew" },
+  { "id": "amongus-03", "mode": "amongus", "players": 4, "imposterIndex": 2, "killTarget": 0, "meetingVoteTarget": 3, "expectedWinner": "imposter" },
+  { "id": "amongus-04", "mode": "amongus", "players": 5, "imposterIndex": 4, "tasksCompleted": 4, "expectedWinner": "crew" },
+  { "id": "amongus-05", "mode": "amongus", "players": 5, "imposterIndex": 0, "killTarget": 1, "meetingVoteTarget": 2, "expectedWinner": "imposter" },
+  { "id": "amongus-06", "mode": "amongus", "players": 5, "imposterIndex": 2, "killTarget": 1, "meetingVoteTarget": 2, "expectedWinner": "crew" },
+  { "id": "amongus-07", "mode": "amongus", "players": 6, "imposterIndex": 3, "tasksCompleted": 5, "expectedWinner": "crew" },
+  { "id": "amongus-08", "mode": "amongus", "players": 6, "imposterIndex": 0, "killTarget": 5, "meetingVoteTarget": 2, "expectedWinner": "imposter" },
+  { "id": "amongus-09", "mode": "amongus", "players": 6, "imposterIndex": 5, "killTarget": 4, "meetingVoteTarget": 5, "expectedWinner": "crew" },
+  { "id": "amongus-10", "mode": "amongus", "players": 4, "imposterIndex": 3, "killTarget": 1, "meetingVoteTarget": 0, "expectedWinner": "imposter" }
+]
