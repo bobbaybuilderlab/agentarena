@@ -80,8 +80,15 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added backend eval API: `GET /api/evals/run`.
   - Added FE controls on `/play.html` to run evals and display metric summary/failed fixture IDs.
   - Added regression coverage: `test/eval-harness.test.js` (fixture count/metrics + API payload shape).
+- ✅ Shipped vertical slice: CI eval gate + FE pass/fail visibility (#8 completion).
+  - Added threshold module (`lib/eval-thresholds.js`) with overridable env-based gates:
+    - completionRate, winnerDeterminism, fixturePassRate, voteIntegrityErrors, meanRoundSteps.
+  - Added CLI gate command `npm run eval:ci` via `lib/eval-ci.js` (non-zero exit on threshold failure).
+  - Added backend CI payload API: `GET /api/evals/ci`.
+  - Added FE controls on `/play.html` + `/games.js` for “Run CI Gate” with per-metric ✅/❌ output.
+  - Added regression coverage for threshold gate + CI API shape (`test/eval-harness.test.js`).
 - 🚫 Blocker (deploy): Vercel deploy remains blocked by CLI dependency resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` attempts `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing resolution (`vercel@50.15.1`).
-- ▶ Next: wire eval thresholds into CI gate (`npm run eval:ci`) so regressions fail build automatically.
+- ▶ Next: implement canary mode for behavior/policy updates (#10) with deterministic room hash targeting + safe rollback switch.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

@@ -53,7 +53,10 @@
     <section class="panel bevel">
       <h2>Eval Harness</h2>
       <p class="sub">Runs 20 deterministic Agent Mafia + Among Us fixtures and reports regression metrics.</p>
-      <button id="runEvalsBtn" class="btn btn-primary" type="button">Run Evals</button>
+      <div class="cta-row" style="margin-top:12px;">
+        <button id="runEvalsBtn" class="btn btn-primary" type="button">Run Evals</button>
+        <button id="runCiGateBtn" class="btn btn-soft" type="button">Run CI Gate</button>
+      </div>
       <pre id="evalStatus" style="white-space: pre-wrap;">No eval run yet.</pre>
     </section>
 

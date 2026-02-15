@@ -12,6 +12,7 @@ const { runBotTurn } = require('./bots/turn-loop');
 const { moderateRoast } = require('./bots/roast-policy');
 const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory');
 const { runEval } = require('./lib/eval-harness');
+const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
 
 const app = express();
 const server = http.createServer(app);
@@ -1247,6 +1248,19 @@ app.post('/api/ops/events/flush', async (_req, res) => {
 app.get('/api/evals/run', (_req, res) => {
   const report = runEval();
   res.json(report);
+});
+
+app.get('/api/evals/ci', (_req, res) => {
+  const report = runEval();
+  const thresholds = parseThresholdsFromEnv();
+  const gate = evaluateEvalReport(report, thresholds);
+  res.json({
+    ok: gate.ok,
+    thresholds: gate.thresholds,
+    checks: gate.checks,
+    totals: report.totals,
+    failedFixtures: report.failures.map((f) => f.id),
+  });
 });
 
 app.get('/health', (_req, res) => {
