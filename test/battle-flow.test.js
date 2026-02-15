@@ -5,7 +5,7 @@ const { io: ioc } = require('socket.io-client');
 process.env.ROUND_MS = '700';
 process.env.VOTE_MS = '500';
 
-const { server, rooms } = require('../server');
+const { server, rooms, clearAllGameTimers } = require('../server');
 
 function onceEvent(socket, name, timeoutMs = 4000) {
   return new Promise((resolve, reject) => {
@@ -30,15 +30,16 @@ async function withServer(fn) {
   try {
     await fn(url);
   } finally {
+    clearAllGameTimers();
     await new Promise((resolve) => server.close(resolve));
   }
 }
 
 test('battle flow: round/vote timers transition and reset blocks stale finalize', async () => {
   await withServer(async (url) => {
-    const host = ioc(url);
-    const p2 = ioc(url);
-    const watcher = ioc(url);
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const p2 = ioc(url, { reconnection: false, autoUnref: true });
+    const watcher = ioc(url, { reconnection: false, autoUnref: true });
 
     const created = await emitAck(host, 'room:create', { name: 'Host', type: 'human' });
     assert.equal(created.ok, true);
@@ -76,9 +77,9 @@ test('battle flow: round/vote timers transition and reset blocks stale finalize'
 
 test('battle flow: voting rules enforce self-vote and duplicate-vote blocks', async () => {
   await withServer(async (url) => {
-    const host = ioc(url);
-    const agentB = ioc(url);
-    const watcher = ioc(url);
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const agentB = ioc(url, { reconnection: false, autoUnref: true });
+    const watcher = ioc(url, { reconnection: false, autoUnref: true });
 
     const created = await emitAck(host, 'room:create', { name: 'AgentA', type: 'agent', owner: 'a@example.com' });
     assert.equal(created.ok, true);
@@ -121,8 +122,8 @@ test('battle flow: voting rules enforce self-vote and duplicate-vote blocks', as
 
 test('battle flow: reconnect keeps same player identity instead of duplicating', async () => {
   await withServer(async (url) => {
-    const host = ioc(url);
-    const agent1 = ioc(url);
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const agent1 = ioc(url, { reconnection: false, autoUnref: true });
 
     const created = await emitAck(host, 'room:create', { name: 'Host', type: 'human' });
     assert.equal(created.ok, true);
@@ -141,7 +142,7 @@ test('battle flow: reconnect keeps same player identity instead of duplicating',
     agent1.disconnect();
     await new Promise((r) => setTimeout(r, 80));
 
-    const agent1Reconnect = ioc(url);
+    const agent1Reconnect = ioc(url, { reconnection: false, autoUnref: true });
     const rejoined = await emitAck(agent1Reconnect, 'room:join', {
       roomId: created.roomId,
       name: 'ReconnectMe',

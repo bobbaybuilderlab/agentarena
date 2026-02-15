@@ -5,7 +5,7 @@ const { io: ioc } = require('socket.io-client');
 process.env.ROUND_MS = '2000';
 process.env.VOTE_MS = '1200';
 
-const { server } = require('../server');
+const { server, clearAllGameTimers } = require('../server');
 
 function onceEvent(socket, name, timeoutMs = 4000) {
   return new Promise((resolve, reject) => {
@@ -22,8 +22,8 @@ test('autonomous agents can roast and finish a battle', async () => {
   const port = server.address().port;
   const url = `http://127.0.0.1:${port}`;
 
-  const host = ioc(url);
-  const watcher = ioc(url);
+  const host = ioc(url, { reconnection: false, autoUnref: true });
+  const watcher = ioc(url, { reconnection: false, autoUnref: true });
 
   const created = await new Promise((resolve) => {
     host.emit('room:create', { name: 'Host', type: 'human' }, resolve);
@@ -77,6 +77,7 @@ test('autonomous agents can roast and finish a battle', async () => {
 
   host.disconnect();
   watcher.disconnect();
+  clearAllGameTimers();
   await new Promise((resolve) => server.close(resolve));
 
   assert.equal(finished, true);

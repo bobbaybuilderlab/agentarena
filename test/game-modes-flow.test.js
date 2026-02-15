@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms } = require('../server');
+const { server, mafiaRooms, amongUsRooms, clearAllGameTimers } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -17,13 +17,14 @@ async function withServer(fn) {
   try {
     await fn(url);
   } finally {
+    clearAllGameTimers();
     await new Promise((resolve) => server.close(resolve));
   }
 }
 
 test('socket flow: mafia full minimal round ends without deadlock', async () => {
   await withServer(async (url) => {
-    const sockets = [ioc(url), ioc(url), ioc(url), ioc(url)];
+    const sockets = [ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true })];
     const byPlayerId = new Map();
 
     const c1 = await emitAck(sockets[0], 'mafia:room:create', { name: 'A' });
@@ -77,7 +78,7 @@ test('socket flow: mafia full minimal round ends without deadlock', async () => 
 
 test('socket flow: among-us loop + timer collision guard', async () => {
   await withServer(async (url) => {
-    const sockets = [ioc(url), ioc(url), ioc(url), ioc(url)];
+    const sockets = [ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true })];
     const byPlayerId = new Map();
 
     const c1 = await emitAck(sockets[0], 'amongus:room:create', { name: 'A' });
@@ -106,6 +107,54 @@ test('socket flow: among-us loop + timer collision guard', async () => {
     await new Promise((r) => setTimeout(r, 8500));
     assert.equal(room.status, 'finished');
     assert.equal(room.phase, 'finished');
+
+    sockets.forEach((s) => s.disconnect());
+  });
+});
+
+test('socket flow: among-us kill -> meeting vote -> completion', async () => {
+  await withServer(async (url) => {
+    const sockets = [ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true })];
+    const byPlayerId = new Map();
+
+    const c1 = await emitAck(sockets[0], 'amongus:room:create', { name: 'A' });
+    byPlayerId.set(c1.playerId, sockets[0]);
+
+    const j2 = await emitAck(sockets[1], 'amongus:room:join', { roomId: c1.roomId, name: 'B' });
+    const j3 = await emitAck(sockets[2], 'amongus:room:join', { roomId: c1.roomId, name: 'C' });
+    const j4 = await emitAck(sockets[3], 'amongus:room:join', { roomId: c1.roomId, name: 'D' });
+    byPlayerId.set(j2.playerId, sockets[1]);
+    byPlayerId.set(j3.playerId, sockets[2]);
+    byPlayerId.set(j4.playerId, sockets[3]);
+
+    const started = await emitAck(sockets[0], 'amongus:start', { roomId: c1.roomId, playerId: c1.playerId });
+    assert.equal(started.ok, true);
+
+    const room = amongUsRooms.get(c1.roomId);
+    const imposter = room.players.find((p) => p.role === 'imposter');
+    const crewTarget = room.players.find((p) => p.role === 'crew' && p.alive);
+
+    const kill = await emitAck(byPlayerId.get(imposter.id), 'amongus:action', {
+      roomId: room.id,
+      playerId: imposter.id,
+      type: 'kill',
+      targetId: crewTarget.id,
+    });
+    assert.equal(kill.ok, true);
+    assert.equal(room.phase, 'meeting');
+
+    const alive = room.players.filter((p) => p.alive);
+    const voteTarget = alive.find((p) => p.role === 'crew') || imposter;
+    await Promise.all(alive.map((p) => emitAck(byPlayerId.get(p.id), 'amongus:action', {
+      roomId: room.id,
+      playerId: p.id,
+      type: 'vote',
+      targetId: voteTarget.id,
+    })));
+
+    assert.equal(room.status, 'finished');
+    assert.equal(room.phase, 'finished');
+    assert.ok(['crew', 'imposter'].includes(room.winner));
 
     sockets.forEach((s) => s.disconnect());
   });

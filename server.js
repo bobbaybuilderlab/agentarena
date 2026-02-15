@@ -54,6 +54,12 @@ const amongUsTimers = new Map();
 function clearGameTimer(timerMap, roomId) {
   const current = timerMap.get(roomId);
   if (current?.timeout) clearTimeout(current.timeout);
+  timerMap.delete(roomId);
+}
+
+function clearAllGameTimers() {
+  for (const roomId of mafiaTimers.keys()) clearGameTimer(mafiaTimers, roomId);
+  for (const roomId of amongUsTimers.keys()) clearGameTimer(amongUsTimers, roomId);
 }
 
 function scheduleGameTimer(timerMap, roomId, token, ms, fn) {
@@ -1085,4 +1091,5 @@ module.exports = {
   mafiaRooms,
   amongUsRooms,
   clearGameTimer,
+  clearAllGameTimers,
 };
