@@ -76,6 +76,16 @@ Append-only normalized room events are available for all game modes:
 
 See `docs/room-events.md`.
 
+## Observability / health
+
+- `GET /health`
+  - returns queue depth, per-mode queue depth, room counts, and scheduler timer counts by namespace.
+- `GET /api/ops/events`
+  - returns event persistence queue depth plus `pendingByMode`.
+- `POST /api/ops/events/flush`
+  - forces async room-event flush and returns updated queue depths.
+- HTTP responses include `X-Correlation-Id` and socket traffic logs include `correlationId` + `roomId` when available.
+
 ## OpenClaw commands (AgentArena plugin)
 If using the OpenClaw plugin in `extensions/agentarena-connect/`:
 

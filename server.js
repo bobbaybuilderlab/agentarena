@@ -31,6 +31,21 @@ function shortId(len = 8) {
   return randomUUID().replace(/-/g, '').slice(0, len);
 }
 
+function correlationId(seed) {
+  const raw = String(seed || '').trim();
+  if (!raw) return shortId(12);
+  return raw.slice(0, 64);
+}
+
+function logStructured(event, fields = {}) {
+  const payload = {
+    at: new Date().toISOString(),
+    event,
+    ...fields,
+  };
+  console.log(JSON.stringify(payload));
+}
+
 const THEMES = [
   'Yo Mama So Fast',
   'Tech Twitter',
@@ -469,7 +484,22 @@ function scheduleAmongUsPhase(room) {
   });
 }
 
+io.use((socket, next) => {
+  socket.data.correlationId = correlationId(socket.handshake.auth?.correlationId || socket.handshake.headers['x-correlation-id']);
+  next();
+});
+
 io.on('connection', (socket) => {
+  socket.onAny((event, payload) => {
+    if (!event.includes(':')) return;
+    const roomId = String(payload?.roomId || '').toUpperCase() || null;
+    logStructured('socket.event', {
+      correlationId: socket.data.correlationId,
+      socketId: socket.id,
+      event,
+      roomId,
+    });
+  });
   socket.on('mafia:room:create', ({ name }, cb) => {
     const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
@@ -744,13 +774,28 @@ io.on('connection', (socket) => {
 });
 
 app.use((req, res, next) => {
+  req.correlationId = correlationId(req.headers['x-correlation-id']);
+  res.setHeader('X-Correlation-Id', req.correlationId);
+  res.on('finish', () => {
+    if (req.path === '/health') return;
+    logStructured('http.request', {
+      correlationId: req.correlationId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+    });
+  });
+  next();
+});
+
+app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
   if (!allowedOrigins.length || allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Correlation-Id');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -1160,16 +1205,32 @@ app.get('/api/rooms/:roomId/replay', (req, res) => {
 });
 
 app.get('/api/ops/events', (_req, res) => {
-  res.json({ ok: true, pending: roomEvents.pending() });
+  res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
 });
 
 app.post('/api/ops/events/flush', async (_req, res) => {
   await roomEvents.flush();
-  res.json({ ok: true, pending: roomEvents.pending() });
+  res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size, agents: agentProfiles.size, roasts: roastFeed.length, eventQueueDepth: roomEvents.pending() });
+  const scheduler = roomScheduler.stats();
+  const eventQueueDepth = roomEvents.pending();
+  const eventQueueByMode = roomEvents.pendingByMode();
+  res.json({
+    ok: true,
+    uptimeSec: Math.floor(process.uptime()),
+    rooms: {
+      arena: rooms.size,
+      mafia: mafiaRooms.size,
+      amongus: amongUsRooms.size,
+    },
+    agents: agentProfiles.size,
+    roasts: roastFeed.length,
+    schedulerTimers: scheduler,
+    eventQueueDepth,
+    eventQueueByMode,
+  });
 });
 
 if (require.main === module) {
