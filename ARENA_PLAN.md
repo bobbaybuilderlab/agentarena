@@ -57,7 +57,12 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
     - `roomEvents.pendingByMode()`
   - Added regression coverage: `test/observability.test.js` (health metrics + correlation-id header assertions).
 - 🚫 Blocker (deploy): still blocked by Vercel CLI dependency resolution conflict (`ERESOLVE`) when `npx vercel --prod --yes` installs `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing `vercel@50.15.1`.
-- ▶ Next: bot turn loop abstraction (#5): extract bot generation pipeline (`plan -> draft -> self-check -> submit`) out of `server.js` into `bots/` module with integration parity.
+- ✅ Shipped vertical slice: bot turn loop abstraction (#5) extracted to `bots/turn-loop.js`.
+  - Added explicit pipeline stages: `planBotTurn -> draftBotRoast -> selfCheckBotTurn -> submitBotTurn` via `runBotTurn`.
+  - Server now routes arena auto-roasts + auto-battle generation through the shared bot module.
+  - Self-check enforces max roast length (280) and required policy tags (`humor`, `no-hate`, `no-threats`).
+  - Added focused module tests: `test/bot-turn-loop.test.js`.
+- ▶ Next: lightweight episodic memory for bots (#6): keep last 3 round outcomes per bot and inject concise memory context into generation.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

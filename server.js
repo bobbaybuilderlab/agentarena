@@ -8,6 +8,7 @@ const mafiaGame = require('./games/agent-mafia');
 const amongUsGame = require('./games/agents-among-us');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
+const { runBotTurn } = require('./bots/turn-loop');
 
 const app = express();
 const server = http.createServer(app);
@@ -244,43 +245,9 @@ function addBot(room, payload = {}) {
   return bot;
 }
 
-function generateBotRoast(theme, botName, intensity = 6) {
-  const spice = intensity >= 8 ? 'nuclear' : intensity >= 5 ? 'spicy' : 'light';
-  const pools = {
-    'Yo Mama So Fast': [
-      `Yo mama so old her startup pitch deck was chiselled into stone tablets.`,
-      `Yo mama so dramatic she puts a CTA at the end of every sentence.`,
-      `Yo mama so slow she still thinks dial-up is a growth channel.`,
-    ],
-    'Tech Twitter': [
-      `You tweet 'building in public' but your only shipped feature is vibes.`,
-      `Your thread starts with 1/27 and still says nothing by tweet 27.`,
-      `You're not a founder, you're a screenshot curator with Wi‑Fi.`,
-    ],
-    'Startup Founder': [
-      `Your runway is shorter than your attention span.`,
-      `You've pivoted so often your cap table needs a chiropractor.`,
-      `Your MVP is just a waitlist with confidence issues.`,
-    ],
-    'Gym Bro': [
-      `You count macros but can't count to profitability.`,
-      `Your pre-workout has more substance than your business plan.`,
-      `You benched 225 but folded under one customer support ticket.`,
-    ],
-    'Crypto': [
-      `You call it 'volatility'; your wallet calls it emotional damage.`,
-      `You bought every dip and still found new lows.`,
-      `Your alpha is just recycled copium with emojis.`,
-    ],
-    Corporate: [
-      `You scheduled a sync to align on another sync.`,
-      `Your calendar has more blockers than your product roadmap.`,
-      `You say 'circle back' because moving forward scares you.`,
-    ],
-  };
-  const lines = pools[theme] || pools['Tech Twitter'];
-  const line = lines[Math.floor(Math.random() * lines.length)];
-  return `[${botName} • ${spice}] ${line}`.slice(0, 280);
+function generateBotRoast(theme, botName, intensity = 6, style = 'witty') {
+  const turn = runBotTurn({ theme, botName, intensity, style });
+  return turn.text;
 }
 
 function autoSubmitBotRoasts(room) {
@@ -297,7 +264,7 @@ function autoSubmitBotRoasts(room) {
       const current = rooms.get(room.id);
       if (!current || current.status !== 'round' || current.round !== room.round) return;
       if (current.roastsByRound[current.round][bot.id]) return;
-      const roast = generateBotRoast(current.theme, bot.name, bot.persona?.intensity || 6);
+      const roast = generateBotRoast(current.theme, bot.name, bot.persona?.intensity || 6, bot.persona?.style || 'witty');
       current.roastsByRound[current.round][bot.id] = roast;
       maybeAdvanceToVoting(current);
       emitRoom(current);
@@ -886,7 +853,7 @@ function runAutoBattle() {
 
   for (const agent of shuffled) {
     const intensity = Number(agent.persona?.intensity || 6);
-    const roastText = generateBotRoast(theme, agent.name, intensity);
+    const roastText = generateBotRoast(theme, agent.name, intensity, agent.persona?.style || 'witty');
     registerRoast({ battleId, agentId: agent.id, agentName: agent.name, text: roastText });
   }
 
