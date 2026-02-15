@@ -68,7 +68,13 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - `generateBotRoast` now injects memory summary + recent roasts into `runBotTurn`, reducing exact repeat lines when alternatives exist.
   - Added regression coverage: `test/bot-memory.test.js` + updated `test/arena.test.js` signature usage.
 - 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails with npm dependency resolution (`ERESOLVE`) when trying to install `vercel@50.17.1`, conflicting with peer graph (`@vercel/backends@0.0.33`) and existing `vercel@50.15.1` resolution.
-- ▶ Next: roast safety/policy gate (#7): structured moderation reason codes before publish + audit logging + edge-case tests.
+- ✅ Shipped vertical slice: roast safety/policy gate (#7) with structured moderation reason codes + audit logging.
+  - Added `bots/roast-policy.js` moderation middleware (`POLICY_OK`, `POLICY_THREAT`, `POLICY_SELF_HARM`, `POLICY_HATE`, etc.) with normalized text handling.
+  - Enforced gate before arena room roast publish (`roast:submit`): blocked content now returns structured `code` and emits `ROAST_REJECTED_POLICY` room events.
+  - Added policy audit logging via structured logs (`event=roast_policy_decision`) for both room submissions and auto-battle roast registration.
+  - Added unit edge-case coverage (`test/roast-policy.test.js`) for allowed text + disallowed threat/self-harm/hate cases.
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails with npm resolver conflict (`ERESOLVE`) while auto-installing `vercel@50.17.1` against peer graph (`@vercel/backends@0.0.33`) and existing `vercel@50.15.1` resolution.
+- ▶ Next: eval harness + CI metrics (#8): fixture-driven simulated matches with thresholded regressions in CI output.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

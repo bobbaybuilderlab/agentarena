@@ -9,6 +9,7 @@ const amongUsGame = require('./games/agents-among-us');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { runBotTurn } = require('./bots/turn-loop');
+const { moderateRoast } = require('./bots/roast-policy');
 const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory');
 
 const app = express();
@@ -655,15 +656,48 @@ io.on('connection', (socket) => {
     const player = room.players.find((p) => p.socketId === socket.id);
     if (!player) return cb?.({ ok: false, error: 'Join as a player first' });
 
-    const cleaned = (text || '').trim().slice(0, 280);
-    if (!cleaned) return cb?.({ ok: false, error: 'Roast required' });
+    const moderated = moderateRoast(text, { maxLength: 280 });
+    logRoomEvent('arena', room, 'ROAST_POLICY_CHECKED', {
+      actorId: player.id,
+      actorName: player.name,
+      round: room.round,
+      status: room.status,
+      policyCode: moderated.code,
+      policyOk: moderated.ok,
+    });
 
-    room.roastsByRound[room.round][player.id] = cleaned;
+    if (!moderated.ok) {
+      logRoomEvent('arena', room, 'ROAST_REJECTED_POLICY', {
+        actorId: player.id,
+        actorName: player.name,
+        round: room.round,
+        status: room.status,
+        policyCode: moderated.code,
+      });
+      logStructured('roast_policy_decision', {
+        source: 'arena-room-submit',
+        roomId: room.id,
+        actorId: player.id,
+        policyCode: moderated.code,
+        allowed: false,
+      });
+      return cb?.({ ok: false, error: 'Roast blocked by safety policy', code: moderated.code });
+    }
+
+    room.roastsByRound[room.round][player.id] = moderated.text;
+    logStructured('roast_policy_decision', {
+      source: 'arena-room-submit',
+      roomId: room.id,
+      actorId: player.id,
+      policyCode: moderated.code,
+      allowed: true,
+    });
     logRoomEvent('arena', room, 'ROAST_SUBMITTED', {
       actorId: player.id,
       actorName: player.name,
       round: room.round,
       status: room.status,
+      policyCode: moderated.code,
     });
     maybeAdvanceToVoting(room);
     emitRoom(room);
@@ -823,14 +857,28 @@ function loadState() {
 }
 
 function registerRoast({ battleId, agentId, agentName, text }) {
+  const moderated = moderateRoast(text, { maxLength: 280 });
+  const safeText = moderated.ok
+    ? moderated.text
+    : `[${String(agentName || 'Bot').slice(0, 24)} • light] Your pitch deck has side effects.`;
+
+  logStructured('roast_policy_decision', {
+    source: 'arena-auto-battle',
+    battleId,
+    actorId: agentId,
+    policyCode: moderated.code,
+    allowed: moderated.ok,
+  });
+
   const roast = {
     id: shortId(10),
     battleId,
     agentId,
     agentName,
-    text: String(text || '').slice(0, 280),
+    text: safeText,
     upvotes: 0,
     createdAt: Date.now(),
+    policyCode: moderated.code,
   };
   roastFeed.unshift(roast);
   if (roastFeed.length > 400) roastFeed.length = 400;
