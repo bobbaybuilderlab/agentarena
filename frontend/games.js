@@ -23,6 +23,7 @@ const runEvalsBtn = document.getElementById('runEvalsBtn');
 const runCiGateBtn = document.getElementById('runCiGateBtn');
 const evalStatus = document.getElementById('evalStatus');
 const claimSeatsView = document.getElementById('claimSeatsView');
+const recoveryHint = document.getElementById('recoveryHint');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -72,6 +73,15 @@ function setStatus(text) {
   playStatus.textContent = text;
 }
 
+function showRecoveryHint(html) {
+  if (!recoveryHint) return;
+  recoveryHint.innerHTML = html;
+}
+
+function defaultRecoveryHint() {
+  showRecoveryHint('Recovery tip: if reconnect fails, keep the same room ID and click <strong>Find Reconnect Seats</strong> to reclaim your old name.');
+}
+
 function formatError(res, fallback) {
   if (!res) return fallback;
   const err = res.error || res;
@@ -96,12 +106,16 @@ function renderClaimSeats(data) {
     : '';
 
   if (!seats.length) {
-    claimSeatsView.innerHTML = suggestedButton || 'No reconnect seats found for this lobby.';
+    claimSeatsView.innerHTML = [
+      suggestedButton || '<strong>No reclaimable seats in this room yet.</strong>',
+      '<span>Try again in a few seconds, or quick-match into the fastest available room.</span>',
+      '<button class="btn btn-soft" type="button" data-quick-recover="1">Quick match me now</button>',
+    ].filter(Boolean).join(' ');
     return;
   }
 
   claimSeatsView.innerHTML = [
-    '<strong>Reconnect seats:</strong>',
+    '<strong>Reconnect seats found — claim your old identity:</strong>',
     suggestedButton,
     ...seats.map((seat) => `
       <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
@@ -124,11 +138,14 @@ async function loadClaimableSeats() {
     const data = await res.json();
     if (!data?.ok) {
       claimSeatsView.textContent = formatError(data, 'Could not load reconnect seats');
+      showRecoveryHint('Recovery tip: seat lookup failed. Confirm game + room ID, then retry.');
       return;
     }
     renderClaimSeats(data);
+    showRecoveryHint('Recovery tip: reclaim your previous name to recover host rights, streaks, and continuity.');
   } catch (_err) {
     claimSeatsView.textContent = 'Could not load reconnect seats';
+    showRecoveryHint('Recovery tip: temporary network issue. Retry in a few seconds.');
   }
 }
 
@@ -341,6 +358,30 @@ loadClaimsBtn?.addEventListener('click', async () => {
 });
 
 claimSeatsView?.addEventListener('click', async (e) => {
+  const quickRecoverBtn = e.target.closest('[data-quick-recover]');
+  if (quickRecoverBtn) {
+    try {
+      const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+      const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
+      const res = await fetch('/api/play/quick-join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, name }),
+      });
+      const data = await res.json();
+      if (!data?.ok || !data?.joinTicket?.joinUrl) {
+        setStatus(formatError(data, 'Quick match failed'));
+        showRecoveryHint('Recovery tip: quick match unavailable. Keep room ID, then retry <strong>Find Reconnect Seats</strong> in ~5s.');
+        return;
+      }
+      window.location.href = data.joinTicket.joinUrl;
+    } catch (_err) {
+      setStatus('Quick match failed');
+      showRecoveryHint('Recovery tip: network hiccup. Retry <strong>Find Reconnect Seats</strong> or quick match again.');
+    }
+    return;
+  }
+
   const btn = e.target.closest('[data-claim-name]');
   if (!btn) return;
   const claimName = btn.getAttribute('data-claim-name') || '';
@@ -358,6 +399,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
   me.playerId = res.playerId;
   suggestedReclaim = null;
   setStatus(`Reconnected as ${claimName}${res.playerId === currentState?.hostPlayerId ? ' (host)' : ''}`);
+  showRecoveryHint(`Recovered seat <strong>${claimName}</strong>. If you disconnect again, reclaim from this panel.`);
   renderState(res.state);
   void loadClaimableSeats();
 });
@@ -521,6 +563,7 @@ async function autoJoinFromQuery() {
       suggestedReclaim = reclaimName ? { name: reclaimName, hostSeat: reclaimHost } : null;
       attemptedSuggestedReclaim = false;
       setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; attempting auto-reclaim…`);
+      showRecoveryHint('We got you back in the room. Next step: reclaim your previous seat below.');
       renderState(retry.state);
       const reclaimed = await attemptSuggestedReclaimAuto();
       void loadClaimableSeats();
@@ -531,6 +574,7 @@ async function autoJoinFromQuery() {
     }
 
     setStatus(`Reconnect token failed. ${formatError(retry, `Quick-join failed for room ${roomId}`)}`);
+    showRecoveryHint('Recovery fallback: check room ID, then use Find Reconnect Seats. If room is dead, use Quick match me now.');
     void loadClaimableSeats();
     return;
   }
@@ -544,6 +588,7 @@ async function autoJoinFromQuery() {
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   setStatus(reclaimName ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}` : `Quick-joined ${me.game} room ${me.roomId}`);
+  showRecoveryHint('Connected. If you drop, reopen this room and use Find Reconnect Seats to reclaim identity fast.');
   renderState(res.state);
   void loadClaimableSeats();
 }
@@ -552,5 +597,6 @@ setInterval(() => {
   void refreshOpsStatus();
 }, 3000);
 
+defaultRecoveryHint();
 void refreshOpsStatus();
 void autoJoinFromQuery();
