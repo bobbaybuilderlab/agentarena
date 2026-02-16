@@ -1,7 +1,7 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:23 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:35 UTC",
   "kpis": {
-    "releaseTarget": 4,
+    "releaseTarget": 5,
     "releasesShippedToday": 4,
     "testPassRate": "59/59 (100%)",
     "deploySuccessRate": "100% (today)",
@@ -24,6 +24,13 @@
     },
     {
       "priority": "P0",
+      "release": "Post-game owner digest card (win/loss + one refinement action)",
+      "owner": "Designer",
+      "status": "Live",
+      "kpiImpact": "Higher check-in→next-match conversion"
+    },
+    {
+      "priority": "P0",
       "release": "Multi-game product positioning refresh",
       "owner": "Designer",
       "status": "Live",
@@ -40,31 +47,31 @@
   "agentLanes": [
     {
       "agent": "Engineer",
-      "focus": "Fast rematch retention loop + telemetry reliability",
-      "progress": "Shipped one-click rematch telemetry events (`rematch_clicked`, `party_streak_extended`) plus per-room party streak chain persistence in Mafia/Among Us discovery surfaces; commit 2e2ef84",
-      "blocker": "Need production traffic baseline for streak extension-to-replay conversion",
-      "next": "Wire streak bonus payout rules + run copy/placement test on post-game rematch CTA"
+      "focus": "Agent Villa MVP scaffold (new game-mode foundation)",
+      "progress": "Shipped scaffold-level `games/agent-villa/` module with room create/join/start skeleton, placeholder round state machine (`pairing`→`challenge`→`twist`→`recouple`→`elimination`), and minimal transition tests in `test/agent-villa.test.js`; runnable with node --test.",
+      "blocker": "Not wired into socket/server flow yet (intentional for scaffold scope).",
+      "next": "Wire Agent Villa socket events + UI actions, then implement first concrete phase rule set (pairing + elimination)."
     },
     {
       "agent": "Growth",
-      "focus": "X-first distribution tied to shipped features",
-      "progress": "Experiment spec and copy ready",
-      "blocker": "Need post publish + analytics read",
-      "next": "Publish Post A, read at +2h/+6h/+24h"
+      "focus": "Retention loop activation: mission ladder + streak rewards",
+      "progress": "Shipped Dobby live-ops spec with mission architecture (generic/mode/owner-tuning), launch copy, rollout plan, and KPI framework",
+      "blocker": "Need event wiring + dashboard cuts for mission/streak funnel read",
+      "next": "Activate 5% rollout, validate telemetry, then tune mission weights by segment at D+1 and D+3"
     },
     {
       "agent": "Designer",
-      "focus": "Retention UX: wow mission hook + first-win activation",
-      "progress": "Shipped Rival Pulse mission card + First Win Sprint checklist with concrete copy and quick-join flow cues",
-      "blocker": "Need event analytics for mission accept → room join → D1 return",
-      "next": "Instrument funnel, then A/B mission copy (high-drama vs high-win-confidence framing)"
+      "focus": "Agent Villa MVP wireflow + CTA hierarchy",
+      "progress": "Shipped Agent Villa UI wireflow spec (`docs/agent-villa-ui-wireflow-mvp.md`) covering six states (lobby, pairing, challenge, recoupling, elimination, digest), copy tone rules, CTA hierarchy, and telemetry label mapping; added clickable frontend shell preview at `/agent-villa.html` with state tabs and placeholder CTAs.",
+      "blocker": "Need backend event wiring + socket state feed to replace static shell data.",
+      "next": "Hook shell to live Agent Villa room state and instrument per-state primary CTA click metrics."
     },
     {
       "agent": "Research",
-      "focus": "Retention loops + competitive patterns",
-      "progress": "Deploy unblock brief shipped",
-      "blocker": "Web search key missing",
-      "next": "Agent-led game pattern brief (variety + retention)"
+      "focus": "Agent-led retention mechanics (manager check-ins, explainability, reward pacing)",
+      "progress": "Shipped implementation-ready brief: `research/dobby-agent-led-retention-brief-2026-02-16.md` with trigger engine, why-won/lost loop, reward cadence, and anti-abuse stack",
+      "blocker": "Need product + engineering alignment on v1 threshold defaults before A/B",
+      "next": "Instrument 8-event funnel and launch 14-day rollout (6 triggers + 3-cause panel + dual-track rewards)"
     }
   ]
 }

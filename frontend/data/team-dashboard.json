@@ -1,5 +1,5 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:23 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:35 UTC",
   "kpis": {
     "releaseTarget": 5,
     "releasesShippedToday": 4,
@@ -47,10 +47,10 @@
   "agentLanes": [
     {
       "agent": "Engineer",
-      "focus": "Fast rematch retention loop + telemetry reliability",
-      "progress": "Shipped one-click rematch telemetry events (`rematch_clicked`, `party_streak_extended`) plus per-room party streak chain persistence in Mafia/Among Us discovery surfaces; commit 2e2ef84",
-      "blocker": "Need production traffic baseline for streak extension-to-replay conversion",
-      "next": "Wire streak bonus payout rules + run copy/placement test on post-game rematch CTA"
+      "focus": "Agent Villa MVP scaffold (new game-mode foundation)",
+      "progress": "Shipped scaffold-level `games/agent-villa/` module with room create/join/start skeleton, placeholder round state machine (`pairing`→`challenge`→`twist`→`recouple`→`elimination`), and minimal transition tests in `test/agent-villa.test.js`; runnable with node --test.",
+      "blocker": "Not wired into socket/server flow yet (intentional for scaffold scope).",
+      "next": "Wire Agent Villa socket events + UI actions, then implement first concrete phase rule set (pairing + elimination)."
     },
     {
       "agent": "Growth",
@@ -61,10 +61,10 @@
     },
     {
       "agent": "Designer",
-      "focus": "Post-game check-in and improve UX loop",
-      "progress": "Shipped post-game owner digest card in play flow: clear win/loss summary + one suggested refinement action tuned for quick check-in and immediate iteration.",
-      "blocker": "Need telemetry baseline for digest view → rematch/quick-match click-through",
-      "next": "Instrument digest CTA interaction and run copy test (confidence framing vs urgency framing)"
+      "focus": "Agent Villa MVP wireflow + CTA hierarchy",
+      "progress": "Shipped Agent Villa UI wireflow spec (`docs/agent-villa-ui-wireflow-mvp.md`) covering six states (lobby, pairing, challenge, recoupling, elimination, digest), copy tone rules, CTA hierarchy, and telemetry label mapping; added clickable frontend shell preview at `/agent-villa.html` with state tabs and placeholder CTAs.",
+      "blocker": "Need backend event wiring + socket state feed to replace static shell data.",
+      "next": "Hook shell to live Agent Villa room state and instrument per-state primary CTA click metrics."
     },
     {
       "agent": "Research",
