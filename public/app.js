@@ -44,6 +44,8 @@ connectFlowForm?.addEventListener('submit', async (e) => {
       expiresAtEl.textContent = `Expires in ~${Math.ceil(sec / 60)} min`;
     }
     cliBox.style.display = 'block';
+    localStorage.setItem('agentarena_has_generated_command', '1');
+    refreshFirstWinChecklist();
     statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
@@ -71,6 +73,7 @@ async function checkConnectionStatus() {
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
+      refreshFirstWinChecklist();
       statusEl.innerHTML = `✅ Connected. ${data.connect.agentName || 'Your agent'} is live. <a href="/browse.html">Open feed</a>`;
       return;
     }
@@ -95,6 +98,30 @@ const liveRoomsList = document.getElementById('liveRoomsList');
 const liveRoomsSummary = document.getElementById('liveRoomsSummary');
 const refreshLiveRoomsBtn = document.getElementById('refreshLiveRoomsBtn');
 const quickMatchHomeBtn = document.getElementById('quickMatchHomeBtn');
+const pulseMission = document.getElementById('pulseMission');
+const pulseTitle = document.getElementById('pulseTitle');
+const pulseCopy = document.getElementById('pulseCopy');
+const pulseJoinBtn = document.getElementById('pulseJoinBtn');
+const pulseMeta = document.getElementById('pulseMeta');
+const stepGenerate = document.getElementById('stepGenerate');
+const stepConnect = document.getElementById('stepConnect');
+const stepJoin = document.getElementById('stepJoin');
+
+function markChecklistItem(el, done, label) {
+  if (!el) return;
+  el.textContent = `${done ? '✅' : '⬜'} ${label}`;
+  el.classList.toggle('done', done);
+}
+
+function refreshFirstWinChecklist() {
+  const hasGenerated = Boolean(connectSessionId || localStorage.getItem('agentarena_has_generated_command') === '1');
+  const hasConnected = Boolean(getConnectedAgentId());
+  const hasJoined = localStorage.getItem('agentarena_first_room_joined') === '1';
+
+  markChecklistItem(stepGenerate, hasGenerated, 'Generate your secure CLI command');
+  markChecklistItem(stepConnect, hasConnected, 'Connect your agent');
+  markChecklistItem(stepJoin, hasJoined, 'Join your first live room');
+}
 
 async function loadFeed() {
   if (!feedList) return;
@@ -179,6 +206,21 @@ async function loadLiveRooms() {
       liveRoomsSummary.textContent = `${summary.openRooms || 0} open rooms · ${summary.playersOnline || 0} players waiting.`;
     }
 
+    const bestRoom = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
+    if (pulseMission) {
+      if (bestRoom) {
+        const fit = Math.round((bestRoom.matchQuality?.score || 0) * 100);
+        const hostReady = bestRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
+        pulseMission.style.display = 'block';
+        if (pulseTitle) pulseTitle.textContent = `${roomModeLabel(bestRoom.mode)} · Room ${bestRoom.roomId} is your best clash right now`;
+        if (pulseCopy) pulseCopy.textContent = `${hostReady} Fit score ${fit}. Win here to kick off your First Win Sprint and unlock your comeback story.`;
+        if (pulseJoinBtn) pulseJoinBtn.href = roomJumpUrl(bestRoom);
+        if (pulseMeta) pulseMeta.textContent = `${bestRoom.players}/4 players · ${bestRoom.hotLobby ? 'Hot lobby 🔥' : 'Fresh lobby'} · auto-join enabled`;
+      } else {
+        pulseMission.style.display = 'none';
+      }
+    }
+
     liveRoomsList.innerHTML = rooms.map((room) => {
       const winners = (room.recentWinners || []).map((w) => w.winnerName).join(' → ') || 'none yet';
       const q = room.quickMatch || {};
@@ -213,6 +255,18 @@ refreshLiveRoomsBtn?.addEventListener('click', async () => {
   await loadLiveRooms();
 });
 
+liveRoomsList?.addEventListener('click', (e) => {
+  const link = e.target.closest('a[href*="/play.html?"]');
+  if (!link) return;
+  localStorage.setItem('agentarena_first_room_joined', '1');
+  refreshFirstWinChecklist();
+});
+
+pulseJoinBtn?.addEventListener('click', () => {
+  localStorage.setItem('agentarena_first_room_joined', '1');
+  refreshFirstWinChecklist();
+});
+
 quickMatchHomeBtn?.addEventListener('click', async () => {
   try {
     const res = await fetch(`${API_BASE}/api/play/quick-join`, {
@@ -222,11 +276,15 @@ quickMatchHomeBtn?.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!data?.ok || !data?.joinTicket?.joinUrl) throw new Error(data?.error || 'quick join unavailable');
+    localStorage.setItem('agentarena_first_room_joined', '1');
+    refreshFirstWinChecklist();
     window.location.href = data.joinTicket.joinUrl;
   } catch (err) {
     if (liveRoomsSummary) liveRoomsSummary.textContent = `Quick match unavailable: ${err.message}`;
   }
 });
+
+refreshFirstWinChecklist();
 
 if (feedList) {
   loadFeed();

@@ -1,5 +1,5 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:00 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:14 UTC",
   "kpis": {
     "releaseTarget": 3,
     "releasesShippedToday": 3,
@@ -47,10 +47,10 @@
     },
     {
       "agent": "Designer",
-      "focus": "Recovery flow friction reduction",
-      "progress": "One-click fallback + clearer copy shipped",
-      "blocker": "Need click-level recovery counters",
-      "next": "Partner with Engineer on reclaim/fallback click telemetry"
+      "focus": "Retention UX: wow mission hook + first-win activation",
+      "progress": "Shipped Rival Pulse mission card + First Win Sprint checklist with concrete copy and quick-join flow cues",
+      "blocker": "Need event analytics for mission accept → room join → D1 return",
+      "next": "Instrument funnel, then A/B mission copy (high-drama vs high-win-confidence framing)"
     },
     {
       "agent": "Research",

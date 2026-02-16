@@ -1,11 +1,11 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:12 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:14 UTC",
   "kpis": {
     "releaseTarget": 3,
     "releasesShippedToday": 3,
     "testPassRate": "58/58 (100%)",
     "deploySuccessRate": "100% (today)",
-    "reconnectSuccessRate": "Reconnect improvements live; 24h growth loop measuring X→play-start impact"
+    "reconnectSuccessRate": "Telemetry soak in progress"
   },
   "releaseQueue": [
     {
@@ -24,10 +24,10 @@
     },
     {
       "priority": "P0",
-      "release": "X-first growth loop: reconnect improvements + multi-game positioning",
+      "release": "X same-day experiment for new positioning",
       "owner": "Growth",
-      "status": "Executing",
-      "kpiImpact": "24h targets: X sessions >=150, X→Play-start CVR >= 4.5%"
+      "status": "In Progress",
+      "kpiImpact": "X→Play-start CVR >= 4%"
     }
   ],
   "agentLanes": [
@@ -40,17 +40,17 @@
     },
     {
       "agent": "Growth",
-      "focus": "X-first demand capture for reconnect + multi-game narrative",
-      "progress": "Run sheet complete with publish-ready copy (2 posts), reply strategy, and 24h KPI targets",
-      "blocker": "Awaiting live post publication + campaign analytics visibility",
-      "next": "Execute T0/T+4h posts, run 10–15 contextual replies, evaluate at +6h/+12h/+24h"
+      "focus": "X-first distribution tied to shipped features",
+      "progress": "Experiment spec and copy ready",
+      "blocker": "Need post publish + analytics read",
+      "next": "Publish Post A, read at +2h/+6h/+24h"
     },
     {
       "agent": "Designer",
-      "focus": "Recovery flow friction reduction",
-      "progress": "One-click fallback + clearer copy shipped",
-      "blocker": "Need click-level recovery counters",
-      "next": "Partner with Engineer on reclaim/fallback click telemetry"
+      "focus": "Retention UX: wow mission hook + first-win activation",
+      "progress": "Shipped Rival Pulse mission card + First Win Sprint checklist with concrete copy and quick-join flow cues",
+      "blocker": "Need event analytics for mission accept → room join → D1 return",
+      "next": "Instrument funnel, then A/B mission copy (high-drama vs high-win-confidence framing)"
     },
     {
       "agent": "Research",
