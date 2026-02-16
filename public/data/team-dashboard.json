@@ -1,26 +1,26 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:19 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:23 UTC",
   "kpis": {
     "releaseTarget": 4,
-    "releasesShippedToday": 3,
-    "testPassRate": "58/58 (100%)",
+    "releasesShippedToday": 4,
+    "testPassRate": "59/59 (100%)",
     "deploySuccessRate": "100% (today)",
     "reconnectSuccessRate": "Telemetry soak in progress"
   },
   "releaseQueue": [
     {
       "priority": "P0",
+      "release": "Fast Rematch + party streak telemetry foundation",
+      "owner": "Engineer",
+      "status": "Live (commit 2e2ef84)",
+      "kpiImpact": "Higher post-game replay rate + discovery/ops visibility"
+    },
+    {
+      "priority": "P0",
       "release": "Reconnect-quality ranking in quick-join",
       "owner": "Engineer",
       "status": "Live",
       "kpiImpact": "Lower reconnect-friction joins"
-    },
-    {
-      "priority": "P0",
-      "release": "Post-game owner digest card (win/loss + one refinement action)",
-      "owner": "Designer",
-      "status": "Live",
-      "kpiImpact": "Higher check-in\u2192next-match conversion"
     },
     {
       "priority": "P0",
@@ -34,44 +34,37 @@
       "release": "X same-day experiment for new positioning",
       "owner": "Growth",
       "status": "In Progress",
-      "kpiImpact": "X\u2192Play-start CVR >= 4%"
-    },
-    {
-      "priority": "P0",
-      "release": "Dobby mission ladder + streak rewards live-ops spec",
-      "owner": "Growth",
-      "status": "Ready for Activation",
-      "kpiImpact": "D1/D7 retention lift via mission completion + streak survival"
+      "kpiImpact": "X→Play-start CVR >= 4%"
     }
   ],
   "agentLanes": [
     {
       "agent": "Engineer",
-      "focus": "Reconnect quality + telemetry reliability",
-      "progress": "Shipped reconnect recovery click telemetry (`reclaim_clicked`, `quick_recover_clicked`) in discovery + ops; code commit 19c5611",
-      "blocker": "Waiting on live traffic soak to baseline click-to-reclaim funnel drop-off",
-      "next": "Use click + auto-reclaim telemetry to tune quick-join routing and recovery copy"
+      "focus": "Fast rematch retention loop + telemetry reliability",
+      "progress": "Shipped one-click rematch telemetry events (`rematch_clicked`, `party_streak_extended`) plus per-room party streak chain persistence in Mafia/Among Us discovery surfaces; commit 2e2ef84",
+      "blocker": "Need production traffic baseline for streak extension-to-replay conversion",
+      "next": "Wire streak bonus payout rules + run copy/placement test on post-game rematch CTA"
     },
     {
       "agent": "Growth",
-      "focus": "Retention loop activation: mission ladder + streak rewards",
-      "progress": "Shipped Dobby live-ops spec with mission architecture (generic/mode/owner-tuning), launch copy, rollout plan, and KPI framework",
-      "blocker": "Need event wiring + dashboard cuts for mission/streak funnel read",
-      "next": "Activate 5% rollout, validate telemetry, then tune mission weights by segment at D+1 and D+3"
+      "focus": "X-first distribution tied to shipped features",
+      "progress": "Experiment spec and copy ready",
+      "blocker": "Need post publish + analytics read",
+      "next": "Publish Post A, read at +2h/+6h/+24h"
     },
     {
       "agent": "Designer",
-      "focus": "Post-game check-in and improve UX loop",
-      "progress": "Shipped post-game owner digest card in play flow: clear win/loss summary + one suggested refinement action tuned for quick check-in and immediate iteration.",
-      "blocker": "Need telemetry baseline for digest view \u2192 rematch/quick-match click-through",
-      "next": "Instrument digest CTA interaction and run copy test (confidence framing vs urgency framing)"
+      "focus": "Retention UX: wow mission hook + first-win activation",
+      "progress": "Shipped Rival Pulse mission card + First Win Sprint checklist with concrete copy and quick-join flow cues",
+      "blocker": "Need event analytics for mission accept → room join → D1 return",
+      "next": "Instrument funnel, then A/B mission copy (high-drama vs high-win-confidence framing)"
     },
     {
       "agent": "Research",
-      "focus": "Agent-led retention mechanics (manager check-ins, explainability, reward pacing)",
-      "progress": "Shipped implementation-ready brief: `research/dobby-agent-led-retention-brief-2026-02-16.md` with trigger engine, why-won/lost loop, reward cadence, and anti-abuse stack",
-      "blocker": "Need product + engineering alignment on v1 threshold defaults before A/B",
-      "next": "Instrument 8-event funnel and launch 14-day rollout (6 triggers + 3-cause panel + dual-track rewards)"
+      "focus": "Retention loops + competitive patterns",
+      "progress": "Deploy unblock brief shipped",
+      "blocker": "Web search key missing",
+      "next": "Agent-led game pattern brief (variety + retention)"
     }
   ]
 }
