@@ -1586,6 +1586,38 @@ function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
   return roomsList;
 }
 
+function getLobbyStore(mode) {
+  return mode === 'amongus' ? amongUsRooms : mode === 'mafia' ? mafiaRooms : null;
+}
+
+function getClaimableLobbySeats(mode, roomId) {
+  const store = getLobbyStore(mode);
+  if (!store) {
+    return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } };
+  }
+
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+
+  const host = room.players.find((p) => p.id === room.hostPlayerId) || null;
+  const claimable = room.players
+    .filter((p) => !p.isBot && !p.isConnected)
+    .map((p) => ({
+      playerId: p.id,
+      name: p.name,
+      hostSeat: Boolean(host && host.id === p.id),
+    }));
+
+  return {
+    ok: true,
+    mode,
+    roomId: room.id,
+    status: room.status,
+    claimable,
+    hasHostClaim: claimable.some((p) => p.hostSeat),
+  };
+}
+
 function pickQuickJoinMode(mode) {
   if (mode === 'mafia' || mode === 'amongus') return mode;
   const openMafia = listPlayableRooms('mafia', 'open').length;
@@ -1733,6 +1765,22 @@ app.get('/api/play/rooms', (req, res) => {
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
+});
+
+app.get('/api/play/lobby/claims', (req, res) => {
+  const mode = String(req.query.mode || '').toLowerCase();
+  const roomId = String(req.query.roomId || '').trim().toUpperCase();
+
+  if (!roomId) {
+    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
+  }
+
+  const claims = getClaimableLobbySeats(mode, roomId);
+  if (!claims.ok) {
+    return res.status(claims.error?.code === 'ROOM_NOT_FOUND' ? 404 : 400).json(claims);
+  }
+
+  res.json(claims);
 });
 
 app.post('/api/play/quick-join', (req, res) => {

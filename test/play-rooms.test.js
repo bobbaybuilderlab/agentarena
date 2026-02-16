@@ -181,6 +181,47 @@ test('quick-join avoids host-offline lobbies when host-online alternative exists
   });
 });
 
+test('lobby claims API exposes disconnected seats and host reclaim by name', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+
+    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'GuestM' });
+    assert.equal(guestJoin.ok, true);
+
+    host.disconnect();
+    guest.disconnect();
+
+    const claimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${created.roomId}`);
+    const claims = await claimsRes.json();
+    assert.equal(claims.ok, true);
+    assert.equal(claims.claimable.length, 2);
+    assert.equal(claims.hasHostClaim, true);
+    assert.ok(claims.claimable.some((seat) => seat.name === 'HostM' && seat.hostSeat === true));
+    assert.ok(claims.claimable.some((seat) => seat.name === 'GuestM' && seat.hostSeat === false));
+
+    const hostReconnect = ioc(url, { reconnection: false, autoUnref: true });
+    const reclaimed = await emitAck(hostReconnect, 'mafia:room:join', { roomId: created.roomId, name: 'HostM' });
+    assert.equal(reclaimed.ok, true);
+    assert.equal(reclaimed.playerId, created.playerId);
+
+    const room = mafiaRooms.get(created.roomId);
+    const hostSeat = room.players.find((p) => p.id === created.playerId);
+    assert.equal(hostSeat.isConnected, true);
+
+    const afterClaimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${created.roomId}`);
+    const afterClaims = await afterClaimsRes.json();
+    assert.equal(afterClaims.ok, true);
+    assert.equal(afterClaims.hasHostClaim, false);
+    assert.ok(afterClaims.claimable.every((seat) => seat.name !== 'HostM'));
+
+    hostReconnect.disconnect();
+  });
+});
+
 test('rooms API surfaces recent winners telemetry for finished rooms', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });

@@ -18,9 +18,11 @@ const rematchBtn = document.getElementById('rematchBtn');
 const autofillBtn = document.getElementById('autofillBtn');
 const advanceBtn = document.getElementById('advanceBtn');
 const quickMatchBtn = document.getElementById('quickMatchBtn');
+const loadClaimsBtn = document.getElementById('loadClaimsBtn');
 const runEvalsBtn = document.getElementById('runEvalsBtn');
 const runCiGateBtn = document.getElementById('runCiGateBtn');
 const evalStatus = document.getElementById('evalStatus');
+const claimSeatsView = document.getElementById('claimSeatsView');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -65,6 +67,45 @@ function formatError(res, fallback) {
 
 function activeEvent(name) {
   return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
+}
+
+function renderClaimSeats(data) {
+  if (!claimSeatsView) return;
+  const seats = data?.claimable || [];
+  if (!seats.length) {
+    claimSeatsView.textContent = 'No reconnect seats found for this lobby.';
+    return;
+  }
+
+  claimSeatsView.innerHTML = [
+    '<strong>Reconnect seats:</strong>',
+    ...seats.map((seat) => `
+      <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
+        Claim ${seat.name}${seat.hostSeat ? ' (host)' : ''}
+      </button>
+    `),
+  ].join(' ');
+}
+
+async function loadClaimableSeats() {
+  const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const roomId = roomIdInput?.value?.trim().toUpperCase();
+  if (!roomId) {
+    setStatus('Enter room ID first');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/play/lobby/claims?mode=${mode}&roomId=${encodeURIComponent(roomId)}`);
+    const data = await res.json();
+    if (!data?.ok) {
+      claimSeatsView.textContent = formatError(data, 'Could not load reconnect seats');
+      return;
+    }
+    renderClaimSeats(data);
+  } catch (_err) {
+    claimSeatsView.textContent = 'Could not load reconnect seats';
+  }
 }
 
 async function refreshOpsStatus() {
@@ -209,6 +250,7 @@ hostBtn?.addEventListener('click', async () => {
   roomIdInput.value = me.roomId;
   setStatus(`Hosted ${me.game} room ${me.roomId}`);
   renderState(res.state);
+  void loadClaimableSeats();
 });
 
 joinBtn?.addEventListener('click', async () => {
@@ -222,6 +264,32 @@ joinBtn?.addEventListener('click', async () => {
   me.playerId = res.playerId;
   setStatus(`Joined ${me.game} room ${me.roomId}`);
   renderState(res.state);
+  void loadClaimableSeats();
+});
+
+loadClaimsBtn?.addEventListener('click', async () => {
+  await loadClaimableSeats();
+});
+
+claimSeatsView?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-claim-name]');
+  if (!btn) return;
+  const claimName = btn.getAttribute('data-claim-name') || '';
+  if (!claimName) return;
+  if (playerName) playerName.value = claimName;
+
+  me.game = gameMode.value;
+  const res = await emitAck(activeEvent('room:join'), {
+    roomId: roomIdInput.value.trim().toUpperCase(),
+    name: claimName,
+  });
+  if (!res?.ok) return setStatus(formatError(res, 'Claim failed'));
+
+  me.roomId = res.roomId;
+  me.playerId = res.playerId;
+  setStatus(`Reconnected as ${claimName}${res.playerId === currentState?.hostPlayerId ? ' (host)' : ''}`);
+  renderState(res.state);
+  void loadClaimableSeats();
 });
 
 quickMatchBtn?.addEventListener('click', async () => {
@@ -376,6 +444,7 @@ async function autoJoinFromQuery() {
   me.playerId = res.playerId;
   setStatus(`Quick-joined ${me.game} room ${me.roomId}`);
   renderState(res.state);
+  void loadClaimableSeats();
 }
 
 setInterval(() => {

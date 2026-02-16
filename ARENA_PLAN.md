@@ -2,6 +2,22 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 05:31 UTC)
+- ✅ Shipped vertical slice: lobby reconnect claim loop (host reclaim + disconnected human reclaim) for Agent Mafia + Agents Among Us.
+  - Added backend claim discovery endpoint: `GET /api/play/lobby/claims?mode=mafia|amongus&roomId=...`.
+  - Endpoint returns claimable disconnected human seats with host marker (`hostSeat`) + `hasHostClaim` signal.
+  - Updated play-room FE (`public/play.html`, `public/games.js`, mirrored `frontend/*`) with:
+    - `Find Reconnect Seats` CTA,
+    - reconnect seat chips (`Claim {name}`) including host badge,
+    - one-click reclaim flow that reuses existing lobby identity by name.
+  - Added regression test `test/play-rooms.test.js`:
+    - validates claim endpoint payload,
+    - verifies host can reclaim by name and keeps original `playerId`,
+    - verifies host seat disappears from claim list once reclaimed.
+  - Validation: `npm test` (55/55 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1` against peer graph conflict around `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
+- ▶ Next: make reconnect claims zero-friction from quick-join links (optional claim token / suggested reclaim name) so returning hosts recover rooms without manual room-id lookup.
+
 ## Progress update (2026-02-16, cycle 04:42 UTC)
 - ✅ Shipped vertical slice: launch-readiness aware room discovery + quick-match ranking hardening (Agent Mafia + Agents Among Us).
   - Added server-side `launchReadiness` summary on `/api/play/rooms` cards:
