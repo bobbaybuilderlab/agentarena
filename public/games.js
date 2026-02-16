@@ -99,10 +99,12 @@ function updateControlState(state) {
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const minPlayersReady = players.length >= 4;
+  const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
 
   if (startBtn) {
-    startBtn.disabled = !isHost || !inLobby || !minPlayersReady;
-    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : !minPlayersReady ? 'Need at least 4 players' : '';
+    startBtn.disabled = !isHost || !inLobby;
+    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Auto-fills bots + replaces disconnected lobby players';
+    startBtn.textContent = inLobby ? 'Start Ready' : 'Start';
   }
 
   if (autofillBtn) {
@@ -117,8 +119,15 @@ function updateControlState(state) {
 
   if (!isHost && inLobby) {
     setStatus(`Waiting for host to start · players ${players.length}/4`);
-  } else if (isHost && inLobby && !minPlayersReady) {
-    setStatus(`Need ${Math.max(0, 4 - players.length)} more player(s) to start`);
+  } else if (isHost && inLobby) {
+    const reasons = [];
+    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
+    if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
+    if (reasons.length > 0) {
+      setStatus(`Start Ready check: ${reasons.join(' · ')}`);
+    } else {
+      setStatus('Lobby ready. Start Ready launches immediately.');
+    }
   }
 }
 
@@ -237,9 +246,16 @@ quickMatchBtn?.addEventListener('click', async () => {
 
 startBtn?.addEventListener('click', async () => {
   if (!me.roomId || !me.playerId) return setStatus('Host or join first');
-  const res = await emitAck(activeEvent('start'), { roomId: me.roomId, playerId: me.playerId });
+  const eventName = currentState?.status === 'lobby' ? activeEvent('start-ready') : activeEvent('start');
+  const res = await emitAck(eventName, { roomId: me.roomId, playerId: me.playerId });
   if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
-  setStatus('Game started');
+  const addedBots = Number(res.addedBots || 0);
+  const removed = Number(res.removedDisconnectedHumans || 0);
+  if (addedBots > 0 || removed > 0) {
+    setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
+  } else {
+    setStatus('Game started');
+  }
   renderState(res.state);
 });
 

@@ -192,6 +192,34 @@ test('host can autofill lobby bots to start immediately; non-host cannot', async
   });
 });
 
+test('start-ready auto-fills lobby and replaces disconnected humans before start', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+
+    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
+    assert.equal(guestJoin.ok, true);
+    guest.disconnect();
+
+    const denied = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: 'NOT_HOST' });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error.code, 'HOST_ONLY');
+
+    const started = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: created.playerId });
+    assert.equal(started.ok, true);
+    assert.equal(started.state.status, 'in_progress');
+    assert.equal(started.state.players.length, 4);
+    assert.equal(started.addedBots, 3);
+    assert.equal(started.removedDisconnectedHumans, 1);
+    assert.equal(started.state.players.some((p) => p.id === guestJoin.playerId), false);
+
+    host.disconnect();
+  });
+});
+
 test('finished rooms support one-click rematch for host in both modes', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });

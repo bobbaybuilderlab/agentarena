@@ -720,6 +720,11 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
+  socket.on('mafia:start-ready', ({ roomId, playerId }, cb) => {
+    const started = startReadyLobby('mafia', roomId, playerId);
+    cb?.(started);
+  });
+
   socket.on('mafia:rematch', ({ roomId, playerId }, cb) => {
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'mafia');
     const reset = mafiaGame.prepareRematch(mafiaRooms, { roomId, hostPlayerId: playerId });
@@ -786,6 +791,11 @@ io.on('connection', (socket) => {
     emitAmongUsRoom(started.room);
     scheduleAmongUsPhase(started.room);
     cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
+  });
+
+  socket.on('amongus:start-ready', ({ roomId, playerId }, cb) => {
+    const started = startReadyLobby('amongus', roomId, playerId);
+    cb?.(started);
   });
 
   socket.on('amongus:rematch', ({ roomId, playerId }, cb) => {
@@ -1589,6 +1599,90 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
   logRoomEvent('mafia', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers: safeMinPlayers, players: room.players.length });
   emitMafiaRoom(room);
   return { ok: true, mode: 'mafia', room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
+}
+
+function stripDisconnectedLobbyHumans(mode, roomId) {
+  const room = (mode === 'amongus' ? amongUsRooms : mafiaRooms).get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+  if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only update lobby rooms' } };
+
+  const before = room.players.length;
+  room.players = room.players.filter((player) => player.isConnected || player.isBot || player.id === room.hostPlayerId);
+  const removedHumans = Math.max(0, before - room.players.length);
+  return { ok: true, room, removedHumans };
+}
+
+function getLobbyStartReadiness(mode, room, playerId) {
+  const reasons = [];
+  const players = room?.players || [];
+  const isHost = Boolean(room?.hostPlayerId && room.hostPlayerId === playerId);
+  const missingPlayers = Math.max(0, QUICK_JOIN_MIN_PLAYERS - players.length);
+  const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
+
+  if (!isHost) reasons.push({ code: 'HOST_ONLY', message: 'Only host can start' });
+  if (room?.status !== 'lobby') reasons.push({ code: 'INVALID_STATE', message: 'Game already started' });
+  if (missingPlayers > 0) reasons.push({ code: 'MISSING_PLAYERS', message: `Need ${missingPlayers} more player(s)` });
+  if (disconnectedHumans.length > 0) reasons.push({ code: 'DISCONNECTED_PLAYERS', message: `${disconnectedHumans.length} disconnected player(s) will be replaced by bots` });
+
+  return {
+    canStart: reasons.filter((r) => !['MISSING_PLAYERS', 'DISCONNECTED_PLAYERS'].includes(r.code)).length === 0,
+    missingPlayers,
+    disconnectedPlayers: disconnectedHumans.map((p) => ({ id: p.id, name: p.name })),
+    reasons,
+  };
+}
+
+function startReadyLobby(mode, roomId, playerId) {
+  const store = mode === 'amongus' ? amongUsRooms : mafiaRooms;
+  const game = mode === 'amongus' ? amongUsGame : mafiaGame;
+  const emitRoom = mode === 'amongus' ? emitAmongUsRoom : emitMafiaRoom;
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+
+  const readiness = getLobbyStartReadiness(mode, room, playerId);
+  if (!readiness.canStart) {
+    return {
+      ok: false,
+      error: {
+        code: readiness.reasons[0]?.code || 'LOBBY_NOT_READY',
+        message: readiness.reasons[0]?.message || 'Lobby not ready',
+        details: { readiness },
+      },
+    };
+  }
+
+  const stripped = stripDisconnectedLobbyHumans(mode, room.id);
+  if (!stripped.ok) return stripped;
+
+  const autoFilled = autoFillLobbyBots(mode, room.id, QUICK_JOIN_MIN_PLAYERS);
+  if (!autoFilled.ok) return autoFilled;
+
+  const started = game.startGame(store, { roomId: room.id, hostPlayerId: playerId });
+  if (!started.ok) return started;
+
+  logRoomEvent(mode, started.room, 'LOBBY_START_READY', {
+    removedDisconnectedHumans: stripped.removedHumans,
+    addedBots: autoFilled.addedBots,
+    players: started.room.players.length,
+    phase: started.room.phase,
+  });
+  logRoomEvent(mode, started.room, 'GAME_STARTED', {
+    status: started.room.status,
+    phase: started.room.phase,
+    day: started.room.day,
+    round: started.room.round,
+  });
+  emitRoom(started.room);
+  if (mode === 'amongus') scheduleAmongUsPhase(started.room);
+  else scheduleMafiaPhase(started.room);
+
+  return {
+    ok: true,
+    addedBots: autoFilled.addedBots,
+    removedDisconnectedHumans: stripped.removedHumans,
+    readiness: getLobbyStartReadiness(mode, started.room, playerId),
+    state: game.toPublic(started.room),
+  };
 }
 
 app.get('/api/play/rooms', (req, res) => {

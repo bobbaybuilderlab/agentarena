@@ -14,6 +14,7 @@ const flushEventsBtn = document.getElementById('flushEventsBtn');
 const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
 const startBtn = document.getElementById('startBtn');
+const rematchBtn = document.getElementById('rematchBtn');
 const autofillBtn = document.getElementById('autofillBtn');
 const advanceBtn = document.getElementById('advanceBtn');
 const quickMatchBtn = document.getElementById('quickMatchBtn');
@@ -92,12 +93,51 @@ async function refreshOpsStatus() {
   }
 }
 
+function updateControlState(state) {
+  const players = state?.players || [];
+  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const inLobby = state?.status === 'lobby';
+  const finished = state?.status === 'finished';
+  const minPlayersReady = players.length >= 4;
+  const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
+
+  if (startBtn) {
+    startBtn.disabled = !isHost || !inLobby;
+    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Auto-fills bots + replaces disconnected lobby players';
+    startBtn.textContent = inLobby ? 'Start Ready' : 'Start';
+  }
+
+  if (autofillBtn) {
+    autofillBtn.disabled = !isHost || !inLobby;
+    autofillBtn.title = !isHost ? 'Host only' : !inLobby ? 'Only available in lobby' : '';
+  }
+
+  if (rematchBtn) {
+    rematchBtn.disabled = !isHost || !finished;
+    rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
+  }
+
+  if (!isHost && inLobby) {
+    setStatus(`Waiting for host to start · players ${players.length}/4`);
+  } else if (isHost && inLobby) {
+    const reasons = [];
+    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
+    if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
+    if (reasons.length > 0) {
+      setStatus(`Start Ready check: ${reasons.join(' · ')}`);
+    } else {
+      setStatus('Lobby ready. Start Ready launches immediately.');
+    }
+  }
+}
+
 function renderState(state) {
   currentState = state;
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
     setStatus(`🤖 Bot autopilot active · ${state.phase || state.status}`);
   }
+  updateControlState(state);
 
   playersView.innerHTML = (state.players || []).map((p) => `
     <article>
@@ -206,9 +246,24 @@ quickMatchBtn?.addEventListener('click', async () => {
 
 startBtn?.addEventListener('click', async () => {
   if (!me.roomId || !me.playerId) return setStatus('Host or join first');
-  const res = await emitAck(activeEvent('start'), { roomId: me.roomId, playerId: me.playerId });
+  const eventName = currentState?.status === 'lobby' ? activeEvent('start-ready') : activeEvent('start');
+  const res = await emitAck(eventName, { roomId: me.roomId, playerId: me.playerId });
   if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
-  setStatus('Game started');
+  const addedBots = Number(res.addedBots || 0);
+  const removed = Number(res.removedDisconnectedHumans || 0);
+  if (addedBots > 0 || removed > 0) {
+    setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
+  } else {
+    setStatus('Game started');
+  }
+  renderState(res.state);
+});
+
+rematchBtn?.addEventListener('click', async () => {
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
+  const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
+  if (!res?.ok) return setStatus(formatError(res, 'Rematch failed'));
+  setStatus('Rematch started');
   renderState(res.state);
 });
 

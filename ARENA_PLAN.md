@@ -3,6 +3,24 @@
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
 ## Progress update (2026-02-16)
+- ✅ Shipped vertical slice: one-click lobby `Start Ready` flow (Agent Mafia + Agents Among Us) with explicit readiness context + auto-recovery.
+  - Added host-only socket events:
+    - `mafia:start-ready`
+    - `amongus:start-ready`
+  - New server orchestration (`startReadyLobby`) now handles one click from lobby to match start:
+    - removes disconnected non-bot lobby players,
+    - auto-fills bots to 4 players,
+    - starts match + schedules next phase timer,
+    - emits `LOBBY_START_READY` room event with replacement/fill counts.
+  - Added lobby readiness model (`getLobbyStartReadiness`) with structured reasons surfaced via error details.
+  - Updated FE lobby controls (`public/games.js` + `frontend/games.js`):
+    - Start button is now `Start Ready` in lobby,
+    - host sees explicit readiness hints (missing players, disconnected players),
+    - status message confirms bot fill + disconnected replacements used at launch.
+  - Added regression test (`test/play-rooms.test.js`):
+    - verifies host-only `start-ready` guard,
+    - validates disconnected guest replacement and bot auto-fill before game start.
+  - Validation: `npm test` (53/53 passing).
 - ✅ Shipped vertical slice: telemetry-aware quick-match routing + lobby fit score surfacing for Agent Mafia/Agents Among Us discovery.
   - Added room-level match quality scoring (`matchQuality`) combining fill rate, quick-match conversion signal, and rematch momentum.
   - `/api/play/rooms` now returns `matchQuality` + `hotLobby` flags per room card.
