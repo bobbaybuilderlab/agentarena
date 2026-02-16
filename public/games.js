@@ -14,6 +14,7 @@ const flushEventsBtn = document.getElementById('flushEventsBtn');
 const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
 const startBtn = document.getElementById('startBtn');
+const rematchBtn = document.getElementById('rematchBtn');
 const autofillBtn = document.getElementById('autofillBtn');
 const advanceBtn = document.getElementById('advanceBtn');
 const quickMatchBtn = document.getElementById('quickMatchBtn');
@@ -92,12 +93,42 @@ async function refreshOpsStatus() {
   }
 }
 
+function updateControlState(state) {
+  const players = state?.players || [];
+  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const inLobby = state?.status === 'lobby';
+  const finished = state?.status === 'finished';
+  const minPlayersReady = players.length >= 4;
+
+  if (startBtn) {
+    startBtn.disabled = !isHost || !inLobby || !minPlayersReady;
+    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : !minPlayersReady ? 'Need at least 4 players' : '';
+  }
+
+  if (autofillBtn) {
+    autofillBtn.disabled = !isHost || !inLobby;
+    autofillBtn.title = !isHost ? 'Host only' : !inLobby ? 'Only available in lobby' : '';
+  }
+
+  if (rematchBtn) {
+    rematchBtn.disabled = !isHost || !finished;
+    rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
+  }
+
+  if (!isHost && inLobby) {
+    setStatus(`Waiting for host to start · players ${players.length}/4`);
+  } else if (isHost && inLobby && !minPlayersReady) {
+    setStatus(`Need ${Math.max(0, 4 - players.length)} more player(s) to start`);
+  }
+}
+
 function renderState(state) {
   currentState = state;
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
     setStatus(`🤖 Bot autopilot active · ${state.phase || state.status}`);
   }
+  updateControlState(state);
 
   playersView.innerHTML = (state.players || []).map((p) => `
     <article>
@@ -209,6 +240,14 @@ startBtn?.addEventListener('click', async () => {
   const res = await emitAck(activeEvent('start'), { roomId: me.roomId, playerId: me.playerId });
   if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
   setStatus('Game started');
+  renderState(res.state);
+});
+
+rematchBtn?.addEventListener('click', async () => {
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
+  const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
+  if (!res?.ok) return setStatus(formatError(res, 'Rematch failed'));
+  setStatus('Rematch started');
   renderState(res.state);
 });
 

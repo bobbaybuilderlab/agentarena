@@ -145,3 +145,52 @@ test('host can autofill lobby bots to start immediately; non-host cannot', async
     guest.disconnect();
   });
 });
+
+test('finished rooms support one-click rematch for host in both modes', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
+
+    const mafiaCreated = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    const mafiaGuest = await emitAck(guest, 'mafia:room:join', { roomId: mafiaCreated.roomId, name: 'Guest' });
+    await emitAck(host, 'mafia:autofill', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId, minPlayers: 4 });
+    await emitAck(host, 'mafia:start', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId });
+
+    const mafiaRoom = mafiaRooms.get(mafiaCreated.roomId);
+    mafiaRoom.status = 'finished';
+    mafiaRoom.phase = 'finished';
+
+    const mafiaDenied = await emitAck(guest, 'mafia:rematch', { roomId: mafiaCreated.roomId, playerId: mafiaGuest.playerId });
+    assert.equal(mafiaDenied.ok, false);
+    assert.equal(mafiaDenied.error.code, 'HOST_ONLY');
+
+    const mafiaRematch = await emitAck(host, 'mafia:rematch', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId });
+    assert.equal(mafiaRematch.ok, true);
+    assert.equal(mafiaRematch.state.status, 'in_progress');
+    assert.ok(['night', 'discussion', 'voting'].includes(mafiaRematch.state.phase));
+    assert.equal(mafiaRematch.state.players.length, 4);
+
+    const amongHost = ioc(url, { reconnection: false, autoUnref: true });
+    const amongGuest = ioc(url, { reconnection: false, autoUnref: true });
+
+    const amongCreated = await emitAck(amongHost, 'amongus:room:create', { name: 'HostA' });
+    await emitAck(amongGuest, 'amongus:room:join', { roomId: amongCreated.roomId, name: 'GuestA' });
+    await emitAck(amongHost, 'amongus:autofill', { roomId: amongCreated.roomId, playerId: amongCreated.playerId, minPlayers: 4 });
+    await emitAck(amongHost, 'amongus:start', { roomId: amongCreated.roomId, playerId: amongCreated.playerId });
+
+    const amongRoom = amongUsRooms.get(amongCreated.roomId);
+    amongRoom.status = 'finished';
+    amongRoom.phase = 'finished';
+
+    const amongRematch = await emitAck(amongHost, 'amongus:rematch', { roomId: amongCreated.roomId, playerId: amongCreated.playerId });
+    assert.equal(amongRematch.ok, true);
+    assert.equal(amongRematch.state.status, 'in_progress');
+    assert.ok(['tasks', 'meeting'].includes(amongRematch.state.phase));
+    assert.equal(amongRematch.state.players.length, 4);
+
+    host.disconnect();
+    guest.disconnect();
+    amongHost.disconnect();
+    amongGuest.disconnect();
+  });
+});

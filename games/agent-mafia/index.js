@@ -38,6 +38,7 @@ function transitionRoomState(room, nextPhase, options = {}) {
 function toPublic(room) {
   return {
     id: room.id,
+    hostPlayerId: room.hostPlayerId,
     status: room.status,
     phase: room.phase,
     day: room.day,
@@ -304,6 +305,27 @@ function finish(room, winner) {
   return { ok: true, room };
 }
 
+function prepareRematch(store, { roomId, hostPlayerId }) {
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+  if (room.hostPlayerId !== hostPlayerId) return { ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } };
+  if (room.status !== 'finished') return { ok: false, error: { code: 'GAME_NOT_FINISHED', message: 'Rematch available after game ends' } };
+
+  room.status = 'lobby';
+  room.phase = 'lobby';
+  room.day = 0;
+  room.winner = null;
+  room.actions = { night: {}, vote: {} };
+  room.tally = {};
+  room.events.push({ type: 'REMATCH_READY', at: Date.now() });
+  for (const player of room.players) {
+    player.alive = true;
+    player.role = null;
+  }
+
+  return { ok: true, room };
+}
+
 function addLobbyBots(store, { roomId, count, namePrefix = 'Mafia Bot' }) {
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
@@ -345,6 +367,7 @@ module.exports = {
   startGame,
   submitAction,
   forceAdvance,
+  prepareRematch,
   addLobbyBots,
   disconnectPlayer,
   transitionRoomState,

@@ -639,6 +639,18 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
+  socket.on('mafia:rematch', ({ roomId, playerId }, cb) => {
+    roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'mafia');
+    const reset = mafiaGame.prepareRematch(mafiaRooms, { roomId, hostPlayerId: playerId });
+    if (!reset.ok) return cb?.(reset);
+    const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    logRoomEvent('mafia', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
+    emitMafiaRoom(started.room);
+    scheduleMafiaPhase(started.room);
+    cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
+  });
+
   socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
@@ -687,6 +699,18 @@ io.on('connection', (socket) => {
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     logRoomEvent('amongus', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, round: started.room.round });
+    emitAmongUsRoom(started.room);
+    scheduleAmongUsPhase(started.room);
+    cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
+  });
+
+  socket.on('amongus:rematch', ({ roomId, playerId }, cb) => {
+    roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'amongus');
+    const reset = amongUsGame.prepareRematch(amongUsRooms, { roomId, hostPlayerId: playerId });
+    if (!reset.ok) return cb?.(reset);
+    const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    logRoomEvent('amongus', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase });
     emitAmongUsRoom(started.room);
     scheduleAmongUsPhase(started.room);
     cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });

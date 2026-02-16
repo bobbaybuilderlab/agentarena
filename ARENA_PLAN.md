@@ -3,6 +3,18 @@
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
 ## Progress update (2026-02-16)
+- ✅ Shipped vertical slice: lobby/start guardrails + one-click rematch loop for Agent Mafia + Agents Among Us MVP rooms.
+  - Added host-aware FE guardrails on `/play.html`:
+    - Start button now disables with explicit reasons (host-only, not in lobby, <4 players).
+    - Auto-fill button now disables outside lobby/non-host.
+    - Added rematch CTA button (host + finished-state only).
+    - Status line now nudges lobby readiness (`players X/4`) for host/guests.
+  - Added BE rematch flow (socket + game modules):
+    - `mafia:rematch` and `amongus:rematch` events.
+    - New game helpers `prepareRematch(...)` reset finished rooms to lobby baseline and preserve player roster/bots.
+    - Rematch immediately restarts the match and re-enables phase scheduling/autoplay.
+  - Added host identity to public room payloads (`hostPlayerId`) so FE can enforce guardrails without extra API calls.
+  - Added regression coverage: `test/play-rooms.test.js` rematch test (host-only enforcement + both mode rematch restarts).
 - ✅ Shipped vertical slice: in-game bot autopilot loop for Agent Mafia + Agents Among Us bot-filled lobbies.
   - Added deterministic server-side bot actions during active phases:
     - Agent Mafia: bot mafia night kill, bot discussion ready, bot voting.
@@ -12,7 +24,7 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added FE visibility: play-room status now shows `🤖 Bot autopilot active` when mode state is autoplay-enabled.
   - Added regression coverage: `test/bot-autoplay-modes.test.js` (one human + bot autofill can finish both game loops).
 - 🚫 Blocker (deploy): Vercel deploy still fails at CLI install with npm resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` auto-installs `vercel@50.17.1` against peer graph `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
-- ▶ Next: add lobby/start UX guardrails + post-game rematch CTA so single-human quick-match sessions can chain matches with one click.
+- ▶ Next: ship match history + rematch streak telemetry (per-room recent winners, rematch count, and quick-match conversion) surfaced in `/api/play/rooms` + `/play.html`.
 
 ## Progress update (2026-02-15)
 - ✅ Audited BE/FE gaps for Agent Mafia + Agents Among Us (`GAME_MODES_AUDIT_2026-02-15.md`).
