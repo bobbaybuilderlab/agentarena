@@ -2,6 +2,26 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 09:17 UTC)
+- ✅ Shipped vertical slice: reconnect auto-reclaim telemetry surfaced in room discovery + ops (Agent Mafia + Agents Among Us).
+  - Backend telemetry model expanded with reconnect auto-reclaim counters per room:
+    - `reconnectAutoAttempts`
+    - `reconnectAutoSuccesses`
+    - `reconnectAutoFailures`
+  - Added ingestion endpoint for FE reconnect automation events:
+    - `POST /api/play/reconnect-telemetry` (`mode`, `roomId`, `outcome=attempt|success|failure`).
+  - Added ops rollup endpoint for reconnect recovery monitoring:
+    - `GET /api/ops/reconnect` (totals + per-mode success/failure rates).
+  - Updated room discovery payload (`GET /api/play/rooms`) to include:
+    - per-room `reconnectAuto` metrics (attempts/successes/failures/successRate),
+    - summary-level reconnect totals + success rate.
+  - Updated quick-join reconnect FE flow (`public/games.js`, mirrored `frontend/games.js`) so one-shot auto-reclaim emits best-effort telemetry for attempt/success/failure.
+  - Updated live room cards (`public/app.js`, mirrored `frontend/app.js`) to show reconnect auto-reclaim conversion line.
+  - Added regression coverage (`test/play-rooms.test.js`): verifies reconnect telemetry ingestion and visibility across room discovery + ops endpoints.
+  - Validation: `npm test` (57/57 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1`; conflict reports existing `vercel@50.15.1` resolution and peerOptional `@vercel/backends@0.0.33`.
+- ▶ Next: use reconnect telemetry to improve quick-join ranking by down-weighting rooms with repeated auto-reclaim failures (high failures + low successRate), so we avoid routing users into reconnect-friction lobbies.
+
 ## Progress update (2026-02-16, cycle 08:28 UTC)
 - ✅ Shipped vertical slice: auto-attempt suggested reconnect reclaim once after quick-join fallback (Agent Mafia + Agents Among Us).
   - Updated `/play.html` client flow (`public/games.js`, mirrored `frontend/games.js`) with one-shot auto-reclaim helper:

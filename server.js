@@ -99,6 +99,9 @@ function getRoomTelemetry(mode, roomId) {
       recentWinners: [],
       quickMatchTickets: 0,
       quickMatchConversions: 0,
+      reconnectAutoAttempts: 0,
+      reconnectAutoSuccesses: 0,
+      reconnectAutoFailures: 0,
       updatedAt: Date.now(),
     });
   }
@@ -140,6 +143,15 @@ function recordQuickJoinConversion(mode, roomId, name) {
   const telemetry = getRoomTelemetry(mode, roomId);
   telemetry.quickMatchConversions += 1;
   telemetry.updatedAt = Date.now();
+}
+
+function recordReconnectAutoTelemetry(mode, roomId, outcome) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  if (outcome === 'attempt') telemetry.reconnectAutoAttempts += 1;
+  else if (outcome === 'success') telemetry.reconnectAutoSuccesses += 1;
+  else if (outcome === 'failure') telemetry.reconnectAutoFailures += 1;
+  telemetry.updatedAt = Date.now();
+  return telemetry;
 }
 
 const RECONNECT_TICKET_TTL_MS = 30 * 60 * 1000;
@@ -206,6 +218,15 @@ function seedPlayTelemetry(mode, roomId, patch = {}) {
   if (Number.isFinite(patch.quickMatchTickets)) telemetry.quickMatchTickets = Math.max(0, Number(patch.quickMatchTickets));
   if (Number.isFinite(patch.quickMatchConversions)) {
     telemetry.quickMatchConversions = Math.max(0, Number(patch.quickMatchConversions));
+  }
+  if (Number.isFinite(patch.reconnectAutoAttempts)) {
+    telemetry.reconnectAutoAttempts = Math.max(0, Number(patch.reconnectAutoAttempts));
+  }
+  if (Number.isFinite(patch.reconnectAutoSuccesses)) {
+    telemetry.reconnectAutoSuccesses = Math.max(0, Number(patch.reconnectAutoSuccesses));
+  }
+  if (Number.isFinite(patch.reconnectAutoFailures)) {
+    telemetry.reconnectAutoFailures = Math.max(0, Number(patch.reconnectAutoFailures));
   }
   if (Array.isArray(patch.recentWinners)) {
     telemetry.recentWinners = patch.recentWinners.slice(-5);
@@ -1595,6 +1616,14 @@ function summarizePlayableRoom(mode, room) {
       : 0,
   };
   const launchReadiness = buildRoomLaunchReadiness(room);
+  const reconnectAuto = {
+    attempts: telemetry.reconnectAutoAttempts || 0,
+    successes: telemetry.reconnectAutoSuccesses || 0,
+    failures: telemetry.reconnectAutoFailures || 0,
+  };
+  reconnectAuto.successRate = reconnectAuto.attempts
+    ? Number((reconnectAuto.successes / reconnectAuto.attempts).toFixed(2))
+    : 0;
 
   const summary = {
     mode,
@@ -1609,6 +1638,7 @@ function summarizePlayableRoom(mode, room) {
     canJoin,
     rematchCount: telemetry.rematchCount,
     quickMatch,
+    reconnectAuto,
     recentWinners: telemetry.recentWinners,
     launchReadiness,
   };
@@ -1814,6 +1844,13 @@ app.get('/api/play/rooms', (req, res) => {
   }
 
   const roomsList = listPlayableRooms(modeFilter, statusFilter);
+  const reconnectAutoTotals = roomsList.reduce((totals, room) => {
+    totals.attempts += Number(room.reconnectAuto?.attempts || 0);
+    totals.successes += Number(room.reconnectAuto?.successes || 0);
+    totals.failures += Number(room.reconnectAuto?.failures || 0);
+    return totals;
+  }, { attempts: 0, successes: 0, failures: 0 });
+
   const summary = {
     totalRooms: roomsList.length,
     openRooms: roomsList.filter((room) => room.canJoin).length,
@@ -1821,6 +1858,12 @@ app.get('/api/play/rooms', (req, res) => {
     byMode: {
       mafia: roomsList.filter((room) => room.mode === 'mafia').length,
       amongus: roomsList.filter((room) => room.mode === 'amongus').length,
+    },
+    reconnectAuto: {
+      ...reconnectAutoTotals,
+      successRate: reconnectAutoTotals.attempts
+        ? Number((reconnectAutoTotals.successes / reconnectAutoTotals.attempts).toFixed(2))
+        : 0,
     },
   };
 
@@ -1841,6 +1884,34 @@ app.get('/api/play/lobby/claims', (req, res) => {
   }
 
   res.json(claims);
+});
+
+app.post('/api/play/reconnect-telemetry', (req, res) => {
+  const mode = String(req.body?.mode || '').toLowerCase();
+  const roomId = String(req.body?.roomId || '').trim().toUpperCase();
+  const outcome = String(req.body?.outcome || '').toLowerCase();
+
+  if (!['mafia', 'amongus'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } });
+  }
+  if (!roomId) {
+    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
+  }
+  if (!['attempt', 'success', 'failure'].includes(outcome)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_OUTCOME', message: 'outcome must be attempt|success|failure' } });
+  }
+
+  const telemetry = recordReconnectAutoTelemetry(mode, roomId, outcome);
+  res.json({
+    ok: true,
+    mode,
+    roomId,
+    reconnectAuto: {
+      attempts: telemetry.reconnectAutoAttempts,
+      successes: telemetry.reconnectAutoSuccesses,
+      failures: telemetry.reconnectAutoFailures,
+    },
+  });
 });
 
 app.post('/api/play/quick-join', (req, res) => {
@@ -1955,6 +2026,34 @@ app.post('/api/ops/events/flush', async (_req, res) => {
 
 app.get('/api/ops/canary', (_req, res) => {
   res.json({ ok: true, config: arenaCanary.config(), stats: arenaCanary.stats() });
+});
+
+app.get('/api/ops/reconnect', (_req, res) => {
+  const totals = { attempts: 0, successes: 0, failures: 0 };
+  const byMode = { mafia: { attempts: 0, successes: 0, failures: 0 }, amongus: { attempts: 0, successes: 0, failures: 0 } };
+
+  for (const telemetry of playRoomTelemetry.values()) {
+    const mode = telemetry.mode === 'amongus' ? 'amongus' : 'mafia';
+    const attempts = Number(telemetry.reconnectAutoAttempts || 0);
+    const successes = Number(telemetry.reconnectAutoSuccesses || 0);
+    const failures = Number(telemetry.reconnectAutoFailures || 0);
+    totals.attempts += attempts;
+    totals.successes += successes;
+    totals.failures += failures;
+    byMode[mode].attempts += attempts;
+    byMode[mode].successes += successes;
+    byMode[mode].failures += failures;
+  }
+
+  const toRate = (row) => (row.attempts ? Number((row.successes / row.attempts).toFixed(2)) : 0);
+  res.json({
+    ok: true,
+    totals: { ...totals, successRate: toRate(totals) },
+    byMode: {
+      mafia: { ...byMode.mafia, successRate: toRate(byMode.mafia) },
+      amongus: { ...byMode.amongus, successRate: toRate(byMode.amongus) },
+    },
+  });
 });
 
 app.get('/api/evals/run', (_req, res) => {

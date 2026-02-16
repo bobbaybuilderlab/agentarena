@@ -184,6 +184,7 @@ async function loadLiveRooms() {
       const q = room.quickMatch || {};
       const quality = room.matchQuality || {};
       const launch = room.launchReadiness || {};
+      const reconnect = room.reconnectAuto || {};
       const launchLine = launch.hostConnected
         ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
         : '⚠️ Host offline · room may stall until host reconnects';
@@ -193,6 +194,7 @@ async function loadLiveRooms() {
         <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
         <p>Rematches: ${room.rematchCount || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>

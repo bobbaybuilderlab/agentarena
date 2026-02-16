@@ -132,6 +132,21 @@ async function loadClaimableSeats() {
   }
 }
 
+async function sendReconnectTelemetry(outcome) {
+  const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const roomId = me.roomId ? String(me.roomId).trim().toUpperCase() : '';
+  if (!roomId) return;
+  try {
+    await fetch('/api/play/reconnect-telemetry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, roomId, outcome }),
+    });
+  } catch (_err) {
+    // best-effort telemetry only
+  }
+}
+
 async function attemptSuggestedReclaimAuto() {
   if (attemptedSuggestedReclaim) return false;
   if (!suggestedReclaim?.name || !me.roomId) return false;
@@ -140,16 +155,20 @@ async function attemptSuggestedReclaimAuto() {
   const targetName = String(suggestedReclaim.name).trim();
   if (!targetName) return false;
 
+  await sendReconnectTelemetry('attempt');
+
   const res = await emitAck(activeEvent('room:join'), {
     roomId: me.roomId,
     name: targetName,
   });
 
   if (!res?.ok) {
+    await sendReconnectTelemetry('failure');
     setStatus(`Reconnect token expired/used. Auto-reclaim for ${targetName} failed; tap "Reclaim suggested seat" to retry.`);
     return false;
   }
 
+  await sendReconnectTelemetry('success');
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   suggestedReclaim = null;

@@ -188,6 +188,53 @@ test('quick-join includes reconnect suggestion + claim token for disconnected lo
   });
 });
 
+test('reconnect auto-reclaim telemetry is tracked in room discovery + ops endpoints', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+
+    const attemptRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'attempt' }),
+    });
+    const successRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'success' }),
+    });
+    const failRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'failure' }),
+    });
+
+    assert.equal((await attemptRes.json()).ok, true);
+    assert.equal((await successRes.json()).ok, true);
+    assert.equal((await failRes.json()).ok, true);
+
+    const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+    const roomsData = await roomsRes.json();
+    const card = roomsData.rooms.find((r) => r.roomId === created.roomId);
+    assert.equal(card.reconnectAuto.attempts, 1);
+    assert.equal(card.reconnectAuto.successes, 1);
+    assert.equal(card.reconnectAuto.failures, 1);
+    assert.equal(card.reconnectAuto.successRate, 1);
+    assert.equal(roomsData.summary.reconnectAuto.attempts, 1);
+
+    const opsRes = await fetch(`${url}/api/ops/reconnect`);
+    const ops = await opsRes.json();
+    assert.equal(ops.ok, true);
+    assert.equal(ops.totals.attempts, 1);
+    assert.equal(ops.totals.successes, 1);
+    assert.equal(ops.totals.failures, 1);
+    assert.equal(ops.byMode.mafia.successRate, 1);
+
+    host.disconnect();
+  });
+});
+
 test('quick-join avoids host-offline lobbies when host-online alternative exists', async () => {
   await withServer(async (url) => {
     const offlineHost = ioc(url, { reconnection: false, autoUnref: true });
