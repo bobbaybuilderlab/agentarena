@@ -511,6 +511,15 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
   });
 
+  socket.on('mafia:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (room.hostPlayerId !== playerId) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    const result = autoFillLobbyBots('mafia', room.id, minPlayers);
+    if (!result.ok) return cb?.(result);
+    cb?.({ ok: true, addedBots: result.addedBots, state: mafiaGame.toPublic(result.room) });
+  });
+
   socket.on('mafia:start', ({ roomId, playerId }, cb) => {
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
@@ -553,6 +562,15 @@ io.on('connection', (socket) => {
     logRoomEvent('amongus', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitAmongUsRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: amongUsGame.toPublic(joined.room) });
+  });
+
+  socket.on('amongus:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (room.hostPlayerId !== playerId) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    const result = autoFillLobbyBots('amongus', room.id, minPlayers);
+    if (!result.ok) return cb?.(result);
+    cb?.({ ok: true, addedBots: result.addedBots, state: amongUsGame.toPublic(result.room) });
   });
 
   socket.on('amongus:start', ({ roomId, playerId }, cb) => {
@@ -1280,12 +1298,40 @@ function pickQuickJoinMode(mode) {
   return openMafia <= openAmongUs ? 'mafia' : 'amongus';
 }
 
+const QUICK_JOIN_MIN_PLAYERS = 4;
+
 function createQuickJoinRoom(mode, hostName) {
   const socketId = null;
   if (mode === 'amongus') {
     return amongUsGame.createRoom(amongUsRooms, { hostName, hostSocketId: socketId });
   }
   return mafiaGame.createRoom(mafiaRooms, { hostName, hostSocketId: socketId });
+}
+
+function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
+  const safeMinPlayers = Math.max(1, Math.min(8, Number(minPlayers) || QUICK_JOIN_MIN_PLAYERS));
+
+  if (mode === 'amongus') {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+    if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
+    const needed = Math.max(0, safeMinPlayers - room.players.length);
+    const added = amongUsGame.addLobbyBots(amongUsRooms, { roomId: room.id, count: needed, namePrefix: 'Crew Bot' });
+    if (!added.ok) return added;
+    logRoomEvent('amongus', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers: safeMinPlayers, players: room.players.length });
+    emitAmongUsRoom(room);
+    return { ok: true, mode, room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
+  }
+
+  const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+  if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
+  const needed = Math.max(0, safeMinPlayers - room.players.length);
+  const added = mafiaGame.addLobbyBots(mafiaRooms, { roomId: room.id, count: needed, namePrefix: 'Mafia Bot' });
+  if (!added.ok) return added;
+  logRoomEvent('mafia', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers: safeMinPlayers, players: room.players.length });
+  emitMafiaRoom(room);
+  return { ok: true, mode: 'mafia', room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
 }
 
 app.get('/api/play/rooms', (req, res) => {
@@ -1327,11 +1373,11 @@ app.post('/api/play/quick-join', (req, res) => {
   let created = false;
 
   if (!targetRoom) {
-    const createdRoom = createQuickJoinRoom(selectedMode, `${selectedMode === 'mafia' ? 'Mafia' : 'AmongUs'} Host`);
+    const createdRoom = createQuickJoinRoom(selectedMode, playerName);
     if (!createdRoom.ok) return res.status(400).json(createdRoom);
     logRoomEvent(selectedMode, createdRoom.room, 'ROOM_CREATED', { status: createdRoom.room.status, phase: createdRoom.room.phase });
-    if (selectedMode === 'mafia') emitMafiaRoom(createdRoom.room);
-    if (selectedMode === 'amongus') emitAmongUsRoom(createdRoom.room);
+    const autoFilled = autoFillLobbyBots(selectedMode, createdRoom.room.id, QUICK_JOIN_MIN_PLAYERS);
+    if (!autoFilled.ok) return res.status(400).json(autoFilled);
     targetRoom = summarizePlayableRoom(selectedMode, createdRoom.room);
     created = true;
   }
@@ -1346,6 +1392,32 @@ app.post('/api/play/quick-join', (req, res) => {
   };
 
   res.json({ ok: true, created, room: targetRoom, joinTicket });
+});
+
+app.post('/api/play/lobby/autofill', (req, res) => {
+  const mode = String(req.body?.mode || '').toLowerCase();
+  const roomId = String(req.body?.roomId || '').trim().toUpperCase();
+  const minPlayers = Number(req.body?.minPlayers || QUICK_JOIN_MIN_PLAYERS);
+
+  if (!['mafia', 'amongus'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } });
+  }
+
+  if (!roomId) {
+    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
+  }
+
+  const result = autoFillLobbyBots(mode, roomId, minPlayers);
+  if (!result.ok) return res.status(400).json(result);
+
+  res.json({
+    ok: true,
+    mode,
+    roomId: result.room.id,
+    targetPlayers: result.targetPlayers,
+    addedBots: result.addedBots,
+    state: mode === 'mafia' ? mafiaGame.toPublic(result.room) : amongUsGame.toPublic(result.room),
+  });
 });
 
 loadState();

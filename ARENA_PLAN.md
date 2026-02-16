@@ -119,8 +119,26 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
     - home page “Quick Match Me” button (`/`)
     - play page “Quick Match” button (`/play.html`)
   - Added regression coverage: `test/play-rooms.test.js` quick-join selection + room-creation cases.
+- ✅ Shipped vertical slice: host-side lobby bot autofill for Agent Mafia + Agents Among Us quick-start loops.
+  - Added per-mode lobby bot injection helpers:
+    - `games/agent-mafia/index.js` → `addLobbyBots`
+    - `games/agents-among-us/index.js` → `addLobbyBots`
+  - Added host-only socket events:
+    - `mafia:autofill`
+    - `amongus:autofill`
+  - Added REST endpoint for ops/automation: `POST /api/play/lobby/autofill`.
+  - Improved quick-match creation flow:
+    - new rooms are now created with the quick-match player as host identity,
+    - lobby auto-fills to 4 players immediately (`QUICK_JOIN_MIN_PLAYERS`),
+    - user can autojoin and start without waiting for more humans.
+  - FE updates on `/play.html` + `/games.js`:
+    - added “Auto-fill to 4” button,
+    - player cards now show bot marker (`🤖`).
+  - Added regression coverage: `test/play-rooms.test.js`
+    - validates quick-join room creation now auto-fills + preserves host identity,
+    - validates host-only autofill permissions + successful start after autofill.
 - 🚫 Blocker (deploy): Vercel deploy still fails at CLI install step with npm resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` auto-installs `vercel@50.17.1` and hits peer conflict with `@vercel/backends@0.0.33` while `vercel@50.15.1` exists in the graph.
-- ▶ Next: ship host-side bot autofill for Mafia/AmongUs lobbies (optional bot seats to auto-reach 4 players) so quick-match users can start immediately.
+- ▶ Next: ship minimal in-game bot autopilot actions for Mafia + AmongUs (night kill / ready+vote / task+meeting vote) so bot-filled lobbies complete full loops without manual multi-client input.
 
 ## 1) Room state machine hardening
 - **Task**: Implement explicit finite-state machine for room lifecycle and reject invalid transitions.

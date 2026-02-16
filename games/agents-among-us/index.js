@@ -48,6 +48,7 @@ function toPublic(room) {
       role: room.status === 'finished' ? p.role : undefined,
       tasksDone: p.tasksDone,
       isConnected: p.isConnected,
+      isBot: Boolean(p.isBot),
     })),
     votes: room.votes,
     events: room.events.slice(-8),
@@ -272,6 +273,34 @@ function finish(room, winner) {
   return { ok: true, room };
 }
 
+function addLobbyBots(store, { roomId, count, namePrefix = 'Crew Bot' }) {
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+  if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only add bots in lobby' } };
+
+  const requested = Math.max(0, Number(count) || 0);
+  const availableSlots = Math.max(0, 12 - room.players.length);
+  const toAdd = Math.min(requested, availableSlots);
+  const bots = [];
+
+  for (let i = 0; i < toAdd; i += 1) {
+    const bot = {
+      id: shortId(8),
+      name: `${namePrefix} ${room.players.length + 1}`.slice(0, 24),
+      socketId: null,
+      isConnected: true,
+      alive: true,
+      role: null,
+      tasksDone: 0,
+      isBot: true,
+    };
+    room.players.push(bot);
+    bots.push(bot);
+  }
+
+  return { ok: true, room, bots };
+}
+
 function disconnectPlayer(store, { roomId, socketId }) {
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return;
@@ -286,6 +315,7 @@ module.exports = {
   startGame,
   submitAction,
   forceAdvance,
+  addLobbyBots,
   disconnectPlayer,
   transitionRoomState,
   toPublic,

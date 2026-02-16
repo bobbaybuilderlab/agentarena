@@ -14,6 +14,7 @@ const flushEventsBtn = document.getElementById('flushEventsBtn');
 const hostBtn = document.getElementById('hostBtn');
 const joinBtn = document.getElementById('joinBtn');
 const startBtn = document.getElementById('startBtn');
+const autofillBtn = document.getElementById('autofillBtn');
 const advanceBtn = document.getElementById('advanceBtn');
 const quickMatchBtn = document.getElementById('quickMatchBtn');
 const runEvalsBtn = document.getElementById('runEvalsBtn');
@@ -97,7 +98,7 @@ function renderState(state) {
 
   playersView.innerHTML = (state.players || []).map((p) => `
     <article>
-      <h3>${p.name}</h3>
+      <h3>${p.name}${p.isBot ? ' 🤖' : ''}</h3>
       <p>ID: ${p.id}</p>
       <p>${p.alive === false ? '☠️ dead' : '✅ alive'} · ${p.isConnected ? 'online' : 'offline'}</p>
       <p>${p.role ? `role: ${p.role}` : ''}</p>
@@ -205,6 +206,14 @@ startBtn?.addEventListener('click', async () => {
   const res = await emitAck(activeEvent('start'), { roomId: me.roomId, playerId: me.playerId });
   if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
   setStatus('Game started');
+  renderState(res.state);
+});
+
+autofillBtn?.addEventListener('click', async () => {
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
+  const res = await emitAck(activeEvent('autofill'), { roomId: me.roomId, playerId: me.playerId, minPlayers: 4 });
+  if (!res?.ok) return setStatus(formatError(res, 'Auto-fill failed'));
+  setStatus(`Auto-filled ${res.addedBots || 0} bot(s)`);
   renderState(res.state);
 });
 

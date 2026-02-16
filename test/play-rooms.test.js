@@ -111,6 +111,37 @@ test('quick-join API picks fullest open room or creates one with join ticket', a
     assert.equal(data.ok, true);
     assert.equal(data.created, true);
     assert.equal(data.room.mode, 'amongus');
+    assert.equal(data.room.players, 4);
+    assert.equal(data.room.hostName, 'FreshPlayer');
     assert.match(data.joinTicket.joinUrl, /game=amongus/);
+  });
+});
+
+test('host can autofill lobby bots to start immediately; non-host cannot', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+
+    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
+    assert.equal(guestJoin.ok, true);
+
+    const denied = await emitAck(guest, 'mafia:autofill', { roomId: created.roomId, playerId: guestJoin.playerId, minPlayers: 4 });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error.code, 'HOST_ONLY');
+
+    const filled = await emitAck(host, 'mafia:autofill', { roomId: created.roomId, playerId: created.playerId, minPlayers: 4 });
+    assert.equal(filled.ok, true);
+    assert.equal(filled.addedBots, 2);
+    assert.equal(filled.state.players.length, 4);
+    assert.equal(filled.state.players.filter((p) => p.isBot).length, 2);
+
+    const started = await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
+    assert.equal(started.ok, true);
+
+    host.disconnect();
+    guest.disconnect();
   });
 });
