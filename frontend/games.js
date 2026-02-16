@@ -149,15 +149,19 @@ async function loadClaimableSeats() {
   }
 }
 
-async function sendReconnectTelemetry(outcome) {
+async function sendReconnectTelemetry(outcome, event) {
   const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
-  const roomId = me.roomId ? String(me.roomId).trim().toUpperCase() : '';
+  const roomId = (me.roomId || roomIdInput?.value || '').toString().trim().toUpperCase();
   if (!roomId) return;
+  const payload = { mode, roomId };
+  if (outcome) payload.outcome = outcome;
+  if (event) payload.event = event;
+  if (!payload.outcome && !payload.event) return;
   try {
     await fetch('/api/play/reconnect-telemetry', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, roomId, outcome }),
+      body: JSON.stringify(payload),
     });
   } catch (_err) {
     // best-effort telemetry only
@@ -360,6 +364,7 @@ loadClaimsBtn?.addEventListener('click', async () => {
 claimSeatsView?.addEventListener('click', async (e) => {
   const quickRecoverBtn = e.target.closest('[data-quick-recover]');
   if (quickRecoverBtn) {
+    void sendReconnectTelemetry(null, 'quick_recover_clicked');
     try {
       const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
       const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
@@ -387,6 +392,8 @@ claimSeatsView?.addEventListener('click', async (e) => {
   const claimName = btn.getAttribute('data-claim-name') || '';
   if (!claimName) return;
   if (playerName) playerName.value = claimName;
+
+  void sendReconnectTelemetry(null, 'reclaim_clicked');
 
   me.game = gameMode.value;
   const res = await emitAck(activeEvent('room:join'), {

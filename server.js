@@ -102,6 +102,8 @@ function getRoomTelemetry(mode, roomId) {
       reconnectAutoAttempts: 0,
       reconnectAutoSuccesses: 0,
       reconnectAutoFailures: 0,
+      reclaimClicked: 0,
+      quickRecoverClicked: 0,
       updatedAt: Date.now(),
     });
   }
@@ -150,6 +152,14 @@ function recordReconnectAutoTelemetry(mode, roomId, outcome) {
   if (outcome === 'attempt') telemetry.reconnectAutoAttempts += 1;
   else if (outcome === 'success') telemetry.reconnectAutoSuccesses += 1;
   else if (outcome === 'failure') telemetry.reconnectAutoFailures += 1;
+  telemetry.updatedAt = Date.now();
+  return telemetry;
+}
+
+function recordReconnectClickTelemetry(mode, roomId, event) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  if (event === 'reclaim_clicked') telemetry.reclaimClicked += 1;
+  else if (event === 'quick_recover_clicked') telemetry.quickRecoverClicked += 1;
   telemetry.updatedAt = Date.now();
   return telemetry;
 }
@@ -227,6 +237,12 @@ function seedPlayTelemetry(mode, roomId, patch = {}) {
   }
   if (Number.isFinite(patch.reconnectAutoFailures)) {
     telemetry.reconnectAutoFailures = Math.max(0, Number(patch.reconnectAutoFailures));
+  }
+  if (Number.isFinite(patch.reclaimClicked)) {
+    telemetry.reclaimClicked = Math.max(0, Number(patch.reclaimClicked));
+  }
+  if (Number.isFinite(patch.quickRecoverClicked)) {
+    telemetry.quickRecoverClicked = Math.max(0, Number(patch.quickRecoverClicked));
   }
   if (Array.isArray(patch.recentWinners)) {
     telemetry.recentWinners = patch.recentWinners.slice(-5);
@@ -1632,6 +1648,10 @@ function summarizePlayableRoom(mode, room) {
   reconnectAuto.successRate = reconnectAuto.attempts
     ? Number((reconnectAuto.successes / reconnectAuto.attempts).toFixed(2))
     : 0;
+  const reconnectRecoveryClicks = {
+    reclaim_clicked: telemetry.reclaimClicked || 0,
+    quick_recover_clicked: telemetry.quickRecoverClicked || 0,
+  };
 
   const summary = {
     mode,
@@ -1647,6 +1667,7 @@ function summarizePlayableRoom(mode, room) {
     rematchCount: telemetry.rematchCount,
     quickMatch,
     reconnectAuto,
+    reconnectRecoveryClicks,
     recentWinners: telemetry.recentWinners,
     launchReadiness,
   };
@@ -1858,6 +1879,11 @@ app.get('/api/play/rooms', (req, res) => {
     totals.failures += Number(room.reconnectAuto?.failures || 0);
     return totals;
   }, { attempts: 0, successes: 0, failures: 0 });
+  const reconnectRecoveryClickTotals = roomsList.reduce((totals, room) => {
+    totals.reclaim_clicked += Number(room.reconnectRecoveryClicks?.reclaim_clicked || 0);
+    totals.quick_recover_clicked += Number(room.reconnectRecoveryClicks?.quick_recover_clicked || 0);
+    return totals;
+  }, { reclaim_clicked: 0, quick_recover_clicked: 0 });
 
   const summary = {
     totalRooms: roomsList.length,
@@ -1873,6 +1899,7 @@ app.get('/api/play/rooms', (req, res) => {
         ? Number((reconnectAutoTotals.successes / reconnectAutoTotals.attempts).toFixed(2))
         : 0,
     },
+    reconnectRecoveryClicks: reconnectRecoveryClickTotals,
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
@@ -1898,6 +1925,7 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
   const mode = String(req.body?.mode || '').toLowerCase();
   const roomId = String(req.body?.roomId || '').trim().toUpperCase();
   const outcome = String(req.body?.outcome || '').toLowerCase();
+  const event = String(req.body?.event || '').toLowerCase();
 
   if (!['mafia', 'amongus'].includes(mode)) {
     return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } });
@@ -1905,11 +1933,23 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
   if (!roomId) {
     return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
   }
-  if (!['attempt', 'success', 'failure'].includes(outcome)) {
+
+  const hasOutcome = Boolean(outcome);
+  const hasEvent = Boolean(event);
+  if (!hasOutcome && !hasEvent) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_PAYLOAD', message: 'provide outcome and/or event' } });
+  }
+  if (hasOutcome && !['attempt', 'success', 'failure'].includes(outcome)) {
     return res.status(400).json({ ok: false, error: { code: 'INVALID_OUTCOME', message: 'outcome must be attempt|success|failure' } });
   }
+  if (hasEvent && !['reclaim_clicked', 'quick_recover_clicked'].includes(event)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_EVENT', message: 'event must be reclaim_clicked|quick_recover_clicked' } });
+  }
 
-  const telemetry = recordReconnectAutoTelemetry(mode, roomId, outcome);
+  let telemetry = getRoomTelemetry(mode, roomId);
+  if (hasOutcome) telemetry = recordReconnectAutoTelemetry(mode, roomId, outcome);
+  if (hasEvent) telemetry = recordReconnectClickTelemetry(mode, roomId, event);
+
   res.json({
     ok: true,
     mode,
@@ -1918,6 +1958,10 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
       attempts: telemetry.reconnectAutoAttempts,
       successes: telemetry.reconnectAutoSuccesses,
       failures: telemetry.reconnectAutoFailures,
+    },
+    reconnectRecoveryClicks: {
+      reclaim_clicked: telemetry.reclaimClicked,
+      quick_recover_clicked: telemetry.quickRecoverClicked,
     },
   });
 });
@@ -2037,20 +2081,47 @@ app.get('/api/ops/canary', (_req, res) => {
 });
 
 app.get('/api/ops/reconnect', (_req, res) => {
-  const totals = { attempts: 0, successes: 0, failures: 0 };
-  const byMode = { mafia: { attempts: 0, successes: 0, failures: 0 }, amongus: { attempts: 0, successes: 0, failures: 0 } };
+  const totals = {
+    attempts: 0,
+    successes: 0,
+    failures: 0,
+    reclaim_clicked: 0,
+    quick_recover_clicked: 0,
+  };
+  const byMode = {
+    mafia: {
+      attempts: 0,
+      successes: 0,
+      failures: 0,
+      reclaim_clicked: 0,
+      quick_recover_clicked: 0,
+    },
+    amongus: {
+      attempts: 0,
+      successes: 0,
+      failures: 0,
+      reclaim_clicked: 0,
+      quick_recover_clicked: 0,
+    },
+  };
 
   for (const telemetry of playRoomTelemetry.values()) {
     const mode = telemetry.mode === 'amongus' ? 'amongus' : 'mafia';
     const attempts = Number(telemetry.reconnectAutoAttempts || 0);
     const successes = Number(telemetry.reconnectAutoSuccesses || 0);
     const failures = Number(telemetry.reconnectAutoFailures || 0);
+    const reclaimClicked = Number(telemetry.reclaimClicked || 0);
+    const quickRecoverClicked = Number(telemetry.quickRecoverClicked || 0);
     totals.attempts += attempts;
     totals.successes += successes;
     totals.failures += failures;
+    totals.reclaim_clicked += reclaimClicked;
+    totals.quick_recover_clicked += quickRecoverClicked;
     byMode[mode].attempts += attempts;
     byMode[mode].successes += successes;
     byMode[mode].failures += failures;
+    byMode[mode].reclaim_clicked += reclaimClicked;
+    byMode[mode].quick_recover_clicked += quickRecoverClicked;
   }
 
   const toRate = (row) => (row.attempts ? Number((row.successes / row.attempts).toFixed(2)) : 0);

@@ -269,10 +269,22 @@ test('reconnect auto-reclaim telemetry is tracked in room discovery + ops endpoi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'failure' }),
     });
+    const reclaimClickRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, event: 'reclaim_clicked' }),
+    });
+    const quickRecoverClickRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, event: 'quick_recover_clicked' }),
+    });
 
     assert.equal((await attemptRes.json()).ok, true);
     assert.equal((await successRes.json()).ok, true);
     assert.equal((await failRes.json()).ok, true);
+    assert.equal((await reclaimClickRes.json()).ok, true);
+    assert.equal((await quickRecoverClickRes.json()).ok, true);
 
     const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
     const roomsData = await roomsRes.json();
@@ -281,7 +293,11 @@ test('reconnect auto-reclaim telemetry is tracked in room discovery + ops endpoi
     assert.equal(card.reconnectAuto.successes, 1);
     assert.equal(card.reconnectAuto.failures, 1);
     assert.equal(card.reconnectAuto.successRate, 1);
+    assert.equal(card.reconnectRecoveryClicks.reclaim_clicked, 1);
+    assert.equal(card.reconnectRecoveryClicks.quick_recover_clicked, 1);
     assert.equal(roomsData.summary.reconnectAuto.attempts, 1);
+    assert.equal(roomsData.summary.reconnectRecoveryClicks.reclaim_clicked, 1);
+    assert.equal(roomsData.summary.reconnectRecoveryClicks.quick_recover_clicked, 1);
 
     const opsRes = await fetch(`${url}/api/ops/reconnect`);
     const ops = await opsRes.json();
@@ -289,6 +305,10 @@ test('reconnect auto-reclaim telemetry is tracked in room discovery + ops endpoi
     assert.equal(ops.totals.attempts, 1);
     assert.equal(ops.totals.successes, 1);
     assert.equal(ops.totals.failures, 1);
+    assert.equal(ops.totals.reclaim_clicked, 1);
+    assert.equal(ops.totals.quick_recover_clicked, 1);
+    assert.equal(ops.byMode.mafia.reclaim_clicked, 1);
+    assert.equal(ops.byMode.mafia.quick_recover_clicked, 1);
     assert.equal(ops.byMode.mafia.successRate, 1);
 
     host.disconnect();
