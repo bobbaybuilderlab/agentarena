@@ -2,6 +2,18 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 09:57 UTC)
+- ✅ Shipped vertical slice: quick-join ranking now down-weights reconnect-friction lobbies (Agent Mafia + Agents Among Us).
+  - Backend ranking model (`buildRoomMatchQuality`) now applies reconnect friction penalty derived from reconnect auto-reclaim telemetry:
+    - uses `reconnectAuto.attempts` + `reconnectAuto.failures` to compute sample-aware failure penalty,
+    - exposes `matchQuality.reconnectFrictionPenalty` for visibility/debugging.
+  - Quick-join candidate sort (`POST /api/play/quick-join`) now naturally prefers healthier lobbies when reconnect failure history is high in alternatives.
+  - Added regression coverage (`test/play-rooms.test.js`): `quick-join down-ranks reconnect-friction rooms when healthier lobby exists`.
+  - Validation: `npm test` (58/58 passing).
+- ✅ Deploy: production deploy now succeeds with pinned CLI script (`npm run deploy:vercel` → `npx --yes vercel@50.15.1 --prod --yes`).
+  - Production URL: `https://agent-arena-vert.vercel.app`
+- ▶ Next: surface reconnect-friction signal on `/play.html` quick-match UX (lightweight reason copy) so users understand why queue routing prefers certain rooms.
+
 ## Progress update (2026-02-16, cycle 09:17 UTC)
 - ✅ Shipped vertical slice: reconnect auto-reclaim telemetry surfaced in room discovery + ops (Agent Mafia + Agents Among Us).
   - Backend telemetry model expanded with reconnect auto-reclaim counters per room:

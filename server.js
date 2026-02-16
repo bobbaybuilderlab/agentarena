@@ -1581,6 +1581,7 @@ function buildRoomLaunchReadiness(room) {
 
 function buildRoomMatchQuality(roomSummary) {
   const quickMatch = roomSummary.quickMatch || { tickets: 0, conversions: 0, conversionRate: 0 };
+  const reconnectAuto = roomSummary.reconnectAuto || { attempts: 0, failures: 0, successRate: 0 };
   const fillRate = Math.min(1, (roomSummary.players || 0) / 4);
   const nearStartBonus = roomSummary.players >= 3 ? 0.2 : 0;
   const conversionSignal = Math.min(1, Number(quickMatch.conversionRate || 0));
@@ -1588,7 +1589,13 @@ function buildRoomMatchQuality(roomSummary) {
   const hostSignal = roomSummary.launchReadiness?.hostConnected ? 1 : 0;
   const disconnectedPenalty = Math.min(0.2, Number(roomSummary.launchReadiness?.disconnectedCount || 0) * 0.05);
 
-  const score = Number(Math.max(0, ((fillRate * 0.45) + (conversionSignal * 0.2) + (rematchSignal * 0.15) + (hostSignal * 0.2) + nearStartBonus - disconnectedPenalty)).toFixed(2));
+  const reconnectAttempts = Math.max(0, Number(reconnectAuto.attempts || 0));
+  const reconnectFailures = Math.max(0, Number(reconnectAuto.failures || 0));
+  const reconnectFailureRate = reconnectAttempts ? reconnectFailures / reconnectAttempts : 0;
+  const reconnectSample = Math.min(1, reconnectAttempts / 3);
+  const reconnectFrictionPenalty = Number(Math.min(0.15, reconnectFailureRate * 0.15 * reconnectSample).toFixed(2));
+
+  const score = Number(Math.max(0, ((fillRate * 0.45) + (conversionSignal * 0.2) + (rematchSignal * 0.15) + (hostSignal * 0.2) + nearStartBonus - disconnectedPenalty - reconnectFrictionPenalty)).toFixed(2));
   return {
     score,
     hot: score >= 0.9,
@@ -1597,6 +1604,7 @@ function buildRoomMatchQuality(roomSummary) {
     rematchSignal,
     hostSignal,
     disconnectedPenalty: Number(disconnectedPenalty.toFixed(2)),
+    reconnectFrictionPenalty,
   };
 }
 

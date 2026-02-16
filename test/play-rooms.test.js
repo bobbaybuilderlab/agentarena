@@ -144,6 +144,66 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
   });
 });
 
+test('quick-join down-ranks reconnect-friction rooms when healthier lobby exists', async () => {
+  await withServer(async (url) => {
+    const riskyHost = ioc(url, { reconnection: false, autoUnref: true });
+    const healthyHost = ioc(url, { reconnection: false, autoUnref: true });
+    const p2 = ioc(url, { reconnection: false, autoUnref: true });
+    const p3 = ioc(url, { reconnection: false, autoUnref: true });
+
+    try {
+      const riskyRoom = await emitAck(riskyHost, 'mafia:room:create', { name: 'RiskyHost' });
+      const healthyRoom = await emitAck(healthyHost, 'mafia:room:create', { name: 'HealthyHost' });
+      assert.equal(riskyRoom.ok, true);
+      assert.equal(healthyRoom.ok, true);
+
+      await emitAck(p2, 'mafia:room:join', { roomId: riskyRoom.roomId, name: 'RiskyP2' });
+      await emitAck(p3, 'mafia:room:join', { roomId: healthyRoom.roomId, name: 'HealthyP2' });
+
+      seedPlayTelemetry('mafia', riskyRoom.roomId, {
+        quickMatchTickets: 12,
+        quickMatchConversions: 12,
+        reconnectAutoAttempts: 9,
+        reconnectAutoSuccesses: 1,
+        reconnectAutoFailures: 8,
+      });
+
+      seedPlayTelemetry('mafia', healthyRoom.roomId, {
+        quickMatchTickets: 4,
+        quickMatchConversions: 3,
+        reconnectAutoAttempts: 4,
+        reconnectAutoSuccesses: 4,
+        reconnectAutoFailures: 0,
+      });
+
+      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+      });
+      const quickJoinData = await quickJoinRes.json();
+
+      assert.equal(quickJoinData.ok, true);
+      assert.equal(quickJoinData.created, false);
+      assert.equal(quickJoinData.room.roomId, healthyRoom.roomId);
+
+      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+      const roomsData = await roomsRes.json();
+      const riskySummary = roomsData.rooms.find((r) => r.roomId === riskyRoom.roomId);
+      const healthySummary = roomsData.rooms.find((r) => r.roomId === healthyRoom.roomId);
+
+      assert.ok((riskySummary.matchQuality?.reconnectFrictionPenalty || 0) > 0);
+      assert.equal(healthySummary.matchQuality?.reconnectFrictionPenalty || 0, 0);
+      assert.ok((riskySummary.matchQuality?.score || 0) < (healthySummary.matchQuality?.score || 0));
+    } finally {
+      riskyHost.disconnect();
+      healthyHost.disconnect();
+      p2.disconnect();
+      p3.disconnect();
+    }
+  });
+});
+
 test('quick-join includes reconnect suggestion + claim token for disconnected lobby seats', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
