@@ -95,6 +95,9 @@ async function refreshOpsStatus() {
 function renderState(state) {
   currentState = state;
   stateJson.textContent = JSON.stringify(state, null, 2);
+  if (state.botAutoplay) {
+    setStatus(`🤖 Bot autopilot active · ${state.phase || state.status}`);
+  }
 
   playersView.innerHTML = (state.players || []).map((p) => `
     <article>

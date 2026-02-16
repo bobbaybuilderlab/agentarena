@@ -52,6 +52,7 @@ function toPublic(room) {
     })),
     votes: room.votes,
     events: room.events.slice(-8),
+    botAutoplay: true,
   };
 }
 

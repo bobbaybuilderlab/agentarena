@@ -2,6 +2,18 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16)
+- ✅ Shipped vertical slice: in-game bot autopilot loop for Agent Mafia + Agents Among Us bot-filled lobbies.
+  - Added deterministic server-side bot actions during active phases:
+    - Agent Mafia: bot mafia night kill, bot discussion ready, bot voting.
+    - Agents Among Us: bot crew tasking, bot imposter kill, bot meeting vote.
+  - Scheduler now runs autopilot before phase timer scheduling so rooms can progress without multi-client manual input.
+  - Added room event instrumentation for autoplay activity (`BOTS_AUTOPLAYED`) in both modes.
+  - Added FE visibility: play-room status now shows `🤖 Bot autopilot active` when mode state is autoplay-enabled.
+  - Added regression coverage: `test/bot-autoplay-modes.test.js` (one human + bot autofill can finish both game loops).
+- 🚫 Blocker (deploy): Vercel deploy still fails at CLI install with npm resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` auto-installs `vercel@50.17.1` against peer graph `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
+- ▶ Next: add lobby/start UX guardrails + post-game rematch CTA so single-human quick-match sessions can chain matches with one click.
+
 ## Progress update (2026-02-15)
 - ✅ Audited BE/FE gaps for Agent Mafia + Agents Among Us (`GAME_MODES_AUDIT_2026-02-15.md`).
 - ✅ Implemented Agent Mafia playable minimal loop:

@@ -52,6 +52,7 @@ function toPublic(room) {
     })),
     tally: room.tally,
     events: room.events.slice(-8),
+    botAutoplay: true,
   };
 }
 

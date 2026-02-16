@@ -439,7 +439,110 @@ function emitAmongUsRoom(room) {
   io.to(`amongus:${room.id}`).emit('amongus:state', amongUsGame.toPublic(room));
 }
 
+function pickDeterministicTarget(players, actorId) {
+  return players
+    .filter((p) => p.alive && p.id !== actorId)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+}
+
+function runMafiaBotAutoplay(room) {
+  if (!room || room.status !== 'in_progress') return { acted: 0 };
+  let acted = 0;
+
+  if (room.phase === 'night') {
+    const mafiaBots = room.players.filter((p) => p.alive && p.role === 'mafia' && p.isBot);
+    for (const bot of mafiaBots) {
+      if (room.actions?.night?.[bot.id]) continue;
+      const target = room.players
+        .filter((p) => p.alive && p.id !== bot.id && p.role !== 'mafia')
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+      if (!target) continue;
+      const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'nightKill', targetId: target.id });
+      if (!result.ok) continue;
+      acted += 1;
+      if (room.status !== 'in_progress') break;
+    }
+  }
+
+  if (room.status === 'in_progress' && room.phase === 'discussion') {
+    const readyBots = room.players.filter((p) => p.alive && p.isBot);
+    for (const bot of readyBots) {
+      const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'ready' });
+      if (result.ok) acted += 1;
+      if (room.phase !== 'discussion') break;
+    }
+  }
+
+  if (room.status === 'in_progress' && room.phase === 'voting') {
+    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+    for (const bot of aliveBots) {
+      if (room.actions?.vote?.[bot.id]) continue;
+      const target = pickDeterministicTarget(room.players, bot.id);
+      if (!target) continue;
+      const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'vote', targetId: target.id });
+      if (result.ok) acted += 1;
+      if (room.phase !== 'voting' || room.status !== 'in_progress') break;
+    }
+  }
+
+  if (acted > 0) {
+    logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
+  }
+  return { acted };
+}
+
+function runAmongUsBotAutoplay(room) {
+  if (!room || room.status !== 'in_progress') return { acted: 0 };
+  let acted = 0;
+
+  if (room.phase === 'tasks') {
+    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+    for (const bot of aliveBots) {
+      if (room.phase !== 'tasks' || room.status !== 'in_progress') break;
+
+      if (bot.role === 'crew' && bot.tasksDone < room.tasksToWin) {
+        const taskResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'task' });
+        if (taskResult.ok) acted += 1;
+        continue;
+      }
+
+      if (bot.role === 'imposter') {
+        const target = room.players
+          .filter((p) => p.alive && p.role === 'crew')
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+        if (!target) continue;
+        const killResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'kill', targetId: target.id });
+        if (killResult.ok) acted += 1;
+      }
+    }
+  }
+
+  if (room.status === 'in_progress' && room.phase === 'meeting') {
+    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+    for (const bot of aliveBots) {
+      if (room.phase !== 'meeting' || room.status !== 'in_progress') break;
+      if (room.votes?.[bot.id]) continue;
+      const target = pickDeterministicTarget(room.players, bot.id);
+      if (!target) continue;
+      const voteResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'vote', targetId: target.id });
+      if (voteResult.ok) acted += 1;
+    }
+  }
+
+  if (acted > 0) {
+    logRoomEvent('amongus', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, status: room.status });
+  }
+  return { acted };
+}
+
 function scheduleMafiaPhase(room) {
+  if (room.status !== 'in_progress') {
+    roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  const auto = runMafiaBotAutoplay(room);
+  if (auto.acted > 0) emitMafiaRoom(room);
   if (room.status !== 'in_progress') {
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
     return;
@@ -459,6 +562,13 @@ function scheduleMafiaPhase(room) {
 }
 
 function scheduleAmongUsPhase(room) {
+  if (room.status !== 'in_progress') {
+    roomScheduler.clear({ namespace: 'amongus', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  const auto = runAmongUsBotAutoplay(room);
+  if (auto.acted > 0) emitAmongUsRoom(room);
   if (room.status !== 'in_progress') {
     roomScheduler.clear({ namespace: 'amongus', roomId: room.id, slot: 'phase' });
     return;
