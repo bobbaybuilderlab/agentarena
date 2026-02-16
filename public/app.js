@@ -183,10 +183,15 @@ async function loadLiveRooms() {
       const winners = (room.recentWinners || []).map((w) => w.winnerName).join(' → ') || 'none yet';
       const q = room.quickMatch || {};
       const quality = room.matchQuality || {};
+      const launch = room.launchReadiness || {};
+      const launchLine = launch.hostConnected
+        ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
+        : '⚠️ Host offline · room may stall until host reconnects';
       return `
       <article>
         <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
         <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
+        <p>${launchLine}</p>
         <p>Rematches: ${room.rematchCount || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">

@@ -2,6 +2,22 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 04:42 UTC)
+- ✅ Shipped vertical slice: launch-readiness aware room discovery + quick-match ranking hardening (Agent Mafia + Agents Among Us).
+  - Added server-side `launchReadiness` summary on `/api/play/rooms` cards:
+    - `hostConnected`, `canHostStartReady`, `botsNeededForReady`, disconnected-human details.
+  - Updated room `matchQuality` scoring to factor host-online signal and disconnected-lobby penalty.
+  - Quick-join routing now naturally de-prioritizes host-offline lobbies when host-online alternatives exist.
+  - Updated homepage room cards (`public/app.js` + `frontend/app.js`) with explicit launch line:
+    - `Host online · start-ready ✅/⏳ · bots needed: N`
+    - or host-offline warning to avoid dead-end joins.
+  - Added regression coverage in `test/play-rooms.test.js`:
+    - verifies readiness payload shape,
+    - verifies quick-join prefers host-online lobby over host-offline lobby.
+  - Validation: `npm test` (54/54 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI install with npm resolver conflict (`ERESOLVE`) while auto-installing `vercel@50.17.1` (peer graph conflict around `@vercel/backends@0.0.33` / existing `vercel@50.15.1`).
+- ▶ Next: ship lobby reconnect claim UX (host reclaim + disconnected-human claim by name) so host-offline warnings convert back to startable rooms faster.
+
 ## Progress update (2026-02-16)
 - ✅ Shipped vertical slice: one-click lobby `Start Ready` flow (Agent Mafia + Agents Among Us) with explicit readiness context + auto-recovery.
   - Added host-only socket events:

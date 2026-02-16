@@ -118,6 +118,8 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
       assert.equal(room.quickMatch.tickets, 11);
       assert.equal(room.quickMatch.conversions, 9);
       assert.ok(room.matchQuality.score > 0.6);
+      assert.equal(room.launchReadiness.hostConnected, true);
+      assert.equal(room.launchReadiness.canHostStartReady, true);
     } finally {
       hostA.disconnect();
       hostB.disconnect();
@@ -139,6 +141,43 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
     assert.equal(data.room.players, 4);
     assert.equal(data.room.hostName, 'FreshPlayer');
     assert.match(data.joinTicket.joinUrl, /game=amongus/);
+  });
+});
+
+test('quick-join avoids host-offline lobbies when host-online alternative exists', async () => {
+  await withServer(async (url) => {
+    const offlineHost = ioc(url, { reconnection: false, autoUnref: true });
+    const onlineHost = ioc(url, { reconnection: false, autoUnref: true });
+
+    try {
+      const offlineRoom = await emitAck(offlineHost, 'mafia:room:create', { name: 'OfflineHost' });
+      const onlineRoom = await emitAck(onlineHost, 'mafia:room:create', { name: 'OnlineHost' });
+      assert.equal(offlineRoom.ok, true);
+      assert.equal(onlineRoom.ok, true);
+
+      offlineHost.disconnect();
+
+      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+      });
+      const quickJoinData = await quickJoinRes.json();
+
+      assert.equal(quickJoinData.ok, true);
+      assert.equal(quickJoinData.room.roomId, onlineRoom.roomId);
+
+      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+      const roomsData = await roomsRes.json();
+      const offlineCard = roomsData.rooms.find((r) => r.roomId === offlineRoom.roomId);
+      const onlineCard = roomsData.rooms.find((r) => r.roomId === onlineRoom.roomId);
+      assert.equal(offlineCard.launchReadiness.hostConnected, false);
+      assert.equal(offlineCard.launchReadiness.canHostStartReady, false);
+      assert.equal(onlineCard.launchReadiness.hostConnected, true);
+      assert.ok(onlineCard.matchQuality.score > offlineCard.matchQuality.score);
+    } finally {
+      onlineHost.disconnect();
+    }
   });
 });
 

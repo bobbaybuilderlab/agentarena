@@ -1477,20 +1477,45 @@ app.get('/api/leaderboard', (_req, res) => {
   res.json({ ok: true, topAgents, topRoasts });
 });
 
+function buildRoomLaunchReadiness(room) {
+  const players = Array.isArray(room?.players) ? room.players : [];
+  const hostPlayerId = room?.hostPlayerId || null;
+  const host = players.find((p) => p.id === hostPlayerId) || players[0] || null;
+  const connectedHumans = players.filter((p) => !p.isBot && p.isConnected).length;
+  const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
+  const missingPlayers = Math.max(0, QUICK_JOIN_MIN_PLAYERS - players.length);
+  const canHostStartReady = room?.status === 'lobby' && Boolean(host?.isConnected);
+
+  return {
+    hostConnected: Boolean(host?.isConnected),
+    hostName: host?.name || 'Host',
+    connectedHumans,
+    disconnectedHumans: disconnectedHumans.map((p) => ({ id: p.id, name: p.name })),
+    disconnectedCount: disconnectedHumans.length,
+    missingPlayers,
+    botsNeededForReady: missingPlayers,
+    canHostStartReady,
+  };
+}
+
 function buildRoomMatchQuality(roomSummary) {
   const quickMatch = roomSummary.quickMatch || { tickets: 0, conversions: 0, conversionRate: 0 };
   const fillRate = Math.min(1, (roomSummary.players || 0) / 4);
   const nearStartBonus = roomSummary.players >= 3 ? 0.2 : 0;
   const conversionSignal = Math.min(1, Number(quickMatch.conversionRate || 0));
   const rematchSignal = Math.min(1, Number(roomSummary.rematchCount || 0) / 3);
+  const hostSignal = roomSummary.launchReadiness?.hostConnected ? 1 : 0;
+  const disconnectedPenalty = Math.min(0.2, Number(roomSummary.launchReadiness?.disconnectedCount || 0) * 0.05);
 
-  const score = Number(((fillRate * 0.55) + (conversionSignal * 0.25) + (rematchSignal * 0.2) + nearStartBonus).toFixed(2));
+  const score = Number(Math.max(0, ((fillRate * 0.45) + (conversionSignal * 0.2) + (rematchSignal * 0.15) + (hostSignal * 0.2) + nearStartBonus - disconnectedPenalty)).toFixed(2));
   return {
     score,
     hot: score >= 0.9,
     fillRate: Number(fillRate.toFixed(2)),
     conversionSignal,
     rematchSignal,
+    hostSignal,
+    disconnectedPenalty: Number(disconnectedPenalty.toFixed(2)),
   };
 }
 
@@ -1509,6 +1534,7 @@ function summarizePlayableRoom(mode, room) {
       ? Number((telemetry.quickMatchConversions / telemetry.quickMatchTickets).toFixed(2))
       : 0,
   };
+  const launchReadiness = buildRoomLaunchReadiness(room);
 
   const summary = {
     mode,
@@ -1517,12 +1543,14 @@ function summarizePlayableRoom(mode, room) {
     phase,
     players: players.length,
     alivePlayers,
-    hostName: players[0]?.name || 'Host',
+    hostPlayerId: room.hostPlayerId || null,
+    hostName: launchReadiness.hostName,
     createdAt: room.createdAt || Date.now(),
     canJoin,
     rematchCount: telemetry.rematchCount,
     quickMatch,
     recentWinners: telemetry.recentWinners,
+    launchReadiness,
   };
 
   const quality = buildRoomMatchQuality(summary);
