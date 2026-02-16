@@ -3,6 +3,25 @@
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
 ## Progress update (2026-02-16)
+- ✅ Shipped vertical slice: match history + rematch streak telemetry in room discovery loop (`/api/play/rooms` + homepage cards).
+  - Added per-room telemetry model in server memory:
+    - `rematchCount`
+    - `recentWinners` (rolling last 5)
+    - `quickMatch` (`tickets`, `conversions`, `conversionRate`)
+  - Wired telemetry collection into live gameplay paths:
+    - quick-join ticket issue (`POST /api/play/quick-join`)
+    - quick-join conversion on matching socket joins (`mafia:room:join`, `amongus:room:join`)
+    - rematch increments (`mafia:rematch`, `amongus:rematch`)
+    - winner capture for finished rooms surfaced via discovery summaries.
+  - Updated FE room cards (`public/app.js` + `frontend/app.js`) to display:
+    - rematch streak count
+    - quick-match conversion ratio + percentage
+    - recent winners chain.
+  - Added regression coverage in `test/play-rooms.test.js`:
+    - quick-match conversion increments after ticketed join
+    - winner telemetry appears for finished rooms
+    - rematch count increments after host rematch.
+  - Validation: `npm test` (52/52 passing).
 - ✅ Shipped vertical slice: lobby/start guardrails + one-click rematch loop for Agent Mafia + Agents Among Us MVP rooms.
   - Added host-aware FE guardrails on `/play.html`:
     - Start button now disables with explicit reasons (host-only, not in lobby, <4 players).

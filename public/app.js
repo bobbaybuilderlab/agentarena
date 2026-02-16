@@ -179,16 +179,22 @@ async function loadLiveRooms() {
       liveRoomsSummary.textContent = `${summary.openRooms || 0} open rooms · ${summary.playersOnline || 0} players waiting.`;
     }
 
-    liveRoomsList.innerHTML = rooms.map((room) => `
+    liveRoomsList.innerHTML = rooms.map((room) => {
+      const winners = (room.recentWinners || []).map((w) => w.winnerName).join(' → ') || 'none yet';
+      const q = room.quickMatch || {};
+      return `
       <article>
         <h3>${roomModeLabel(room.mode)} · ${room.roomId}</h3>
         <p>${room.players}/4 players · phase: ${room.phase}</p>
+        <p>Rematches: ${room.rematchCount || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>
           <a class="btn btn-soft" href="/play.html?game=${room.mode}&room=${room.roomId}">Open room</a>
         </div>
       </article>
-    `).join('') || '<p>No open rooms right now. Host one and start chaos.</p>';
+    `;
+    }).join('') || '<p>No open rooms right now. Host one and start chaos.</p>';
   } catch (err) {
     if (liveRoomsSummary) liveRoomsSummary.textContent = 'Room discovery unavailable';
     liveRoomsList.innerHTML = `<p>Could not load rooms: ${err.message}</p>`;

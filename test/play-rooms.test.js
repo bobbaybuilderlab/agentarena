@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers } = require('../server');
+const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -12,6 +12,7 @@ async function withServer(fn) {
   mafiaRooms.clear();
   amongUsRooms.clear();
   roomEvents.clear();
+  resetPlayTelemetry();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
   const url = `http://127.0.0.1:${port}`;
@@ -97,8 +98,19 @@ test('quick-join API picks fullest open room or creates one with join ticket', a
     assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${created.roomId}`));
     assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
 
+    const runner = ioc(url, { reconnection: false, autoUnref: true });
+    const joined = await emitAck(runner, 'mafia:room:join', { roomId: created.roomId, name: 'QueueRunner' });
+    assert.equal(joined.ok, true);
+
+    const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+    const roomsData = await roomsRes.json();
+    const room = roomsData.rooms.find((r) => r.roomId === created.roomId);
+    assert.equal(room.quickMatch.tickets, 1);
+    assert.equal(room.quickMatch.conversions, 1);
+
     host.disconnect();
     p2.disconnect();
+    runner.disconnect();
   });
 
   await withServer(async (url) => {
@@ -114,6 +126,27 @@ test('quick-join API picks fullest open room or creates one with join ticket', a
     assert.equal(data.room.players, 4);
     assert.equal(data.room.hostName, 'FreshPlayer');
     assert.match(data.joinTicket.joinUrl, /game=amongus/);
+  });
+});
+
+test('rooms API surfaces recent winners telemetry for finished rooms', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+    assert.equal(created.ok, true);
+
+    const room = mafiaRooms.get(created.roomId);
+    room.status = 'finished';
+    room.phase = 'finished';
+    room.winner = 'town';
+
+    const res = await fetch(`${url}/api/play/rooms?mode=mafia`);
+    const data = await res.json();
+    const card = data.rooms.find((r) => r.roomId === created.roomId);
+    assert.equal(card.recentWinners.length, 1);
+    assert.equal(card.recentWinners[0].winner, 'town');
+
+    host.disconnect();
   });
 });
 
@@ -169,6 +202,11 @@ test('finished rooms support one-click rematch for host in both modes', async ()
     assert.equal(mafiaRematch.state.status, 'in_progress');
     assert.ok(['night', 'discussion', 'voting'].includes(mafiaRematch.state.phase));
     assert.equal(mafiaRematch.state.players.length, 4);
+
+    const mafiaAfterRematch = await fetch(`${url}/api/play/rooms?mode=mafia`);
+    const mafiaAfterRematchData = await mafiaAfterRematch.json();
+    const mafiaCard = mafiaAfterRematchData.rooms.find((r) => r.roomId === mafiaCreated.roomId);
+    assert.equal(mafiaCard.rematchCount, 1);
 
     const amongHost = ioc(url, { reconnection: false, autoUnref: true });
     const amongGuest = ioc(url, { reconnection: false, autoUnref: true });

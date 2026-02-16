@@ -73,6 +73,8 @@ const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
 const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
+const playRoomTelemetry = new Map();
+const pendingQuickJoinTickets = new Map();
 const arenaCanary = createCanaryMode({
   enabled: process.env.ARENA_CANARY_ENABLED !== '0',
   percent: Number(process.env.ARENA_CANARY_PERCENT || 0),
@@ -80,6 +82,68 @@ const arenaCanary = createCanaryMode({
 
 function clearAllGameTimers() {
   roomScheduler.clearAll();
+}
+
+function telemetryKey(mode, roomId) {
+  return `${mode}:${String(roomId || '').toUpperCase()}`;
+}
+
+function getRoomTelemetry(mode, roomId) {
+  const key = telemetryKey(mode, roomId);
+  if (!playRoomTelemetry.has(key)) {
+    playRoomTelemetry.set(key, {
+      mode,
+      roomId: String(roomId || '').toUpperCase(),
+      rematchCount: 0,
+      recentWinners: [],
+      quickMatchTickets: 0,
+      quickMatchConversions: 0,
+      updatedAt: Date.now(),
+    });
+  }
+  return playRoomTelemetry.get(key);
+}
+
+function recordRoomWinner(mode, room) {
+  if (!room?.id || !room?.winner || room.status !== 'finished') return;
+  const telemetry = getRoomTelemetry(mode, room.id);
+  const winnerName = room.players?.find((p) => p.role === room.winner)?.name || room.winner;
+  const latest = telemetry.recentWinners[telemetry.recentWinners.length - 1];
+  if (latest && latest.winner === room.winner && Date.now() - latest.at < 1_000) return;
+  telemetry.recentWinners.push({ winner: room.winner, winnerName, at: Date.now() });
+  telemetry.recentWinners = telemetry.recentWinners.slice(-5);
+  telemetry.updatedAt = Date.now();
+}
+
+function recordRematch(mode, roomId) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  telemetry.rematchCount += 1;
+  telemetry.updatedAt = Date.now();
+}
+
+function quickJoinTicketKey(mode, roomId, name) {
+  return `${telemetryKey(mode, roomId)}:${String(name || '').trim().toLowerCase()}`;
+}
+
+function issueQuickJoinTicket(mode, roomId, name) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  telemetry.quickMatchTickets += 1;
+  telemetry.updatedAt = Date.now();
+  pendingQuickJoinTickets.set(quickJoinTicketKey(mode, roomId, name), Date.now());
+}
+
+function recordQuickJoinConversion(mode, roomId, name) {
+  const key = quickJoinTicketKey(mode, roomId, name);
+  if (!pendingQuickJoinTickets.has(key)) return;
+  pendingQuickJoinTickets.delete(key);
+  const telemetry = getRoomTelemetry(mode, roomId);
+  telemetry.quickMatchConversions += 1;
+  telemetry.updatedAt = Date.now();
+}
+
+function resetPlayTelemetry() {
+  playRoomTelemetry.clear();
+  pendingQuickJoinTickets.clear();
 }
 
 const ROOM_TRANSITIONS = {
@@ -616,6 +680,7 @@ io.on('connection', (socket) => {
     const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`mafia:${joined.room.id}`);
+    recordQuickJoinConversion('mafia', joined.room.id, joined.player.name);
     logRoomEvent('mafia', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitMafiaRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
@@ -645,6 +710,7 @@ io.on('connection', (socket) => {
     if (!reset.ok) return cb?.(reset);
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
+    recordRematch('mafia', started.room.id);
     logRoomEvent('mafia', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
     emitMafiaRoom(started.room);
     scheduleMafiaPhase(started.room);
@@ -654,6 +720,7 @@ io.on('connection', (socket) => {
   socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
+    recordRoomWinner('mafia', result.room);
     logRoomEvent('mafia', result.room, 'ACTION_SUBMITTED', {
       actorId: playerId,
       action: type,
@@ -681,6 +748,7 @@ io.on('connection', (socket) => {
     const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`amongus:${joined.room.id}`);
+    recordQuickJoinConversion('amongus', joined.room.id, joined.player.name);
     logRoomEvent('amongus', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitAmongUsRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: amongUsGame.toPublic(joined.room) });
@@ -710,6 +778,7 @@ io.on('connection', (socket) => {
     if (!reset.ok) return cb?.(reset);
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
+    recordRematch('amongus', started.room.id);
     logRoomEvent('amongus', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase });
     emitAmongUsRoom(started.room);
     scheduleAmongUsPhase(started.room);
@@ -719,6 +788,7 @@ io.on('connection', (socket) => {
   socket.on('amongus:action', ({ roomId, playerId, type, targetId }, cb) => {
     const result = amongUsGame.submitAction(amongUsRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
+    recordRoomWinner('amongus', result.room);
     logRoomEvent('amongus', result.room, 'ACTION_SUBMITTED', {
       actorId: playerId,
       action: type,
@@ -1387,6 +1457,8 @@ function summarizePlayableRoom(mode, room) {
   const status = String(room?.status || 'lobby');
   const phase = String(room?.phase || (status === 'lobby' ? 'lobby' : 'unknown'));
   const canJoin = status === 'lobby' && players.length < 8;
+  if (status === 'finished' && room?.winner) recordRoomWinner(mode, room);
+  const telemetry = getRoomTelemetry(mode, room.id);
   return {
     mode,
     roomId: room.id,
@@ -1397,6 +1469,15 @@ function summarizePlayableRoom(mode, room) {
     hostName: players[0]?.name || 'Host',
     createdAt: room.createdAt || Date.now(),
     canJoin,
+    rematchCount: telemetry.rematchCount,
+    quickMatch: {
+      tickets: telemetry.quickMatchTickets,
+      conversions: telemetry.quickMatchConversions,
+      conversionRate: telemetry.quickMatchTickets
+        ? Number((telemetry.quickMatchConversions / telemetry.quickMatchTickets).toFixed(2))
+        : 0,
+    },
+    recentWinners: telemetry.recentWinners,
   };
 }
 
@@ -1525,7 +1606,8 @@ app.post('/api/play/quick-join', (req, res) => {
     issuedAt: Date.now(),
   };
 
-  res.json({ ok: true, created, room: targetRoom, joinTicket });
+  issueQuickJoinTicket(targetRoom.mode, targetRoom.roomId, playerName);
+  res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, (targetRoom.mode === 'mafia' ? mafiaRooms : amongUsRooms).get(targetRoom.roomId)), joinTicket });
 });
 
 app.post('/api/play/lobby/autofill', (req, res) => {
@@ -1670,4 +1752,5 @@ module.exports = {
   roomEvents,
   arenaCanary,
   clearAllGameTimers,
+  resetPlayTelemetry,
 };
