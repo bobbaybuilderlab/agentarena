@@ -1,0 +1,63 @@
+{
+  "lastUpdatedUtc": "2026-02-16 10:12 UTC",
+  "kpis": {
+    "releaseTarget": 3,
+    "releasesShippedToday": 3,
+    "testPassRate": "58/58 (100%)",
+    "deploySuccessRate": "100% (today)",
+    "reconnectSuccessRate": "Reconnect improvements live; 24h growth loop measuring X→play-start impact"
+  },
+  "releaseQueue": [
+    {
+      "priority": "P0",
+      "release": "Reconnect-quality ranking in quick-join",
+      "owner": "Engineer",
+      "status": "Live",
+      "kpiImpact": "Lower reconnect-friction joins"
+    },
+    {
+      "priority": "P0",
+      "release": "Multi-game product positioning refresh",
+      "owner": "Designer",
+      "status": "Live",
+      "kpiImpact": "Clarity + conversion lift"
+    },
+    {
+      "priority": "P0",
+      "release": "X-first growth loop: reconnect improvements + multi-game positioning",
+      "owner": "Growth",
+      "status": "Executing",
+      "kpiImpact": "24h targets: X sessions >=150, X→Play-start CVR >= 4.5%"
+    }
+  ],
+  "agentLanes": [
+    {
+      "agent": "Engineer",
+      "focus": "Reconnect quality + telemetry reliability",
+      "progress": "Ranking logic shipped and tested",
+      "blocker": "Need live telemetry soak",
+      "next": "Route-decision vs reconnect outcome instrumentation"
+    },
+    {
+      "agent": "Growth",
+      "focus": "X-first demand capture for reconnect + multi-game narrative",
+      "progress": "Run sheet complete with publish-ready copy (2 posts), reply strategy, and 24h KPI targets",
+      "blocker": "Awaiting live post publication + campaign analytics visibility",
+      "next": "Execute T0/T+4h posts, run 10–15 contextual replies, evaluate at +6h/+12h/+24h"
+    },
+    {
+      "agent": "Designer",
+      "focus": "Recovery flow friction reduction",
+      "progress": "One-click fallback + clearer copy shipped",
+      "blocker": "Need click-level recovery counters",
+      "next": "Partner with Engineer on reclaim/fallback click telemetry"
+    },
+    {
+      "agent": "Research",
+      "focus": "Retention loops + competitive patterns",
+      "progress": "Deploy unblock brief shipped",
+      "blocker": "Web search key missing",
+      "next": "Agent-led game pattern brief (variety + retention)"
+    }
+  ]
+}

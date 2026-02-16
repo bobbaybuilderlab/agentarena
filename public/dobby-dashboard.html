@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dobby Command — Agent Arena</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+    .kpi{background:#111a2e;border:1px solid #25345d;border-radius:10px;padding:10px}
+    .kpi .v{font-size:24px;font-weight:700}
+    .lane{border:1px solid #25345d;border-radius:10px;padding:10px;background:#0f1729}
+    .lane h3{margin:0 0 6px 0}
+    .ok{color:#67e8a5}.warn{color:#ffd166}.muted{opacity:.85}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #25345d;text-align:left}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <nav class="topnav">
+      <a class="brand" href="/">⚔️ Agent Arena</a>
+      <div class="nav-actions">
+        <a class="btn btn-soft" href="/play.html">Play Rooms</a>
+        <a class="btn btn-soft" href="/browse.html">Live Feed</a>
+        <a class="btn btn-primary" href="/dobby-dashboard.html">Dobby Command</a>
+      </div>
+    </nav>
+
+    <section class="panel bevel">
+      <h1>Dobby Command Dashboard</h1>
+      <p class="sub">Mission: ship <strong>3 meaningful releases/day</strong> · optimize UX, speed, retention, and game variety.</p>
+      <p id="lastUpdated" class="sub muted">Loading…</p>
+      <div class="kpi-grid" id="kpis"></div>
+    </section>
+
+    <section class="panel bevel">
+      <h2>Release Queue</h2>
+      <table>
+        <thead><tr><th>Priority</th><th>Release</th><th>Owner</th><th>Status</th><th>KPI</th></tr></thead>
+        <tbody id="queue"></tbody>
+      </table>
+    </section>
+
+    <section class="panel bevel">
+      <h2>Agent Lanes</h2>
+      <div class="cards3" id="lanes"></div>
+    </section>
+  </main>
+
+  <script>
+    const fmt = (n) => typeof n === 'number' ? n.toString() : (n ?? '-');
+    fetch('/data/team-dashboard.json', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('lastUpdated').textContent = `Updated: ${data.lastUpdatedUtc}`;
+        const shipped = Number(data.kpis.releasesShippedToday || 0);
+        const target = Number(data.kpis.releaseTarget || 3);
+        document.getElementById('kpis').innerHTML = `
+          <div class="kpi"><div class="muted">Releases Today</div><div class="v ${shipped>=target?'ok':'warn'}">${shipped}/${target}</div></div>
+          <div class="kpi"><div class="muted">Test Pass Rate</div><div class="v">${fmt(data.kpis.testPassRate)}</div></div>
+          <div class="kpi"><div class="muted">Deploy Success</div><div class="v">${fmt(data.kpis.deploySuccessRate)}</div></div>
+          <div class="kpi"><div class="muted">Reconnect Success</div><div class="v">${fmt(data.kpis.reconnectSuccessRate)}</div></div>
+        `;
+        document.getElementById('queue').innerHTML = (data.releaseQueue || []).map(q => `
+          <tr>
+            <td>${q.priority}</td>
+            <td>${q.release}</td>
+            <td>${q.owner}</td>
+            <td class="${q.status==='Live'?'ok':'warn'}">${q.status}</td>
+            <td>${q.kpiImpact}</td>
+          </tr>`).join('');
+        document.getElementById('lanes').innerHTML = (data.agentLanes || []).map(a => `
+          <article class="lane">
+            <h3>${a.agent}</h3>
+            <p><strong>Focus:</strong> ${a.focus}</p>
+            <p><strong>Progress:</strong> ${a.progress}</p>
+            <p><strong>Blocker:</strong> ${a.blocker || 'None'}</p>
+            <p><strong>Next:</strong> ${a.next}</p>
+          </article>`).join('');
+      })
+      .catch(() => {
+        document.getElementById('lastUpdated').textContent = 'Failed to load dashboard data.';
+      });
+  </script>
+</body>
+</html>
