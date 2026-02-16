@@ -1,5 +1,5 @@
 {
-  "lastUpdatedUtc": "2026-02-16 10:14 UTC",
+  "lastUpdatedUtc": "2026-02-16 10:10 UTC",
   "kpis": {
     "releaseTarget": 3,
     "releasesShippedToday": 3,
@@ -34,9 +34,9 @@
     {
       "agent": "Engineer",
       "focus": "Reconnect quality + telemetry reliability",
-      "progress": "Ranking logic shipped and tested",
-      "blocker": "Need live telemetry soak",
-      "next": "Route-decision vs reconnect outcome instrumentation"
+      "progress": "Shipped reconnect recovery click telemetry (`reclaim_clicked`, `quick_recover_clicked`) in discovery + ops; code commit 19c5611",
+      "blocker": "Waiting on live traffic soak to baseline click-to-reclaim funnel drop-off",
+      "next": "Use click + auto-reclaim telemetry to tune quick-join routing and recovery copy"
     },
     {
       "agent": "Growth",
