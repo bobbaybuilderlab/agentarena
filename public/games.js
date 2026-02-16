@@ -37,19 +37,27 @@ function parseQueryConfig() {
   const claimToken = params.get('claimToken');
   const autojoin = params.get('autojoin') === '1';
 
+  const normalizedQueryName = queryName ? String(queryName).trim().slice(0, 24) : '';
+  const normalizedReclaimName = reclaimName ? String(reclaimName).trim().slice(0, 24) : '';
+
   if (queryGame === 'mafia' || queryGame === 'amongus') {
     me.game = queryGame;
     if (gameMode) gameMode.value = queryGame;
   }
 
   if (queryRoom && roomIdInput) roomIdInput.value = String(queryRoom).trim().toUpperCase();
-  if (reclaimName && playerName) {
-    playerName.value = String(reclaimName).trim().slice(0, 24);
-  } else if (queryName && playerName) {
-    playerName.value = String(queryName).trim().slice(0, 24);
+  if (normalizedReclaimName && playerName) {
+    playerName.value = normalizedReclaimName;
+  } else if (normalizedQueryName && playerName) {
+    playerName.value = normalizedQueryName;
   }
 
-  return { autojoin, reclaimName: reclaimName ? String(reclaimName).trim().slice(0, 24) : '', claimToken: claimToken ? String(claimToken).trim() : '' };
+  return {
+    autojoin,
+    queryName: normalizedQueryName,
+    reclaimName: normalizedReclaimName,
+    claimToken: claimToken ? String(claimToken).trim() : '',
+  };
 }
 
 function emitAck(event, payload = {}) {
@@ -428,7 +436,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 async function autoJoinFromQuery() {
-  const { autojoin, reclaimName, claimToken } = parseQueryConfig();
+  const { autojoin, reclaimName, queryName, claimToken } = parseQueryConfig();
   if (!autojoin || attemptedAutoJoin) return;
   attemptedAutoJoin = true;
 
@@ -436,11 +444,34 @@ async function autoJoinFromQuery() {
   if (!roomId) return;
 
   me.game = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const fallbackName = queryName || `Player-${Math.floor(Math.random() * 999)}`;
+  const requestedName = playerName?.value?.trim() || fallbackName;
+
   const res = await emitAck(activeEvent('room:join'), {
     roomId,
-    name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+    name: requestedName,
     claimToken: claimToken || undefined,
   });
+
+  if (!res?.ok && claimToken) {
+    const retry = await emitAck(activeEvent('room:join'), {
+      roomId,
+      name: fallbackName,
+    });
+
+    if (retry?.ok) {
+      me.roomId = retry.roomId;
+      me.playerId = retry.playerId;
+      setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; pick a reconnect seat below if needed.`);
+      renderState(retry.state);
+      void loadClaimableSeats();
+      return;
+    }
+
+    setStatus(`Reconnect token failed. ${formatError(retry, `Quick-join failed for room ${roomId}`)}`);
+    void loadClaimableSeats();
+    return;
+  }
 
   if (!res?.ok) {
     setStatus(formatError(res, `Quick-join failed for room ${roomId}`));

@@ -2,6 +2,16 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 06:57 UTC)
+- ✅ Shipped vertical slice: quick-join reconnect fallback on `/play.html` when claim tokens are expired/used (Agent Mafia + Agents Among Us).
+  - Updated query parsing (`public/games.js`, mirrored `frontend/games.js`) to preserve both original quick-join name and reconnect suggestion name.
+  - Auto-join now attempts token-claim join first, then automatically retries a non-token lobby join with the original quick-match name if token-based claim fails.
+  - On fallback success, UI now keeps player inside the room and immediately prompts reconnect recovery (`Reconnect token expired/used...`) with claim seats auto-loaded.
+  - On fallback failure, UI now auto-loads claimable reconnect seats for the room and surfaces a clearer reconnect-token failure status, so users can reclaim without re-entering room id.
+  - Validation: `npm test` (56/56 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1` against peer graph conflict around `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
+- ▶ Next: add a dedicated in-room “Reclaim suggested seat” CTA that appears after fallback join and performs one-click reclaim using server-suggested seat metadata (no manual claim seat hunting).
+
 ## Progress update (2026-02-16, cycle 06:15 UTC)
 - ✅ Shipped vertical slice: quick-join reconnect handoff (suggested reclaim + claim token) for Agent Mafia + Agents Among Us.
   - Backend quick-join now inspects disconnected lobby seats and attaches reconnect metadata when joining an existing room:
