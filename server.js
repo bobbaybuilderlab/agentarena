@@ -96,6 +96,11 @@ function getRoomTelemetry(mode, roomId) {
       mode,
       roomId: String(roomId || '').toUpperCase(),
       rematchCount: 0,
+      partyStreakExtended: 0,
+      telemetryEvents: {
+        rematch_clicked: 0,
+        party_streak_extended: 0,
+      },
       recentWinners: [],
       quickMatchTickets: 0,
       quickMatchConversions: 0,
@@ -121,10 +126,21 @@ function recordRoomWinner(mode, room) {
   telemetry.updatedAt = Date.now();
 }
 
+function recordTelemetryEvent(mode, roomId, eventName) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  if (!telemetry.telemetryEvents || typeof telemetry.telemetryEvents !== 'object') {
+    telemetry.telemetryEvents = { rematch_clicked: 0, party_streak_extended: 0 };
+  }
+  telemetry.telemetryEvents[eventName] = Math.max(0, Number(telemetry.telemetryEvents[eventName] || 0)) + 1;
+  telemetry.updatedAt = Date.now();
+  return telemetry;
+}
+
 function recordRematch(mode, roomId) {
   const telemetry = getRoomTelemetry(mode, roomId);
   telemetry.rematchCount += 1;
   telemetry.updatedAt = Date.now();
+  return telemetry;
 }
 
 function quickJoinTicketKey(mode, roomId, name) {
@@ -225,6 +241,7 @@ function seedPlayTelemetry(mode, roomId, patch = {}) {
   if (!patch || typeof patch !== 'object') return telemetry;
 
   if (Number.isFinite(patch.rematchCount)) telemetry.rematchCount = Math.max(0, Number(patch.rematchCount));
+  if (Number.isFinite(patch.partyStreakExtended)) telemetry.partyStreakExtended = Math.max(0, Number(patch.partyStreakExtended));
   if (Number.isFinite(patch.quickMatchTickets)) telemetry.quickMatchTickets = Math.max(0, Number(patch.quickMatchTickets));
   if (Number.isFinite(patch.quickMatchConversions)) {
     telemetry.quickMatchConversions = Math.max(0, Number(patch.quickMatchConversions));
@@ -243,6 +260,12 @@ function seedPlayTelemetry(mode, roomId, patch = {}) {
   }
   if (Number.isFinite(patch.quickRecoverClicked)) {
     telemetry.quickRecoverClicked = Math.max(0, Number(patch.quickRecoverClicked));
+  }
+  if (patch.telemetryEvents && typeof patch.telemetryEvents === 'object') {
+    telemetry.telemetryEvents = {
+      rematch_clicked: Math.max(0, Number(patch.telemetryEvents.rematch_clicked || 0)),
+      party_streak_extended: Math.max(0, Number(patch.telemetryEvents.party_streak_extended || 0)),
+    };
   }
   if (Array.isArray(patch.recentWinners)) {
     telemetry.recentWinners = patch.recentWinners.slice(-5);
@@ -827,7 +850,13 @@ io.on('connection', (socket) => {
     if (!reset.ok) return cb?.(reset);
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
-    recordRematch('mafia', started.room.id);
+    const telemetry = recordRematch('mafia', started.room.id);
+    recordTelemetryEvent('mafia', started.room.id, 'rematch_clicked');
+    const partyStreak = Math.max(0, Number(started.room.partyStreak || 0));
+    if (partyStreak > 0) {
+      telemetry.partyStreakExtended = Math.max(0, Number(telemetry.partyStreakExtended || 0)) + 1;
+      recordTelemetryEvent('mafia', started.room.id, 'party_streak_extended');
+    }
     logRoomEvent('mafia', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
     emitMafiaRoom(started.room);
     scheduleMafiaPhase(started.room);
@@ -901,7 +930,13 @@ io.on('connection', (socket) => {
     if (!reset.ok) return cb?.(reset);
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
-    recordRematch('amongus', started.room.id);
+    const telemetry = recordRematch('amongus', started.room.id);
+    recordTelemetryEvent('amongus', started.room.id, 'rematch_clicked');
+    const partyStreak = Math.max(0, Number(started.room.partyStreak || 0));
+    if (partyStreak > 0) {
+      telemetry.partyStreakExtended = Math.max(0, Number(telemetry.partyStreakExtended || 0)) + 1;
+      recordTelemetryEvent('amongus', started.room.id, 'party_streak_extended');
+    }
     logRoomEvent('amongus', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase });
     emitAmongUsRoom(started.room);
     scheduleAmongUsPhase(started.room);
@@ -1656,6 +1691,8 @@ function summarizePlayableRoom(mode, room) {
   const summary = {
     mode,
     roomId: room.id,
+    partyChainId: room.partyChainId || null,
+    partyStreak: Math.max(0, Number(room.partyStreak || 0)),
     status,
     phase,
     players: players.length,
@@ -1665,6 +1702,10 @@ function summarizePlayableRoom(mode, room) {
     createdAt: room.createdAt || Date.now(),
     canJoin,
     rematchCount: telemetry.rematchCount,
+    telemetryEvents: {
+      rematch_clicked: Number(telemetry.telemetryEvents?.rematch_clicked || telemetry.rematchCount || 0),
+      party_streak_extended: Number(telemetry.telemetryEvents?.party_streak_extended || telemetry.partyStreakExtended || 0),
+    },
     quickMatch,
     reconnectAuto,
     reconnectRecoveryClicks,
@@ -1884,6 +1925,11 @@ app.get('/api/play/rooms', (req, res) => {
     totals.quick_recover_clicked += Number(room.reconnectRecoveryClicks?.quick_recover_clicked || 0);
     return totals;
   }, { reclaim_clicked: 0, quick_recover_clicked: 0 });
+  const telemetryEventTotals = roomsList.reduce((totals, room) => {
+    totals.rematch_clicked += Number(room.telemetryEvents?.rematch_clicked || 0);
+    totals.party_streak_extended += Number(room.telemetryEvents?.party_streak_extended || 0);
+    return totals;
+  }, { rematch_clicked: 0, party_streak_extended: 0 });
 
   const summary = {
     totalRooms: roomsList.length,
@@ -1900,6 +1946,7 @@ app.get('/api/play/rooms', (req, res) => {
         : 0,
     },
     reconnectRecoveryClicks: reconnectRecoveryClickTotals,
+    telemetryEvents: telemetryEventTotals,
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
@@ -2087,6 +2134,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
     failures: 0,
     reclaim_clicked: 0,
     quick_recover_clicked: 0,
+    rematch_clicked: 0,
+    party_streak_extended: 0,
   };
   const byMode = {
     mafia: {
@@ -2095,6 +2144,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
       failures: 0,
       reclaim_clicked: 0,
       quick_recover_clicked: 0,
+      rematch_clicked: 0,
+      party_streak_extended: 0,
     },
     amongus: {
       attempts: 0,
@@ -2102,6 +2153,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
       failures: 0,
       reclaim_clicked: 0,
       quick_recover_clicked: 0,
+      rematch_clicked: 0,
+      party_streak_extended: 0,
     },
   };
 
@@ -2112,16 +2165,22 @@ app.get('/api/ops/reconnect', (_req, res) => {
     const failures = Number(telemetry.reconnectAutoFailures || 0);
     const reclaimClicked = Number(telemetry.reclaimClicked || 0);
     const quickRecoverClicked = Number(telemetry.quickRecoverClicked || 0);
+    const rematchClicked = Number(telemetry.telemetryEvents?.rematch_clicked || telemetry.rematchCount || 0);
+    const partyStreakExtended = Number(telemetry.telemetryEvents?.party_streak_extended || telemetry.partyStreakExtended || 0);
     totals.attempts += attempts;
     totals.successes += successes;
     totals.failures += failures;
     totals.reclaim_clicked += reclaimClicked;
     totals.quick_recover_clicked += quickRecoverClicked;
+    totals.rematch_clicked += rematchClicked;
+    totals.party_streak_extended += partyStreakExtended;
     byMode[mode].attempts += attempts;
     byMode[mode].successes += successes;
     byMode[mode].failures += failures;
     byMode[mode].reclaim_clicked += reclaimClicked;
     byMode[mode].quick_recover_clicked += quickRecoverClicked;
+    byMode[mode].rematch_clicked += rematchClicked;
+    byMode[mode].party_streak_extended += partyStreakExtended;
   }
 
   const toRate = (row) => (row.attempts ? Number((row.successes / row.attempts).toFixed(2)) : 0);

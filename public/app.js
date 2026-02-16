@@ -235,7 +235,7 @@ async function loadLiveRooms() {
         <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
         <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
-        <p>Rematches: ${room.rematchCount || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Rematches: ${room.rematchCount || 0} · Party streak: ${room.partyStreak || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
         <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">

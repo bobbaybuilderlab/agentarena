@@ -499,6 +499,9 @@ test('finished rooms support one-click rematch for host in both modes', async ()
     const mafiaAfterRematchData = await mafiaAfterRematch.json();
     const mafiaCard = mafiaAfterRematchData.rooms.find((r) => r.roomId === mafiaCreated.roomId);
     assert.equal(mafiaCard.rematchCount, 1);
+    assert.equal(mafiaCard.partyStreak, 1);
+    assert.equal(mafiaCard.telemetryEvents.rematch_clicked, 1);
+    assert.equal(mafiaCard.telemetryEvents.party_streak_extended, 1);
 
     const amongHost = ioc(url, { reconnection: false, autoUnref: true });
     const amongGuest = ioc(url, { reconnection: false, autoUnref: true });
@@ -517,10 +520,62 @@ test('finished rooms support one-click rematch for host in both modes', async ()
     assert.equal(amongRematch.state.status, 'in_progress');
     assert.ok(['tasks', 'meeting'].includes(amongRematch.state.phase));
     assert.equal(amongRematch.state.players.length, 4);
+    assert.equal(amongRematch.state.partyStreak, 1);
+
+    const allRoomsRes = await fetch(`${url}/api/play/rooms`);
+    const allRoomsData = await allRoomsRes.json();
+    assert.equal(allRoomsData.summary.telemetryEvents.rematch_clicked, 2);
+    assert.equal(allRoomsData.summary.telemetryEvents.party_streak_extended, 2);
+
+    const opsRes = await fetch(`${url}/api/ops/reconnect`);
+    const opsData = await opsRes.json();
+    assert.equal(opsData.totals.rematch_clicked, 2);
+    assert.equal(opsData.totals.party_streak_extended, 2);
 
     host.disconnect();
     guest.disconnect();
     amongHost.disconnect();
     amongGuest.disconnect();
+  });
+});
+
+test('party streak persists across repeated rematches in same room party chain', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+
+    try {
+      const created = await emitAck(host, 'mafia:room:create', { name: 'StreakHost' });
+      assert.equal(created.ok, true);
+
+      await emitAck(host, 'mafia:autofill', { roomId: created.roomId, playerId: created.playerId, minPlayers: 4 });
+      await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
+
+      const room = mafiaRooms.get(created.roomId);
+      room.status = 'finished';
+      room.phase = 'finished';
+      const chainId = room.partyChainId;
+
+      const r1 = await emitAck(host, 'mafia:rematch', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(r1.ok, true);
+      assert.equal(r1.state.partyChainId, chainId);
+      assert.equal(r1.state.partyStreak, 1);
+
+      room.status = 'finished';
+      room.phase = 'finished';
+      const r2 = await emitAck(host, 'mafia:rematch', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(r2.ok, true);
+      assert.equal(r2.state.partyChainId, chainId);
+      assert.equal(r2.state.partyStreak, 2);
+
+      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+      const roomsData = await roomsRes.json();
+      const card = roomsData.rooms.find((x) => x.roomId === created.roomId);
+      assert.equal(card.partyChainId, chainId);
+      assert.equal(card.partyStreak, 2);
+      assert.equal(card.telemetryEvents.rematch_clicked, 2);
+      assert.equal(card.telemetryEvents.party_streak_extended, 2);
+    } finally {
+      host.disconnect();
+    }
   });
 });

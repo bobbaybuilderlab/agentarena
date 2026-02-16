@@ -38,6 +38,8 @@ function transitionRoomState(room, nextPhase, options = {}) {
 function toPublic(room) {
   return {
     id: room.id,
+    partyChainId: room.partyChainId,
+    partyStreak: room.partyStreak || 0,
     hostPlayerId: room.hostPlayerId,
     status: room.status,
     phase: room.phase,
@@ -72,6 +74,8 @@ function createRoom(store, { hostName, hostSocketId }) {
 
   const room = {
     id: shortId(6),
+    partyChainId: shortId(10),
+    partyStreak: 0,
     status: 'lobby',
     phase: 'lobby',
     hostPlayerId: host.id,
@@ -311,6 +315,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   if (room.hostPlayerId !== hostPlayerId) return { ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } };
   if (room.status !== 'finished') return { ok: false, error: { code: 'GAME_NOT_FINISHED', message: 'Rematch available after game ends' } };
 
+  room.partyStreak = Math.max(0, Number(room.partyStreak || 0)) + 1;
   room.status = 'lobby';
   room.phase = 'lobby';
   room.day = 0;
