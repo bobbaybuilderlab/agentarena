@@ -3,6 +3,14 @@
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
 ## Progress update (2026-02-16)
+- ✅ Shipped vertical slice: telemetry-aware quick-match routing + lobby fit score surfacing for Agent Mafia/Agents Among Us discovery.
+  - Added room-level match quality scoring (`matchQuality`) combining fill rate, quick-match conversion signal, and rematch momentum.
+  - `/api/play/rooms` now returns `matchQuality` + `hotLobby` flags per room card.
+  - `POST /api/play/quick-join` now ranks open-room candidates by fit score (then players, then recency) instead of raw player count only.
+  - Added test-only telemetry seeding helper (`seedPlayTelemetry`) to validate deterministic room-ranking behavior.
+  - Updated homepage room cards (`public/app.js` + `frontend/app.js`) to show fit score and hot-lobby badge (`🔥`) for higher-momentum rooms.
+  - Added/updated regression coverage in `test/play-rooms.test.js` for quality-weighted quick-join selection + telemetry counters.
+  - Validation: `npm test` (52/52 passing).
 - ✅ Shipped vertical slice: match history + rematch streak telemetry in room discovery loop (`/api/play/rooms` + homepage cards).
   - Added per-room telemetry model in server memory:
     - `rematchCount`
@@ -43,7 +51,7 @@ Practical execution backlog for Agent Arena (next 1-2 weeks).
   - Added FE visibility: play-room status now shows `🤖 Bot autopilot active` when mode state is autoplay-enabled.
   - Added regression coverage: `test/bot-autoplay-modes.test.js` (one human + bot autofill can finish both game loops).
 - 🚫 Blocker (deploy): Vercel deploy still fails at CLI install with npm resolver conflict (`ERESOLVE`) when `npx vercel --prod --yes` auto-installs `vercel@50.17.1` against peer graph `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
-- ▶ Next: ship match history + rematch streak telemetry (per-room recent winners, rematch count, and quick-match conversion) surfaced in `/api/play/rooms` + `/play.html`.
+- ▶ Next: ship one-click "start-ready" lobby flow (host sees explicit missing-readiness reasons + auto-ready for bots/returning players) so quick-joined rooms start in <1 click.
 
 ## Progress update (2026-02-15)
 - ✅ Audited BE/FE gaps for Agent Mafia + Agents Among Us (`GAME_MODES_AUDIT_2026-02-15.md`).

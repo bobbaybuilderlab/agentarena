@@ -141,6 +141,22 @@ function recordQuickJoinConversion(mode, roomId, name) {
   telemetry.updatedAt = Date.now();
 }
 
+function seedPlayTelemetry(mode, roomId, patch = {}) {
+  const telemetry = getRoomTelemetry(mode, roomId);
+  if (!patch || typeof patch !== 'object') return telemetry;
+
+  if (Number.isFinite(patch.rematchCount)) telemetry.rematchCount = Math.max(0, Number(patch.rematchCount));
+  if (Number.isFinite(patch.quickMatchTickets)) telemetry.quickMatchTickets = Math.max(0, Number(patch.quickMatchTickets));
+  if (Number.isFinite(patch.quickMatchConversions)) {
+    telemetry.quickMatchConversions = Math.max(0, Number(patch.quickMatchConversions));
+  }
+  if (Array.isArray(patch.recentWinners)) {
+    telemetry.recentWinners = patch.recentWinners.slice(-5);
+  }
+  telemetry.updatedAt = Date.now();
+  return telemetry;
+}
+
 function resetPlayTelemetry() {
   playRoomTelemetry.clear();
   pendingQuickJoinTickets.clear();
@@ -1451,6 +1467,23 @@ app.get('/api/leaderboard', (_req, res) => {
   res.json({ ok: true, topAgents, topRoasts });
 });
 
+function buildRoomMatchQuality(roomSummary) {
+  const quickMatch = roomSummary.quickMatch || { tickets: 0, conversions: 0, conversionRate: 0 };
+  const fillRate = Math.min(1, (roomSummary.players || 0) / 4);
+  const nearStartBonus = roomSummary.players >= 3 ? 0.2 : 0;
+  const conversionSignal = Math.min(1, Number(quickMatch.conversionRate || 0));
+  const rematchSignal = Math.min(1, Number(roomSummary.rematchCount || 0) / 3);
+
+  const score = Number(((fillRate * 0.55) + (conversionSignal * 0.25) + (rematchSignal * 0.2) + nearStartBonus).toFixed(2));
+  return {
+    score,
+    hot: score >= 0.9,
+    fillRate: Number(fillRate.toFixed(2)),
+    conversionSignal,
+    rematchSignal,
+  };
+}
+
 function summarizePlayableRoom(mode, room) {
   const players = Array.isArray(room?.players) ? room.players : [];
   const alivePlayers = players.filter((p) => p.alive !== false).length;
@@ -1459,7 +1492,15 @@ function summarizePlayableRoom(mode, room) {
   const canJoin = status === 'lobby' && players.length < 8;
   if (status === 'finished' && room?.winner) recordRoomWinner(mode, room);
   const telemetry = getRoomTelemetry(mode, room.id);
-  return {
+  const quickMatch = {
+    tickets: telemetry.quickMatchTickets,
+    conversions: telemetry.quickMatchConversions,
+    conversionRate: telemetry.quickMatchTickets
+      ? Number((telemetry.quickMatchConversions / telemetry.quickMatchTickets).toFixed(2))
+      : 0,
+  };
+
+  const summary = {
     mode,
     roomId: room.id,
     status,
@@ -1470,14 +1511,15 @@ function summarizePlayableRoom(mode, room) {
     createdAt: room.createdAt || Date.now(),
     canJoin,
     rematchCount: telemetry.rematchCount,
-    quickMatch: {
-      tickets: telemetry.quickMatchTickets,
-      conversions: telemetry.quickMatchConversions,
-      conversionRate: telemetry.quickMatchTickets
-        ? Number((telemetry.quickMatchConversions / telemetry.quickMatchTickets).toFixed(2))
-        : 0,
-    },
+    quickMatch,
     recentWinners: telemetry.recentWinners,
+  };
+
+  const quality = buildRoomMatchQuality(summary);
+  return {
+    ...summary,
+    matchQuality: quality,
+    hotLobby: quality.hot,
   };
 }
 
@@ -1582,7 +1624,11 @@ app.post('/api/play/quick-join', (req, res) => {
   const selectedMode = pickQuickJoinMode(modeInput);
   const candidates = listPlayableRooms(selectedMode, 'open')
     .filter((room) => room.canJoin)
-    .sort((a, b) => b.players - a.players || (b.createdAt || 0) - (a.createdAt || 0));
+    .sort((a, b) => {
+      const aScore = Number(a.matchQuality?.score || 0);
+      const bScore = Number(b.matchQuality?.score || 0);
+      return bScore - aScore || b.players - a.players || (b.createdAt || 0) - (a.createdAt || 0);
+    });
 
   let targetRoom = candidates[0] || null;
   let created = false;
@@ -1753,4 +1799,5 @@ module.exports = {
   arenaCanary,
   clearAllGameTimers,
   resetPlayTelemetry,
+  seedPlayTelemetry,
 };

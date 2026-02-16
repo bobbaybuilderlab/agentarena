@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry } = require('../server');
+const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry, seedPlayTelemetry } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -76,41 +76,54 @@ test('play rooms API lists cross-mode room discovery with open-room filtering', 
   });
 });
 
-test('quick-join API picks fullest open room or creates one with join ticket', async () => {
+test('quick-join API picks highest-fit open room or creates one with join ticket', async () => {
   await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const hostA = ioc(url, { reconnection: false, autoUnref: true });
+    const hostB = ioc(url, { reconnection: false, autoUnref: true });
     const p2 = ioc(url, { reconnection: false, autoUnref: true });
+    const p3 = ioc(url, { reconnection: false, autoUnref: true });
 
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-    await emitAck(p2, 'mafia:room:join', { roomId: created.roomId, name: 'M2' });
+    try {
+      const baseRoom = await emitAck(hostA, 'mafia:room:create', { name: 'HostA' });
+      const hotRoom = await emitAck(hostB, 'mafia:room:create', { name: 'HostB' });
+      assert.equal(baseRoom.ok, true);
+      assert.equal(hotRoom.ok, true);
 
-    const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
-    });
-    const quickJoinData = await quickJoinRes.json();
+      await emitAck(p2, 'mafia:room:join', { roomId: baseRoom.roomId, name: 'M2' });
+      await emitAck(p3, 'mafia:room:join', { roomId: hotRoom.roomId, name: 'M3' });
 
-    assert.equal(quickJoinData.ok, true);
-    assert.equal(quickJoinData.created, false);
-    assert.equal(quickJoinData.room.roomId, created.roomId);
-    assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${created.roomId}`));
-    assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
+      seedPlayTelemetry('mafia', hotRoom.roomId, {
+        rematchCount: 2,
+        quickMatchTickets: 10,
+        quickMatchConversions: 9,
+      });
 
-    const runner = ioc(url, { reconnection: false, autoUnref: true });
-    const joined = await emitAck(runner, 'mafia:room:join', { roomId: created.roomId, name: 'QueueRunner' });
-    assert.equal(joined.ok, true);
+      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+      });
+      const quickJoinData = await quickJoinRes.json();
 
-    const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-    const roomsData = await roomsRes.json();
-    const room = roomsData.rooms.find((r) => r.roomId === created.roomId);
-    assert.equal(room.quickMatch.tickets, 1);
-    assert.equal(room.quickMatch.conversions, 1);
+      assert.equal(quickJoinData.ok, true);
+      assert.equal(quickJoinData.created, false);
+      assert.equal(quickJoinData.room.roomId, hotRoom.roomId);
+      assert.ok((quickJoinData.room.matchQuality?.score || 0) > 0.5);
+      assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${hotRoom.roomId}`));
+      assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
 
-    host.disconnect();
-    p2.disconnect();
-    runner.disconnect();
+      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
+      const roomsData = await roomsRes.json();
+      const room = roomsData.rooms.find((r) => r.roomId === hotRoom.roomId);
+      assert.equal(room.quickMatch.tickets, 11);
+      assert.equal(room.quickMatch.conversions, 9);
+      assert.ok(room.matchQuality.score > 0.6);
+    } finally {
+      hostA.disconnect();
+      hostB.disconnect();
+      p2.disconnect();
+      p3.disconnect();
+    }
   });
 
   await withServer(async (url) => {
