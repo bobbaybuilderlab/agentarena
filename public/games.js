@@ -28,6 +28,7 @@ let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
+let attemptedSuggestedReclaim = false;
 
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
@@ -129,6 +130,32 @@ async function loadClaimableSeats() {
   } catch (_err) {
     claimSeatsView.textContent = 'Could not load reconnect seats';
   }
+}
+
+async function attemptSuggestedReclaimAuto() {
+  if (attemptedSuggestedReclaim) return false;
+  if (!suggestedReclaim?.name || !me.roomId) return false;
+  attemptedSuggestedReclaim = true;
+
+  const targetName = String(suggestedReclaim.name).trim();
+  if (!targetName) return false;
+
+  const res = await emitAck(activeEvent('room:join'), {
+    roomId: me.roomId,
+    name: targetName,
+  });
+
+  if (!res?.ok) {
+    setStatus(`Reconnect token expired/used. Auto-reclaim for ${targetName} failed; tap "Reclaim suggested seat" to retry.`);
+    return false;
+  }
+
+  me.roomId = res.roomId;
+  me.playerId = res.playerId;
+  suggestedReclaim = null;
+  setStatus(`Auto-reclaimed suggested seat: ${targetName}${res.playerId === res.state?.hostPlayerId ? ' (host)' : ''}`);
+  renderState(res.state);
+  return true;
 }
 
 async function refreshOpsStatus() {
@@ -473,9 +500,14 @@ async function autoJoinFromQuery() {
       me.roomId = retry.roomId;
       me.playerId = retry.playerId;
       suggestedReclaim = reclaimName ? { name: reclaimName, hostSeat: reclaimHost } : null;
-      setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; use "Reclaim suggested seat" below if needed.`);
+      attemptedSuggestedReclaim = false;
+      setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; attempting auto-reclaim…`);
       renderState(retry.state);
+      const reclaimed = await attemptSuggestedReclaimAuto();
       void loadClaimableSeats();
+      if (!reclaimed) {
+        setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; use "Reclaim suggested seat" below if needed.`);
+      }
       return;
     }
 

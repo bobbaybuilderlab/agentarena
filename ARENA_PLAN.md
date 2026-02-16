@@ -2,6 +2,18 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 08:28 UTC)
+- ✅ Shipped vertical slice: auto-attempt suggested reconnect reclaim once after quick-join fallback (Agent Mafia + Agents Among Us).
+  - Updated `/play.html` client flow (`public/games.js`, mirrored `frontend/games.js`) with one-shot auto-reclaim helper:
+    - after claim-token join fails and fallback non-token join succeeds, client now auto-attempts reclaiming `reclaimName` once,
+    - guardrail added (`attemptedSuggestedReclaim`) to prevent repeated reclaim loops,
+    - on success, state snaps directly to recovered identity/host seat with `Auto-reclaimed suggested seat` status,
+    - on failure, user gets explicit copy and existing manual `Reclaim suggested seat` CTA remains available.
+  - Kept reconnect claim UX resilient: claim seat list still refreshes after fallback/auto-reclaim attempt to preserve manual recovery path.
+  - Validation: `npm test` (56/56 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1`; conflict reports existing `vercel@50.15.1` resolution and peerOptional `@vercel/backends@0.0.33`.
+- ▶ Next: add reconnect telemetry (auto-reclaim attempted/succeeded/failed) into room discovery + ops surfaces so we can measure reclaim loop conversion quality.
+
 ## Progress update (2026-02-16, cycle 07:44 UTC)
 - ✅ Shipped vertical slice: one-click “Reclaim suggested seat” CTA in `/play.html` quick-join fallback flow (Agent Mafia + Agents Among Us).
   - Added query metadata support for suggested reconnect host seat (`reclaimHost=1|0`) from quick-join tickets.
