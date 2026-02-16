@@ -23,6 +23,11 @@ const runEvalsBtn = document.getElementById('runEvalsBtn');
 const runCiGateBtn = document.getElementById('runCiGateBtn');
 const evalStatus = document.getElementById('evalStatus');
 const claimSeatsView = document.getElementById('claimSeatsView');
+const ownerDigestCard = document.getElementById('ownerDigestCard');
+const ownerDigestTitle = document.getElementById('ownerDigestTitle');
+const ownerDigestSummary = document.getElementById('ownerDigestSummary');
+const ownerDigestResult = document.getElementById('ownerDigestResult');
+const ownerDigestAction = document.getElementById('ownerDigestAction');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -263,6 +268,65 @@ function renderState(state) {
   `).join('') || '<p>No players</p>';
 
   renderActions(state);
+  renderOwnerDigest(state);
+}
+
+
+function roleLabel(role) {
+  if (role === 'mafia') return 'Mafia';
+  if (role === 'town') return 'Town';
+  if (role === 'imposter') return 'Imposter';
+  if (role === 'crew') return 'Crew';
+  return role || 'Unknown';
+}
+
+function winnerLabel(winner) {
+  if (winner === 'mafia') return 'Mafia';
+  if (winner === 'town') return 'Town';
+  if (winner === 'imposter') return 'Imposters';
+  if (winner === 'crew') return 'Crew';
+  return winner || 'Unknown';
+}
+
+function suggestedRefinement(result) {
+  if (result.didWin) {
+    return 'Lock in the win pattern: write a 3-line opener from this game and run 2 quick rematches to verify it stays stable.';
+  }
+  if (result.role === 'mafia' || result.role === 'imposter') {
+    return 'Tighten deception discipline: in your prompt, require one question before each accusation so your reads feel less random.';
+  }
+  if (result.role === 'town' || result.role === 'crew') {
+    return 'Sharpen discussion discipline: require one evidence line + one clear vote reason every meeting to reduce noisy eliminations.';
+  }
+  return 'Run a fast check-in pass: keep what worked, replace one weak behavior, and test again in the next match.';
+}
+
+function renderOwnerDigest(state) {
+  if (!ownerDigestCard) return;
+  if (!state || state.status !== 'finished' || !me.playerId) {
+    ownerDigestCard.style.display = 'none';
+    return;
+  }
+
+  const mePlayer = (state.players || []).find((p) => p.id === me.playerId);
+  if (!mePlayer) {
+    ownerDigestCard.style.display = 'none';
+    return;
+  }
+
+  const role = mePlayer.role || '';
+  const winner = state.winner || '';
+  const didWin = Boolean(role && winner && role === winner);
+  const resultTag = didWin ? '✅ Win' : '❌ Loss';
+  const aliveTag = mePlayer.alive === false ? 'eliminated' : 'survived';
+  const gameLabel = me.game === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+  const result = { didWin, role, winner };
+
+  ownerDigestCard.style.display = 'block';
+  if (ownerDigestTitle) ownerDigestTitle.textContent = didWin ? 'Nice. Check-in and improve.' : 'Quick check-in before the next match';
+  if (ownerDigestSummary) ownerDigestSummary.textContent = `You just finished ${gameLabel}. Keep this short: read result, apply one refinement, requeue.`;
+  if (ownerDigestResult) ownerDigestResult.textContent = `${resultTag} · You played ${roleLabel(role)} (${aliveTag}). Winning side: ${winnerLabel(winner)}.`;
+  if (ownerDigestAction) ownerDigestAction.textContent = suggestedRefinement(result);
 }
 
 function renderActions(state) {

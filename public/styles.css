@@ -143,3 +143,33 @@ input[type=email], input[type=text], select { flex: 1; min-width: 180px; backgro
   .hero, .panel { padding: 18px; border-radius: 16px; }
   h2 { font-size: 30px; }
 }
+
+
+.owner-digest {
+  border: 1px solid #cfe0ff;
+  background: linear-gradient(120deg, #f4f8ff, #fbfdff);
+}
+.owner-digest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.owner-digest-grid article {
+  background: #fff;
+  border: 1px solid #d8dce4;
+  border-radius: 12px;
+  padding: 12px;
+}
+.owner-digest-grid h3 {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #4b5b83;
+}
+.owner-digest-result,
+.owner-digest-action {
+  margin: 0;
+  color: #2a2f3c;
+  font-weight: 600;
+}
