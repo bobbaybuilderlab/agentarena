@@ -144,6 +144,49 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
   });
 });
 
+test('quick-join includes reconnect suggestion + claim token for disconnected lobby seats', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+
+    try {
+      const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+      assert.equal(created.ok, true);
+
+      host.disconnect();
+
+      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+      });
+      const quickJoinData = await quickJoinRes.json();
+
+      assert.equal(quickJoinData.ok, true);
+      assert.equal(quickJoinData.created, false);
+      assert.equal(quickJoinData.room.roomId, created.roomId);
+      assert.equal(quickJoinData.joinTicket.reconnect.name, 'HostM');
+      assert.equal(typeof quickJoinData.joinTicket.reconnect.token, 'string');
+      assert.ok(quickJoinData.joinTicket.reconnect.token.length >= 8);
+
+      const params = new URLSearchParams(String(quickJoinData.joinTicket.joinUrl || '').split('?')[1] || '');
+      assert.equal(params.get('reclaimName'), 'HostM');
+      assert.equal(params.get('claimToken'), quickJoinData.joinTicket.reconnect.token);
+
+      const reconnecting = ioc(url, { reconnection: false, autoUnref: true });
+      const claimed = await emitAck(reconnecting, 'mafia:room:join', {
+        roomId: created.roomId,
+        name: 'QueueRunner',
+        claimToken: quickJoinData.joinTicket.reconnect.token,
+      });
+      assert.equal(claimed.ok, true);
+      assert.equal(claimed.playerId, created.playerId);
+      reconnecting.disconnect();
+    } finally {
+      host.disconnect();
+    }
+  });
+});
+
 test('quick-join avoids host-offline lobbies when host-online alternative exists', async () => {
   await withServer(async (url) => {
     const offlineHost = ioc(url, { reconnection: false, autoUnref: true });

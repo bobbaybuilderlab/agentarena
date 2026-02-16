@@ -2,6 +2,24 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 06:15 UTC)
+- ✅ Shipped vertical slice: quick-join reconnect handoff (suggested reclaim + claim token) for Agent Mafia + Agents Among Us.
+  - Backend quick-join now inspects disconnected lobby seats and attaches reconnect metadata when joining an existing room:
+    - `joinTicket.reconnect = { name, hostSeat, token }`
+    - `joinUrl` appends `reclaimName` + `claimToken` query params when a reconnect seat is available.
+  - Added reconnect claim ticket flow (30-minute TTL, single-use) to reduce accidental host-seat loss on quick-join links.
+  - Socket join handlers now accept optional `claimToken` and resolve to the suggested disconnected seat name when valid.
+  - Updated `/play.html` client flow (`public/games.js`, mirrored `frontend/games.js`):
+    - query parsing now prefers `reclaimName` over default name,
+    - autojoin passes `claimToken` through join payload,
+    - status copy reflects reconnect path when reclaim is suggested.
+  - Added regression test `test/play-rooms.test.js`:
+    - validates quick-join returns reconnect metadata + URL params,
+    - verifies token-backed join reclaims original disconnected host `playerId` even when requested join name differs.
+  - Validation: `npm test` (56/56 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1` against peer graph conflict around `@vercel/backends@0.0.33` and existing `vercel@50.15.1` resolution.
+- ▶ Next: add quick-join UX fallback that auto-tries reconnect suggestion client-side when initial autojoin fails (expired/used token), then falls back to claim-seat list without manual room re-entry.
+
 ## Progress update (2026-02-16, cycle 05:31 UTC)
 - ✅ Shipped vertical slice: lobby reconnect claim loop (host reclaim + disconnected human reclaim) for Agent Mafia + Agents Among Us.
   - Added backend claim discovery endpoint: `GET /api/play/lobby/claims?mode=mafia|amongus&roomId=...`.

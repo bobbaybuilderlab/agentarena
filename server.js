@@ -75,6 +75,7 @@ const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
 const playRoomTelemetry = new Map();
 const pendingQuickJoinTickets = new Map();
+const reconnectClaimTickets = new Map();
 const arenaCanary = createCanaryMode({
   enabled: process.env.ARENA_CANARY_ENABLED !== '0',
   percent: Number(process.env.ARENA_CANARY_PERCENT || 0),
@@ -141,6 +142,62 @@ function recordQuickJoinConversion(mode, roomId, name) {
   telemetry.updatedAt = Date.now();
 }
 
+const RECONNECT_TICKET_TTL_MS = 30 * 60 * 1000;
+
+function reconnectTicketKey(mode, roomId, token) {
+  return `${telemetryKey(mode, roomId)}:${String(token || '').trim()}`;
+}
+
+function issueReconnectClaimTicket(mode, roomId, name) {
+  const token = shortId(16);
+  reconnectClaimTickets.set(reconnectTicketKey(mode, roomId, token), {
+    name: String(name || '').trim(),
+    issuedAt: Date.now(),
+  });
+  return token;
+}
+
+function consumeReconnectClaimTicket(mode, roomId, token) {
+  const key = reconnectTicketKey(mode, roomId, token);
+  const found = reconnectClaimTickets.get(key);
+  if (!found) return null;
+  reconnectClaimTickets.delete(key);
+  if ((Date.now() - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) return null;
+  return found;
+}
+
+function resolveReconnectJoinName(mode, roomId, requestedName, claimToken) {
+  const normalizedRequested = String(requestedName || '').trim();
+  const claims = getClaimableLobbySeats(mode, roomId);
+  if (!claims.ok || !Array.isArray(claims.claimable) || !claims.claimable.length) {
+    return { name: normalizedRequested, suggested: null };
+  }
+
+  const lowerRequested = normalizedRequested.toLowerCase();
+  const direct = claims.claimable.find((seat) => seat.name.toLowerCase() === lowerRequested) || null;
+  if (direct) return { name: direct.name, suggested: direct.name };
+
+  const ticket = claimToken ? consumeReconnectClaimTicket(mode, roomId, claimToken) : null;
+  if (ticket?.name) {
+    const matched = claims.claimable.find((seat) => seat.name.toLowerCase() === ticket.name.toLowerCase());
+    if (matched) return { name: matched.name, suggested: matched.name };
+  }
+
+  return { name: normalizedRequested, suggested: null };
+}
+
+function pickReconnectSuggestion(mode, roomId, requestedName) {
+  const claims = getClaimableLobbySeats(mode, roomId);
+  if (!claims.ok || !Array.isArray(claims.claimable) || !claims.claimable.length) return null;
+
+  const preferredByName = claims.claimable.find((seat) => seat.name.toLowerCase() === String(requestedName || '').trim().toLowerCase());
+  const preferred = preferredByName || claims.claimable.find((seat) => seat.hostSeat) || claims.claimable[0];
+  if (!preferred?.name) return null;
+
+  const token = issueReconnectClaimTicket(mode, roomId, preferred.name);
+  return { name: preferred.name, hostSeat: Boolean(preferred.hostSeat), token };
+}
+
 function seedPlayTelemetry(mode, roomId, patch = {}) {
   const telemetry = getRoomTelemetry(mode, roomId);
   if (!patch || typeof patch !== 'object') return telemetry;
@@ -160,6 +217,7 @@ function seedPlayTelemetry(mode, roomId, patch = {}) {
 function resetPlayTelemetry() {
   playRoomTelemetry.clear();
   pendingQuickJoinTickets.clear();
+  reconnectClaimTickets.clear();
 }
 
 const ROOM_TRANSITIONS = {
@@ -692,8 +750,9 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: mafiaGame.toPublic(created.room) });
   });
 
-  socket.on('mafia:room:join', ({ roomId, name }, cb) => {
-    const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name, socketId: socket.id });
+  socket.on('mafia:room:join', ({ roomId, name, claimToken }, cb) => {
+    const reconnect = resolveReconnectJoinName('mafia', roomId, name, claimToken);
+    const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name: reconnect.name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`mafia:${joined.room.id}`);
     recordQuickJoinConversion('mafia', joined.room.id, joined.player.name);
@@ -765,8 +824,9 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: amongUsGame.toPublic(created.room) });
   });
 
-  socket.on('amongus:room:join', ({ roomId, name }, cb) => {
-    const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name, socketId: socket.id });
+  socket.on('amongus:room:join', ({ roomId, name, claimToken }, cb) => {
+    const reconnect = resolveReconnectJoinName('amongus', roomId, name, claimToken);
+    const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name: reconnect.name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
     socket.join(`amongus:${joined.room.id}`);
     recordQuickJoinConversion('amongus', joined.room.id, joined.player.name);
@@ -1813,12 +1873,16 @@ app.post('/api/play/quick-join', (req, res) => {
     created = true;
   }
 
+  const reconnectSuggestion = created ? null : pickReconnectSuggestion(targetRoom.mode, targetRoom.roomId, playerName);
+  const suggestedName = reconnectSuggestion?.name || playerName;
+  const claimToken = reconnectSuggestion?.token || '';
   const joinTicket = {
     mode: targetRoom.mode,
     roomId: targetRoom.roomId,
     name: playerName,
     autojoin: true,
-    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}`,
+    reconnect: reconnectSuggestion,
+    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
     issuedAt: Date.now(),
   };
 

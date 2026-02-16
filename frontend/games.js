@@ -33,6 +33,8 @@ function parseQueryConfig() {
   const queryGame = params.get('game');
   const queryRoom = params.get('room');
   const queryName = params.get('name');
+  const reclaimName = params.get('reclaimName');
+  const claimToken = params.get('claimToken');
   const autojoin = params.get('autojoin') === '1';
 
   if (queryGame === 'mafia' || queryGame === 'amongus') {
@@ -41,9 +43,13 @@ function parseQueryConfig() {
   }
 
   if (queryRoom && roomIdInput) roomIdInput.value = String(queryRoom).trim().toUpperCase();
-  if (queryName && playerName) playerName.value = String(queryName).trim().slice(0, 24);
+  if (reclaimName && playerName) {
+    playerName.value = String(reclaimName).trim().slice(0, 24);
+  } else if (queryName && playerName) {
+    playerName.value = String(queryName).trim().slice(0, 24);
+  }
 
-  return { autojoin };
+  return { autojoin, reclaimName: reclaimName ? String(reclaimName).trim().slice(0, 24) : '', claimToken: claimToken ? String(claimToken).trim() : '' };
 }
 
 function emitAck(event, payload = {}) {
@@ -422,7 +428,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 async function autoJoinFromQuery() {
-  const { autojoin } = parseQueryConfig();
+  const { autojoin, reclaimName, claimToken } = parseQueryConfig();
   if (!autojoin || attemptedAutoJoin) return;
   attemptedAutoJoin = true;
 
@@ -433,6 +439,7 @@ async function autoJoinFromQuery() {
   const res = await emitAck(activeEvent('room:join'), {
     roomId,
     name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+    claimToken: claimToken || undefined,
   });
 
   if (!res?.ok) {
@@ -442,7 +449,7 @@ async function autoJoinFromQuery() {
 
   me.roomId = res.roomId;
   me.playerId = res.playerId;
-  setStatus(`Quick-joined ${me.game} room ${me.roomId}`);
+  setStatus(reclaimName ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}` : `Quick-joined ${me.game} room ${me.roomId}`);
   renderState(res.state);
   void loadClaimableSeats();
 }
