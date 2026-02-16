@@ -27,6 +27,7 @@ const claimSeatsView = document.getElementById('claimSeatsView');
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
 let attemptedAutoJoin = false;
+let suggestedReclaim = null;
 
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
@@ -35,6 +36,7 @@ function parseQueryConfig() {
   const queryName = params.get('name');
   const reclaimName = params.get('reclaimName');
   const claimToken = params.get('claimToken');
+  const reclaimHost = params.get('reclaimHost') === '1';
   const autojoin = params.get('autojoin') === '1';
 
   const normalizedQueryName = queryName ? String(queryName).trim().slice(0, 24) : '';
@@ -56,6 +58,7 @@ function parseQueryConfig() {
     autojoin,
     queryName: normalizedQueryName,
     reclaimName: normalizedReclaimName,
+    reclaimHost,
     claimToken: claimToken ? String(claimToken).trim() : '',
   };
 }
@@ -86,19 +89,25 @@ function activeEvent(name) {
 function renderClaimSeats(data) {
   if (!claimSeatsView) return;
   const seats = data?.claimable || [];
+
+  const suggestedButton = suggestedReclaim?.name
+    ? `<button class="btn btn-primary" type="button" data-claim-name="${suggestedReclaim.name}" data-claim-suggested="1">Reclaim suggested seat: ${suggestedReclaim.name}${suggestedReclaim.hostSeat ? ' (host)' : ''}</button>`
+    : '';
+
   if (!seats.length) {
-    claimSeatsView.textContent = 'No reconnect seats found for this lobby.';
+    claimSeatsView.innerHTML = suggestedButton || 'No reconnect seats found for this lobby.';
     return;
   }
 
   claimSeatsView.innerHTML = [
     '<strong>Reconnect seats:</strong>',
+    suggestedButton,
     ...seats.map((seat) => `
       <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
         Claim ${seat.name}${seat.hostSeat ? ' (host)' : ''}
       </button>
     `),
-  ].join(' ');
+  ].filter(Boolean).join(' ');
 }
 
 async function loadClaimableSeats() {
@@ -301,6 +310,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
 
   me.roomId = res.roomId;
   me.playerId = res.playerId;
+  suggestedReclaim = null;
   setStatus(`Reconnected as ${claimName}${res.playerId === currentState?.hostPlayerId ? ' (host)' : ''}`);
   renderState(res.state);
   void loadClaimableSeats();
@@ -436,7 +446,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 async function autoJoinFromQuery() {
-  const { autojoin, reclaimName, queryName, claimToken } = parseQueryConfig();
+  const { autojoin, reclaimName, reclaimHost, queryName, claimToken } = parseQueryConfig();
   if (!autojoin || attemptedAutoJoin) return;
   attemptedAutoJoin = true;
 
@@ -462,7 +472,8 @@ async function autoJoinFromQuery() {
     if (retry?.ok) {
       me.roomId = retry.roomId;
       me.playerId = retry.playerId;
-      setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; pick a reconnect seat below if needed.`);
+      suggestedReclaim = reclaimName ? { name: reclaimName, hostSeat: reclaimHost } : null;
+      setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; use "Reclaim suggested seat" below if needed.`);
       renderState(retry.state);
       void loadClaimableSeats();
       return;
@@ -478,6 +489,7 @@ async function autoJoinFromQuery() {
     return;
   }
 
+  suggestedReclaim = null;
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   setStatus(reclaimName ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}` : `Quick-joined ${me.game} room ${me.roomId}`);

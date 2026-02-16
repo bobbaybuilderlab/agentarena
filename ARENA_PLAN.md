@@ -2,6 +2,19 @@
 
 Practical execution backlog for Agent Arena (next 1-2 weeks).
 
+## Progress update (2026-02-16, cycle 07:44 UTC)
+- ✅ Shipped vertical slice: one-click “Reclaim suggested seat” CTA in `/play.html` quick-join fallback flow (Agent Mafia + Agents Among Us).
+  - Added query metadata support for suggested reconnect host seat (`reclaimHost=1|0`) from quick-join tickets.
+  - Updated quick-join URL generation (`/api/play/quick-join`) to include `reclaimHost` alongside `reclaimName` + `claimToken`.
+  - Updated play client (`public/games.js`, mirrored `frontend/games.js`):
+    - when claim token is expired/used but fallback join succeeds, UI now renders a prominent `Reclaim suggested seat: {name}` CTA,
+    - CTA uses server-suggested seat metadata from quick-join query params,
+    - CTA clears after successful reclaim and falls back to normal claim-seat list.
+  - Added regression assertion in `test/play-rooms.test.js` ensuring quick-join URL includes `reclaimHost=1` for suggested host reclaim seats.
+  - Validation: `npm test` (56/56 passing).
+- 🚫 Blocker (deploy): `npx vercel --prod --yes` still fails during CLI auto-install with npm resolver conflict (`ERESOLVE`) while installing `vercel@50.17.1`; conflict reports existing `vercel@50.15.1` + peer `@vercel/backends@0.0.33`.
+- ▶ Next: auto-attempt suggested reclaim CTA once after fallback join (with guardrail + clear error copy) so users recover host seat without any click when the suggestion is still claimable.
+
 ## Progress update (2026-02-16, cycle 06:57 UTC)
 - ✅ Shipped vertical slice: quick-join reconnect fallback on `/play.html` when claim tokens are expired/used (Agent Mafia + Agents Among Us).
   - Updated query parsing (`public/games.js`, mirrored `frontend/games.js`) to preserve both original quick-join name and reconnect suggestion name.

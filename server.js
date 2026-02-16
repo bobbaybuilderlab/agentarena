@@ -1882,7 +1882,7 @@ app.post('/api/play/quick-join', (req, res) => {
     name: playerName,
     autojoin: true,
     reconnect: reconnectSuggestion,
-    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
+    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&reclaimHost=${reconnectSuggestion.hostSeat ? '1' : '0'}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
     issuedAt: Date.now(),
   };
 

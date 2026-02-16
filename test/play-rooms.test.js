@@ -170,6 +170,7 @@ test('quick-join includes reconnect suggestion + claim token for disconnected lo
 
       const params = new URLSearchParams(String(quickJoinData.joinTicket.joinUrl || '').split('?')[1] || '');
       assert.equal(params.get('reclaimName'), 'HostM');
+      assert.equal(params.get('reclaimHost'), '1');
       assert.equal(params.get('claimToken'), quickJoinData.joinTicket.reconnect.token);
 
       const reconnecting = ioc(url, { reconnection: false, autoUnref: true });
