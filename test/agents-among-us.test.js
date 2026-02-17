@@ -64,3 +64,25 @@ test('agents-among-us disconnectPlayer returns whether state changed', () => {
   assert.equal(amongUs.disconnectPlayer(store, { roomId: created.room.id, socketId: 'host-socket' }), true);
   assert.equal(amongUs.disconnectPlayer(store, { roomId: created.room.id, socketId: 'host-socket' }), false);
 });
+
+test('agents-among-us enforces lobby capacity and avoids duplicate name identities', () => {
+  const store = amongUs.createStore();
+  const created = amongUs.createRoom(store, { hostName: 'Host', hostSocketId: 's1' });
+  const roomId = created.room.id;
+
+  assert.equal(amongUs.joinRoom(store, { roomId, name: 'P2', socketId: 's2' }).ok, true);
+  assert.equal(amongUs.joinRoom(store, { roomId, name: 'P3', socketId: 's3' }).ok, true);
+  assert.equal(amongUs.joinRoom(store, { roomId, name: 'P4', socketId: 's4' }).ok, true);
+
+  const full = amongUs.joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  assert.equal(full.ok, false);
+  assert.equal(full.error.code, 'ROOM_FULL');
+
+  const nameInUse = amongUs.joinRoom(store, { roomId, name: 'P2', socketId: 's6' });
+  assert.equal(nameInUse.ok, false);
+  assert.equal(nameInUse.error.code, 'NAME_IN_USE');
+
+  const reclaimed = amongUs.joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
+  assert.equal(reclaimed.ok, true);
+  assert.equal(created.room.players.filter((p) => p.name === 'P2').length, 1);
+});

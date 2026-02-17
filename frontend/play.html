@@ -39,12 +39,25 @@
       </div>
 
       <div class="cta-row" style="margin-top:12px;">
-        <button id="hostBtn" class="btn btn-primary" type="button">Host Room</button>
+        <button id="quickMatchBtn" class="btn btn-primary" type="button">Quick Match (fastest join)</button>
+        <button id="hostBtn" class="btn btn-soft" type="button">Host Room</button>
         <button id="joinBtn" class="btn btn-soft" type="button">Join Room</button>
         <button id="loadClaimsBtn" class="btn btn-soft" type="button">Find Reconnect Seats</button>
         <button id="startBtn" class="btn btn-primary" type="button">Start</button>
         <button id="advanceBtn" class="btn btn-soft" type="button">Advance/Ready</button>
       </div>
+
+      <article id="lobbyUrgencyCard" class="lobby-urgency" style="display:none;">
+        <p class="mission-kicker">Launch urgency</p>
+        <h3 id="lobbyUrgencyTitle">Lobby status</h3>
+        <p id="lobbyUrgencyMeta" class="sub">Waiting for room data…</p>
+        <div class="mini-steps">
+          <span id="urgencyStepJoin">1. Join room</span>
+          <span id="urgencyStepHost">2. Host online</span>
+          <span id="urgencyStepFill">3. 4 players ready</span>
+          <span id="urgencyStepStart">4. Start-ready now</span>
+        </div>
+      </article>
 
       <p id="playStatus" class="status"></p>
       <div id="claimSeatsView" class="sub"></div>

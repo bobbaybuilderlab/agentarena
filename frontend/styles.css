@@ -95,6 +95,30 @@ input[type=email], input[type=text], select { flex: 1; min-width: 180px; backgro
 .adv-box summary { cursor:pointer; color:#4d4f57; font-weight:700; margin-bottom:8px; }
 
 .status { min-height: 20px; color: #248a3d; font-weight: 600; }
+.status.status-info { color: #2f4f95; }
+.status.status-warn { color: #9b5f08; }
+.status.status-error { color: #af2e25; }
+
+.lobby-urgency {
+  border: 1px solid #ffd9b0;
+  border-radius: 12px;
+  padding: 12px;
+  background: linear-gradient(120deg, #fff7ec, #fffdf9);
+  margin-top: 12px;
+}
+.lobby-urgency h3 { margin: 0 0 6px 0; font-size: 20px; text-transform: none; }
+.room-urgency-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid #ffd9b0;
+  background: #fff7ec;
+  color: #8a4d00;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+}
 
 .pulse-mission {
   border: 1px solid #c8d8ff;

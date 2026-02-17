@@ -29,6 +29,13 @@ const ownerDigestSummary = document.getElementById('ownerDigestSummary');
 const ownerDigestResult = document.getElementById('ownerDigestResult');
 const ownerDigestAction = document.getElementById('ownerDigestAction');
 const recoveryHint = document.getElementById('recoveryHint');
+const lobbyUrgencyCard = document.getElementById('lobbyUrgencyCard');
+const lobbyUrgencyTitle = document.getElementById('lobbyUrgencyTitle');
+const lobbyUrgencyMeta = document.getElementById('lobbyUrgencyMeta');
+const urgencyStepJoin = document.getElementById('urgencyStepJoin');
+const urgencyStepHost = document.getElementById('urgencyStepHost');
+const urgencyStepFill = document.getElementById('urgencyStepFill');
+const urgencyStepStart = document.getElementById('urgencyStepStart');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -74,8 +81,12 @@ function emitAck(event, payload = {}) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
 }
 
-function setStatus(text) {
+function setStatus(text, tone = 'info') {
   playStatus.textContent = text;
+  playStatus.classList.remove('status-info', 'status-warn', 'status-error');
+  if (tone === 'warn') playStatus.classList.add('status-warn');
+  else if (tone === 'error') playStatus.classList.add('status-error');
+  else playStatus.classList.add('status-info');
 }
 
 function showRecoveryHint(html) {
@@ -229,6 +240,40 @@ async function refreshOpsStatus() {
   }
 }
 
+function markUrgencyStep(el, done, label) {
+  if (!el) return;
+  el.textContent = `${done ? '✅' : '⏳'} ${label}`;
+}
+
+function updateLobbyUrgency(state, isHost) {
+  if (!lobbyUrgencyCard || !state) return;
+  const inLobby = state.status === 'lobby';
+  lobbyUrgencyCard.style.display = inLobby ? 'block' : 'none';
+  if (!inLobby) return;
+
+  const players = state.players || [];
+  const joined = Boolean(me.playerId);
+  const hostOnline = players.some((p) => p.id === state.hostPlayerId && p.isConnected);
+  const full = players.length >= 4;
+  const createdAt = Number(state.createdAt || Date.now());
+  const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+  const etaSec = full ? 0 : Math.max(0, (4 - players.length) * 45 - Math.min(ageSec, 120));
+
+  markUrgencyStep(urgencyStepJoin, joined, 'Join room');
+  markUrgencyStep(urgencyStepHost, hostOnline, 'Host online');
+  markUrgencyStep(urgencyStepFill, full, '4 players ready');
+  markUrgencyStep(urgencyStepStart, isHost && full && hostOnline, 'Start-ready now');
+
+  if (lobbyUrgencyTitle) {
+    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, 4 - players.length)} more to start`;
+  }
+  if (lobbyUrgencyMeta) {
+    lobbyUrgencyMeta.textContent = full
+      ? (isHost ? 'You can launch immediately with Start Ready.' : 'Waiting for host to launch…')
+      : `Join urgency: ${etaSec}s est. to ready at current fill pace.`;
+  }
+}
+
 function updateControlState(state) {
   const players = state?.players || [];
   const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
@@ -253,16 +298,18 @@ function updateControlState(state) {
     rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
   }
 
+  updateLobbyUrgency(state, isHost);
+
   if (!isHost && inLobby) {
-    setStatus(`Waiting for host to start · players ${players.length}/4`);
+    setStatus(`Waiting for host to start · players ${players.length}/4`, 'warn');
   } else if (isHost && inLobby) {
     const reasons = [];
     if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
     if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
     if (reasons.length > 0) {
-      setStatus(`Start Ready check: ${reasons.join(' · ')}`);
+      setStatus(`Start Ready check: ${reasons.join(' · ')}`, 'warn');
     } else {
-      setStatus('Lobby ready. Start Ready launches immediately.');
+      setStatus('Lobby ready. Start Ready launches immediately.', 'info');
     }
   }
 }
@@ -274,7 +321,7 @@ function renderState(state) {
     const pending = Number(state.autoplay?.pendingActions || 0);
     const aliveBots = Number(state.autoplay?.aliveBots || 0);
     const hint = state.autoplay?.hint || `Bot autopilot active · ${state.phase || state.status}`;
-    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`);
+    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`, 'info');
   }
   updateControlState(state);
 

@@ -1683,7 +1683,7 @@ function summarizePlayableRoom(mode, room) {
   const alivePlayers = players.filter((p) => p.alive !== false).length;
   const status = String(room?.status || 'lobby');
   const phase = String(room?.phase || (status === 'lobby' ? 'lobby' : 'unknown'));
-  const canJoin = status === 'lobby' && players.length < 8;
+  const canJoin = status === 'lobby' && players.length < 4;
   if (status === 'finished' && room?.winner) recordRoomWinner(mode, room);
   const telemetry = getRoomTelemetry(mode, room.id);
   const quickMatch = {
@@ -2262,10 +2262,12 @@ app.get('/health', (_req, res) => {
 });
 
 if (require.main === module) {
-  runAutoBattle();
-  setInterval(() => {
+  if (process.env.DISABLE_AUTOBATTLE !== '1') {
     runAutoBattle();
-  }, 20_000);
+    setInterval(() => {
+      runAutoBattle();
+    }, 20_000);
+  }
 
   server.listen(PORT, () => {
     console.log(`Agent Arena running on http://localhost:${PORT}`);

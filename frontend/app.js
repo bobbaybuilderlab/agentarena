@@ -192,6 +192,17 @@ function roomJumpUrl(room) {
   return `/play.html?${params.toString()}`;
 }
 
+function roomUrgency(room) {
+  const createdAt = Number(room?.createdAt || Date.now());
+  const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+  const players = Number(room?.players || 0);
+  const missing = Math.max(0, 4 - players);
+  const hostOnline = Boolean(room?.launchReadiness?.hostConnected);
+  const pressure = players >= 3 ? 'Launching soon' : ageSec > 120 ? 'Needs players now' : 'Fresh lobby';
+  const etaSec = players >= 4 ? 0 : Math.max(0, (missing * 45) - Math.min(ageSec, 120));
+  return { ageSec, players, missing, hostOnline, pressure, etaSec };
+}
+
 async function loadLiveRooms() {
   if (!liveRoomsList) return;
 
@@ -227,16 +238,18 @@ async function loadLiveRooms() {
       const quality = room.matchQuality || {};
       const launch = room.launchReadiness || {};
       const reconnect = room.reconnectAuto || {};
+      const urgency = roomUrgency(room);
       const launchLine = launch.hostConnected
         ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
         : '⚠️ Host offline · room may stall until host reconnects';
       return `
       <article>
         <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
+        <p><span class="room-urgency-pill">${urgency.pressure}${urgency.etaSec > 0 ? ` · ~${urgency.etaSec}s to ready` : ' · ready now'}</span></p>
         <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
-        <p>Rematches: ${room.rematchCount || 0} · Party streak: ${room.partyStreak || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
-        <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
+        <p>Reconnect: ${reconnect.successes || 0}/${reconnect.attempts || 0} ok (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
+        <p>Quick-match: ${q.conversions || 0}/${q.tickets || 0} · Rematches: ${room.rematchCount || 0} · Streak: ${room.partyStreak || 0}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>

@@ -129,21 +129,33 @@ function joinRoom(store, { roomId, name, socketId }) {
   const cleanName = String(name || '').trim().slice(0, 24);
   if (!cleanName) return { ok: false, error: { code: 'NAME_REQUIRED', message: 'name required' } };
 
-  let player = room.players.find((p) => !p.isConnected && p.name === cleanName);
-  if (!player) {
-    player = {
-      id: shortId(8),
-      name: cleanName,
-      socketId: socketId || null,
-      isConnected: true,
-      alive: true,
-      role: null,
-    };
-    room.players.push(player);
-  } else {
+  const MAX_LOBBY_PLAYERS = 4;
+  const normalized = cleanName.toLowerCase();
+  let player = room.players.find((p) => String(p.name || '').toLowerCase() === normalized);
+
+  if (player) {
+    if (player.isConnected && player.socketId && player.socketId !== socketId) {
+      return { ok: false, error: { code: 'NAME_IN_USE', message: 'Name already in use in this room' } };
+    }
     player.isConnected = true;
     player.socketId = socketId || null;
+    player.name = cleanName;
+    return { ok: true, room, player };
   }
+
+  if (room.players.length >= MAX_LOBBY_PLAYERS) {
+    return { ok: false, error: { code: 'ROOM_FULL', message: 'Room is full' } };
+  }
+
+  player = {
+    id: shortId(8),
+    name: cleanName,
+    socketId: socketId || null,
+    isConnected: true,
+    alive: true,
+    role: null,
+  };
+  room.players.push(player);
 
   return { ok: true, room, player };
 }
