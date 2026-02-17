@@ -186,21 +186,33 @@ function reconnectTicketKey(mode, roomId, token) {
   return `${telemetryKey(mode, roomId)}:${String(token || '').trim()}`;
 }
 
+function sweepExpiredReconnectClaimTickets(now = Date.now()) {
+  for (const [key, ticket] of reconnectClaimTickets.entries()) {
+    if ((now - Number(ticket?.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) {
+      reconnectClaimTickets.delete(key);
+    }
+  }
+}
+
 function issueReconnectClaimTicket(mode, roomId, name) {
+  const now = Date.now();
+  sweepExpiredReconnectClaimTickets(now);
   const token = shortId(16);
   reconnectClaimTickets.set(reconnectTicketKey(mode, roomId, token), {
     name: String(name || '').trim(),
-    issuedAt: Date.now(),
+    issuedAt: now,
   });
   return token;
 }
 
 function consumeReconnectClaimTicket(mode, roomId, token) {
+  const now = Date.now();
+  sweepExpiredReconnectClaimTickets(now);
   const key = reconnectTicketKey(mode, roomId, token);
   const found = reconnectClaimTickets.get(key);
   if (!found) return null;
   reconnectClaimTickets.delete(key);
-  if ((Date.now() - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) return null;
+  if ((now - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) return null;
   return found;
 }
 
@@ -1163,26 +1175,33 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     for (const room of rooms.values()) {
+      let changed = false;
       const player = room.players.find((p) => p.socketId === socket.id);
-      if (player) player.isConnected = false;
-      room.spectators.delete(socket.id);
+      if (player && player.isConnected) {
+        player.isConnected = false;
+        changed = true;
+      }
+      if (room.spectators.delete(socket.id)) changed = true;
 
       if (room.hostSocketId === socket.id && room.players.length > 0) {
         const replacement = room.players.find((p) => p.isConnected && !p.isBot);
-        if (replacement) room.hostSocketId = replacement.socketId;
+        if (replacement && replacement.socketId && replacement.socketId !== room.hostSocketId) {
+          room.hostSocketId = replacement.socketId;
+          changed = true;
+        }
       }
 
-      emitRoom(room);
+      if (changed) emitRoom(room);
     }
 
     for (const room of mafiaRooms.values()) {
-      mafiaGame.disconnectPlayer(mafiaRooms, { roomId: room.id, socketId: socket.id });
-      emitMafiaRoom(room);
+      const changed = mafiaGame.disconnectPlayer(mafiaRooms, { roomId: room.id, socketId: socket.id });
+      if (changed) emitMafiaRoom(room);
     }
 
     for (const room of amongUsRooms.values()) {
-      amongUsGame.disconnectPlayer(amongUsRooms, { roomId: room.id, socketId: socket.id });
-      emitAmongUsRoom(room);
+      const changed = amongUsGame.disconnectPlayer(amongUsRooms, { roomId: room.id, socketId: socket.id });
+      if (changed) emitAmongUsRoom(room);
     }
   });
 });
@@ -1914,39 +1933,45 @@ app.get('/api/play/rooms', (req, res) => {
   }
 
   const roomsList = listPlayableRooms(modeFilter, statusFilter);
-  const reconnectAutoTotals = roomsList.reduce((totals, room) => {
-    totals.attempts += Number(room.reconnectAuto?.attempts || 0);
-    totals.successes += Number(room.reconnectAuto?.successes || 0);
-    totals.failures += Number(room.reconnectAuto?.failures || 0);
+  const aggregate = roomsList.reduce((totals, room) => {
+    totals.playersOnline += Number(room.players || 0);
+    if (room.canJoin) totals.openRooms += 1;
+    if (room.mode === 'mafia') totals.byMode.mafia += 1;
+    if (room.mode === 'amongus') totals.byMode.amongus += 1;
+
+    totals.reconnectAuto.attempts += Number(room.reconnectAuto?.attempts || 0);
+    totals.reconnectAuto.successes += Number(room.reconnectAuto?.successes || 0);
+    totals.reconnectAuto.failures += Number(room.reconnectAuto?.failures || 0);
+
+    totals.reconnectRecoveryClicks.reclaim_clicked += Number(room.reconnectRecoveryClicks?.reclaim_clicked || 0);
+    totals.reconnectRecoveryClicks.quick_recover_clicked += Number(room.reconnectRecoveryClicks?.quick_recover_clicked || 0);
+
+    totals.telemetryEvents.rematch_clicked += Number(room.telemetryEvents?.rematch_clicked || 0);
+    totals.telemetryEvents.party_streak_extended += Number(room.telemetryEvents?.party_streak_extended || 0);
+
     return totals;
-  }, { attempts: 0, successes: 0, failures: 0 });
-  const reconnectRecoveryClickTotals = roomsList.reduce((totals, room) => {
-    totals.reclaim_clicked += Number(room.reconnectRecoveryClicks?.reclaim_clicked || 0);
-    totals.quick_recover_clicked += Number(room.reconnectRecoveryClicks?.quick_recover_clicked || 0);
-    return totals;
-  }, { reclaim_clicked: 0, quick_recover_clicked: 0 });
-  const telemetryEventTotals = roomsList.reduce((totals, room) => {
-    totals.rematch_clicked += Number(room.telemetryEvents?.rematch_clicked || 0);
-    totals.party_streak_extended += Number(room.telemetryEvents?.party_streak_extended || 0);
-    return totals;
-  }, { rematch_clicked: 0, party_streak_extended: 0 });
+  }, {
+    playersOnline: 0,
+    openRooms: 0,
+    byMode: { mafia: 0, amongus: 0 },
+    reconnectAuto: { attempts: 0, successes: 0, failures: 0 },
+    reconnectRecoveryClicks: { reclaim_clicked: 0, quick_recover_clicked: 0 },
+    telemetryEvents: { rematch_clicked: 0, party_streak_extended: 0 },
+  });
 
   const summary = {
     totalRooms: roomsList.length,
-    openRooms: roomsList.filter((room) => room.canJoin).length,
-    playersOnline: roomsList.reduce((sum, room) => sum + room.players, 0),
-    byMode: {
-      mafia: roomsList.filter((room) => room.mode === 'mafia').length,
-      amongus: roomsList.filter((room) => room.mode === 'amongus').length,
-    },
+    openRooms: aggregate.openRooms,
+    playersOnline: aggregate.playersOnline,
+    byMode: aggregate.byMode,
     reconnectAuto: {
-      ...reconnectAutoTotals,
-      successRate: reconnectAutoTotals.attempts
-        ? Number((reconnectAutoTotals.successes / reconnectAutoTotals.attempts).toFixed(2))
+      ...aggregate.reconnectAuto,
+      successRate: aggregate.reconnectAuto.attempts
+        ? Number((aggregate.reconnectAuto.successes / aggregate.reconnectAuto.attempts).toFixed(2))
         : 0,
     },
-    reconnectRecoveryClicks: reconnectRecoveryClickTotals,
-    telemetryEvents: telemetryEventTotals,
+    reconnectRecoveryClicks: aggregate.reconnectRecoveryClicks,
+    telemetryEvents: aggregate.telemetryEvents,
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });

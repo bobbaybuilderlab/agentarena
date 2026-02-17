@@ -55,3 +55,12 @@ test('agents-among-us transitionRoomState rejects lobby -> meeting', () => {
   assert.equal(bad.error.code, 'INVALID_PHASE_TRANSITION');
   assert.deepEqual(bad.error.details, { fromPhase: 'lobby', toPhase: 'meeting' });
 });
+
+test('agents-among-us disconnectPlayer returns whether state changed', () => {
+  const store = amongUs.createStore();
+  const created = amongUs.createRoom(store, { hostName: 'Host', hostSocketId: 'host-socket' });
+
+  assert.equal(amongUs.disconnectPlayer(store, { roomId: created.room.id, socketId: 'missing' }), false);
+  assert.equal(amongUs.disconnectPlayer(store, { roomId: created.room.id, socketId: 'host-socket' }), true);
+  assert.equal(amongUs.disconnectPlayer(store, { roomId: created.room.id, socketId: 'host-socket' }), false);
+});

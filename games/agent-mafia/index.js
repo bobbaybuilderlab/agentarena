@@ -385,9 +385,11 @@ function addLobbyBots(store, { roomId, count, namePrefix = 'Mafia Bot' }) {
 
 function disconnectPlayer(store, { roomId, socketId }) {
   const room = store.get(String(roomId || '').toUpperCase());
-  if (!room) return;
+  if (!room) return false;
   const p = room.players.find((x) => x.socketId === socketId);
-  if (p) p.isConnected = false;
+  if (!p || !p.isConnected) return false;
+  p.isConnected = false;
+  return true;
 }
 
 module.exports = {
