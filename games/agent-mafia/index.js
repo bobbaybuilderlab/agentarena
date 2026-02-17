@@ -35,6 +35,30 @@ function transitionRoomState(room, nextPhase, options = {}) {
   return { ok: true, room };
 }
 
+function summarizeBotAutoplay(room) {
+  const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+  if (room.status !== 'in_progress') {
+    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
+  }
+
+  if (room.phase === 'night') {
+    const pending = aliveBots.filter((p) => p.role === 'mafia' && !room.actions?.night?.[p.id]).length;
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are selecting night targets.' : 'Night bot actions complete.' };
+  }
+
+  if (room.phase === 'discussion') {
+    const pending = aliveBots.filter((p) => room.actions?.vote?.[p.id] !== '__READY__').length;
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
+  }
+
+  if (room.phase === 'voting') {
+    const pending = aliveBots.filter((p) => !room.actions?.vote?.[p.id]).length;
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are casting votes.' : 'Bot votes submitted.' };
+  }
+
+  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay active.' };
+}
+
 function toPublic(room) {
   return {
     id: room.id,
@@ -56,6 +80,7 @@ function toPublic(room) {
     tally: room.tally,
     events: room.events.slice(-8),
     botAutoplay: true,
+    autoplay: summarizeBotAutoplay(room),
   };
 }
 

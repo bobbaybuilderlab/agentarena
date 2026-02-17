@@ -271,7 +271,10 @@ function renderState(state) {
   currentState = state;
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
-    setStatus(`🤖 Bot autopilot active · ${state.phase || state.status}`);
+    const pending = Number(state.autoplay?.pendingActions || 0);
+    const aliveBots = Number(state.autoplay?.aliveBots || 0);
+    const hint = state.autoplay?.hint || `Bot autopilot active · ${state.phase || state.status}`;
+    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`);
   }
   updateControlState(state);
 

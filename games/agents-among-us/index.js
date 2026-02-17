@@ -34,6 +34,30 @@ function transitionRoomState(room, nextPhase, options = {}) {
   return { ok: true, room };
 }
 
+function summarizeBotAutoplay(room) {
+  const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+  if (room.status !== 'in_progress') {
+    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
+  }
+
+  if (room.phase === 'tasks') {
+    const aliveCrew = room.players.filter((p) => p.alive && p.role === 'crew').length;
+    const pending = aliveBots.filter((p) => {
+      if (p.role === 'crew') return p.tasksDone < room.tasksToWin;
+      if (p.role === 'imposter') return aliveCrew > 0;
+      return false;
+    }).length;
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are running tasks/kills.' : 'Task phase bot actions complete.' };
+  }
+
+  if (room.phase === 'meeting') {
+    const pending = aliveBots.filter((p) => !room.votes?.[p.id]).length;
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are voting in meeting.' : 'Bot votes submitted.' };
+  }
+
+  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay active.' };
+}
+
 function toPublic(room) {
   return {
     id: room.id,
@@ -56,6 +80,7 @@ function toPublic(room) {
     votes: room.votes,
     events: room.events.slice(-8),
     botAutoplay: true,
+    autoplay: summarizeBotAutoplay(room),
   };
 }
 

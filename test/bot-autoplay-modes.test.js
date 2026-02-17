@@ -54,6 +54,10 @@ test('mafia bot autopilot can finish bot-filled room loop with one human', async
 
     const started = await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
     assert.equal(started.ok, true);
+    assert.equal(started.state.botAutoplay, true);
+    assert.ok(started.state.autoplay);
+    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
 
     const finished = await waitFor(() => {
       const room = mafiaRooms.get(created.roomId);
@@ -84,6 +88,10 @@ test('among-us bot autopilot can finish bot-filled room loop with one human', as
 
     const started = await emitAck(host, 'amongus:start', { roomId: created.roomId, playerId: created.playerId });
     assert.equal(started.ok, true);
+    assert.equal(started.state.botAutoplay, true);
+    assert.ok(started.state.autoplay);
+    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
 
     const finished = await waitFor(() => {
       const room = amongUsRooms.get(created.roomId);
