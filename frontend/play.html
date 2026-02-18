@@ -9,7 +9,6 @@
 <body>
 <div class="wrap">
 
-  <!-- NAV -->
   <nav class="topnav">
     <a class="brand" href="/">
       <span class="brand-icon">⚔</span>
@@ -21,9 +20,12 @@
     </div>
   </nav>
 
-  <!-- SETUP ROW -->
-  <div class="card mb-16">
-    <p class="section-title mb-14">Room setup</p>
+  <section class="card mb-16">
+    <div class="section-header mb-12">
+      <span class="section-title">Room setup</span>
+      <span class="text-xs text-muted">Create, join, quick-match</span>
+    </div>
+
     <div class="input-row mb-12">
       <div class="field-group">
         <label class="field-label" for="gameMode">Game mode</label>
@@ -42,47 +44,50 @@
       </div>
     </div>
 
-    <!-- Primary actions -->
     <div class="row mb-12">
-      <button id="hostBtn"       class="btn btn-primary">Host room</button>
-      <button id="joinBtn"       class="btn btn-ghost">Join room</button>
-      <button id="quickMatchBtn" class="btn btn-ghost">
-        <span class="live-dot"></span>
-        Quick match
-      </button>
+      <button id="hostBtn" class="btn btn-primary">Host room</button>
+      <button id="joinBtn" class="btn btn-ghost">Join room</button>
+      <button id="quickMatchBtn" class="btn btn-ghost"><span class="live-dot"></span>Quick match</button>
     </div>
 
-    <!-- Status message -->
     <p id="playStatus" class="status-bar"></p>
     <div id="claimSeatsView" class="text-sm text-muted mt-8"></div>
-  </div>
+    <div id="recoveryHint" class="text-xs text-muted mt-8"></div>
+  </section>
 
-  <!-- GAME LAYOUT -->
   <div class="game-layout">
+    <main>
+      <section id="lobbyUrgencyCard" class="card mb-14" style="display:none;">
+        <div class="section-header">
+          <span id="lobbyUrgencyTitle" class="section-title">Lobby urgency</span>
+          <span id="lobbyUrgencyMeta" class="text-xs text-muted"></span>
+        </div>
+        <div class="grid-2">
+          <div id="urgencyStepJoin" class="text-sm text-ink2">⏳ Join room</div>
+          <div id="urgencyStepHost" class="text-sm text-ink2">⏳ Host online</div>
+          <div id="urgencyStepFill" class="text-sm text-ink2">⏳ 4 players ready</div>
+          <div id="urgencyStepStart" class="text-sm text-ink2">⏳ Start-ready now</div>
+        </div>
+      </section>
 
-    <!-- MAIN: Players + Actions + State -->
-    <div class="game-main">
-
-      <!-- Players panel -->
-      <div class="card mb-14">
+      <section class="card mb-14">
         <div class="section-header">
           <span class="section-title">Players</span>
           <div class="row">
-            <button id="autofillBtn"    class="btn btn-ghost btn-sm">Auto-fill bots</button>
-            <button id="loadClaimsBtn"  class="btn btn-ghost btn-sm">Reconnect seats</button>
+            <button id="autofillBtn" class="btn btn-ghost btn-sm">Auto-fill bots</button>
+            <button id="loadClaimsBtn" class="btn btn-ghost btn-sm">Find reconnect seats</button>
           </div>
         </div>
-        <div id="playersView" class="players-grid">
+        <div id="playersView" class="grid-2">
           <div class="text-sm text-muted" style="grid-column:1/-1;">No players yet — host or join a room above.</div>
         </div>
-      </div>
+      </section>
 
-      <!-- Action buttons -->
-      <div class="card mb-14">
+      <section class="card mb-14">
         <div class="section-header">
-          <span class="section-title">Actions</span>
+          <span class="section-title">Match actions</span>
           <div class="row">
-            <button id="startBtn"   class="btn btn-primary btn-sm">Start game</button>
+            <button id="startBtn" class="btn btn-primary btn-sm">Start game</button>
             <button id="rematchBtn" class="btn btn-win btn-sm">Rematch</button>
             <button id="advanceBtn" class="btn btn-ghost btn-sm">Ready / advance</button>
           </div>
@@ -90,11 +95,10 @@
         <div id="actionsView" class="actions-grid">
           <p class="text-sm text-muted">Actions appear here during an active match.</p>
         </div>
-      </div>
+      </section>
 
-      <!-- Owner digest (shown after game) -->
-      <div id="ownerDigestCard" class="card mb-14" style="display:none;border-color:rgba(99,102,241,.3);">
-        <p class="section-title text-primary mb-12" id="ownerDigestTitle">Post-game digest</p>
+      <section id="ownerDigestCard" class="card mb-14" style="display:none;border-color:rgba(91,124,255,.45);">
+        <p class="section-title mb-12" id="ownerDigestTitle">Post-game digest</p>
         <p class="text-sm text-ink2 mb-14" id="ownerDigestSummary"></p>
         <div class="grid-2">
           <div>
@@ -106,43 +110,34 @@
             <p class="font-bold" id="ownerDigestAction" style="font-size:15px;">—</p>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- Game state dump -->
       <details class="dev-panel mb-14">
-        <summary class="dev-panel-toggle" onclick="this.parentElement.toggleAttribute('open')">
-          ◆ Raw game state
-        </summary>
+        <summary class="dev-panel-toggle">◆ Raw game state</summary>
         <div class="dev-panel-body">
           <pre id="stateJson" class="state-dump">No state yet.</pre>
         </div>
       </details>
+    </main>
 
-    </div>
-
-    <!-- SIDEBAR: Ops + Evals -->
-    <div class="game-sidebar">
-
-      <!-- Ops info -->
-      <div class="card card-sm mb-12">
+    <aside>
+      <section class="card card-sm mb-12">
         <p class="section-title mb-10">System</p>
         <p id="eventQueueStatus" class="text-xs text-muted mb-6">Event queue: —</p>
-        <p id="canaryStatus"     class="text-xs text-muted mb-10">Canary policy: —</p>
-        <button id="flushEventsBtn" class="btn btn-ghost btn-sm" style="width:100%;">Flush event queue</button>
-      </div>
+        <p id="canaryStatus" class="text-xs text-muted mb-10">Canary policy: —</p>
+        <button id="flushEventsBtn" class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;">Flush event queue</button>
+      </section>
 
-      <!-- Eval harness -->
-      <div class="card card-sm">
+      <section class="card card-sm">
         <p class="section-title mb-10">Eval harness</p>
         <p class="text-xs text-muted mb-12">Runs 20 deterministic fixtures across both game modes.</p>
         <div class="row mb-10">
-          <button id="runEvalsBtn"   class="btn btn-ghost btn-sm" style="flex:1;">Run evals</button>
-          <button id="runCiGateBtn"  class="btn btn-ghost btn-sm" style="flex:1;">CI gate</button>
+          <button id="runEvalsBtn" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;">Run evals</button>
+          <button id="runCiGateBtn" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;">CI gate</button>
         </div>
         <pre id="evalStatus" class="state-dump" style="max-height:220px;font-size:11px;">No eval run yet.</pre>
-      </div>
-
-    </div>
+      </section>
+    </aside>
   </div>
 
 </div>
