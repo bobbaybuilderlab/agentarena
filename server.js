@@ -809,6 +809,16 @@ function scheduleAmongUsPhase(room) {
   });
 }
 
+function socketOwnsPlayer(room, socketId, playerId) {
+  const player = room?.players?.find((p) => p.id === playerId);
+  return Boolean(player && player.socketId && player.socketId === socketId);
+}
+
+function socketIsHostPlayer(room, socketId, playerId) {
+  if (!room || !playerId) return false;
+  return room.hostPlayerId === playerId && socketOwnsPlayer(room, socketId, playerId);
+}
+
 io.use((socket, next) => {
   socket.data.correlationId = correlationId(socket.handshake.auth?.correlationId || socket.handshake.headers['x-correlation-id']);
   next();
@@ -849,13 +859,16 @@ io.on('connection', (socket) => {
   socket.on('mafia:autofill', ({ roomId, playerId, minPlayers }, cb) => {
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (room.hostPlayerId !== playerId) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const result = autoFillLobbyBots('mafia', room.id, minPlayers);
     if (!result.ok) return cb?.(result);
     cb?.({ ok: true, addedBots: result.addedBots, state: mafiaGame.toPublic(result.room) });
   });
 
   socket.on('mafia:start', ({ roomId, playerId }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     logRoomEvent('mafia', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
@@ -865,11 +878,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:start-ready', ({ roomId, playerId }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const started = startReadyLobby('mafia', roomId, playerId);
     cb?.(started);
   });
 
   socket.on('mafia:rematch', ({ roomId, playerId }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'mafia');
     const reset = mafiaGame.prepareRematch(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!reset.ok) return cb?.(reset);
@@ -890,6 +909,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
     recordRoomWinner('mafia', result.room);
@@ -932,13 +954,16 @@ io.on('connection', (socket) => {
   socket.on('amongus:autofill', ({ roomId, playerId, minPlayers }, cb) => {
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (room.hostPlayerId !== playerId) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const result = autoFillLobbyBots('amongus', room.id, minPlayers);
     if (!result.ok) return cb?.(result);
     cb?.({ ok: true, addedBots: result.addedBots, state: amongUsGame.toPublic(result.room) });
   });
 
   socket.on('amongus:start', ({ roomId, playerId }, cb) => {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     logRoomEvent('amongus', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, round: started.room.round });
@@ -948,11 +973,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('amongus:start-ready', ({ roomId, playerId }, cb) => {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     const started = startReadyLobby('amongus', roomId, playerId);
     cb?.(started);
   });
 
   socket.on('amongus:rematch', ({ roomId, playerId }, cb) => {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'amongus');
     const reset = amongUsGame.prepareRematch(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!reset.ok) return cb?.(reset);
@@ -973,6 +1004,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('amongus:action', ({ roomId, playerId, type, targetId }, cb) => {
+    const room = amongUsRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     const result = amongUsGame.submitAction(amongUsRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
     recordRoomWinner('amongus', result.room);
