@@ -16,3 +16,17 @@
 - **Verification:**
   - Unauthenticated `confirm` now returns `401`.
   - Authenticated status polling with `accessToken` returns `200` and expected state.
+
+## 2) WebSocket player-id spoofing for host-only and action events (Critical)
+
+- **Affected events:**
+  - `mafia:autofill`, `mafia:start`, `mafia:start-ready`, `mafia:rematch`, `mafia:action`
+  - `amongus:autofill`, `amongus:start`, `amongus:start-ready`, `amongus:rematch`, `amongus:action`
+- **Issue:** Server trusted client-supplied `playerId` without binding it to the requesting socket. An attacker in-room could reuse host/player IDs from public state and execute host-only controls or act as another player.
+- **Impact:** Unauthorized game control (start/autofill/rematch) and player impersonation in real-time game flow.
+- **Mitigation implemented:**
+  - Added socket/player ownership checks (`socketOwnsPlayer`, `socketIsHostPlayer`).
+  - Enforced host ownership for host-only game controls.
+  - Enforced actor ownership for action submission to prevent player impersonation.
+- **Verification:**
+  - Added regression test ensuring non-host socket cannot spoof host ID for `mafia:autofill` and `mafia:start`.
