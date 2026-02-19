@@ -18,6 +18,7 @@ const checkStatusBtn = document.getElementById('checkStatusBtn');
 let connectSessionId = null;
 let connectCommand = '';
 let connectExpiresAt = null;
+let connectAccessToken = '';
 let statusPoll = null;
 
 connectFlowForm?.addEventListener('submit', async (e) => {
@@ -38,6 +39,7 @@ connectFlowForm?.addEventListener('submit', async (e) => {
     connectSessionId = data.connect.id;
     connectCommand = data.connect.command;
     connectExpiresAt = data.connect.expiresAt || null;
+    connectAccessToken = data.connect.accessToken || '';
     cliCommandEl.textContent = connectCommand;
     if (expiresAtEl && connectExpiresAt) {
       const sec = Math.max(0, Math.floor((connectExpiresAt - Date.now()) / 1000));
@@ -67,7 +69,8 @@ copyCmdBtn?.addEventListener('click', async () => {
 async function checkConnectionStatus() {
   if (!connectSessionId) return;
   try {
-    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}`);
+    const qs = connectAccessToken ? `?accessToken=${encodeURIComponent(connectAccessToken)}` : '';
+    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}${qs}`);
     const data = await res.json();
     if (!data.ok) return;
     if (data.connect.status === 'connected') {

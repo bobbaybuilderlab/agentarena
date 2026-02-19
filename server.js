@@ -162,6 +162,7 @@ function recordQuickJoinConversion(mode, roomId, name) {
   const telemetry = getRoomTelemetry(mode, roomId);
   telemetry.quickMatchConversions += 1;
   telemetry.updatedAt = Date.now();
+  roomEvents.append('growth', roomId, 'QUICK_JOIN_CONVERTED', { mode, name: String(name || '').slice(0, 24) });
 }
 
 function recordReconnectAutoTelemetry(mode, roomId, outcome) {
@@ -618,6 +619,7 @@ function finalizeRound(room) {
   const transition = transitionRoomState(room, room.round >= room.maxRounds ? 'ROUND_COMPLETE_FINISH' : 'ROUND_COMPLETE_CONTINUE');
   if (!transition.ok) return transition;
 
+  if (room.status === 'finished') recordFirstMatchCompletion('arena', room.id);
   logRoomEvent('arena', room, room.status === 'finished' ? 'BATTLE_FINISHED' : 'ROUND_FINISHED', {
     status: room.status,
     phase: room.status,
@@ -773,6 +775,7 @@ function scheduleMafiaPhase(room) {
   roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
     const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
     if (advanced.ok) {
+      if (room.status === 'finished') recordFirstMatchCompletion('mafia', room.id);
       emitMafiaRoom(room);
       scheduleMafiaPhase(room);
     }
@@ -799,6 +802,7 @@ function scheduleAmongUsPhase(room) {
   roomScheduler.schedule({ namespace: 'amongus', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
     const advanced = amongUsGame.forceAdvance(amongUsRooms, { roomId: room.id });
     if (advanced.ok) {
+      if (room.status === 'finished') recordFirstMatchCompletion('amongus', room.id);
       emitAmongUsRoom(room);
       scheduleAmongUsPhase(room);
     }
@@ -872,6 +876,7 @@ io.on('connection', (socket) => {
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     const telemetry = recordRematch('mafia', started.room.id);
+    incrementGrowthMetric('funnel.rematchStarts', 1);
     recordTelemetryEvent('mafia', started.room.id, 'rematch_clicked');
     const partyStreak = Math.max(0, Number(started.room.partyStreak || 0));
     if (partyStreak > 0) {
@@ -888,6 +893,7 @@ io.on('connection', (socket) => {
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
     recordRoomWinner('mafia', result.room);
+    if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
     logRoomEvent('mafia', result.room, 'ACTION_SUBMITTED', {
       actorId: playerId,
       action: type,
@@ -953,6 +959,7 @@ io.on('connection', (socket) => {
     const started = amongUsGame.startGame(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     const telemetry = recordRematch('amongus', started.room.id);
+    incrementGrowthMetric('funnel.rematchStarts', 1);
     recordTelemetryEvent('amongus', started.room.id, 'rematch_clicked');
     const partyStreak = Math.max(0, Number(started.room.partyStreak || 0));
     if (partyStreak > 0) {
@@ -969,6 +976,7 @@ io.on('connection', (socket) => {
     const result = amongUsGame.submitAction(amongUsRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
     recordRoomWinner('amongus', result.room);
+    if (result.room.status === 'finished') recordFirstMatchCompletion('amongus', result.room.id);
     logRoomEvent('amongus', result.room, 'ACTION_SUBMITTED', {
       actorId: playerId,
       action: type,
@@ -1247,6 +1255,13 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+app.use((req, _res, next) => {
+  if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html'].includes(req.path)) {
+    incrementGrowthMetric('funnel.visits', 1);
+  }
+  next();
+});
+
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
 const ROOM_EVENTS_FILE = path.join(DATA_DIR, 'room-events.ndjson');
@@ -1258,6 +1273,37 @@ const votes = new Set();
 // pair vote caps removed: agent voting is unlimited except self/owner restrictions
 const sessions = new Map();
 const connectSessions = new Map();
+const completedMatchRooms = new Set();
+let growthMetrics = null;
+
+function loadGrowthMetrics() {
+  try {
+    if (!fs.existsSync(GROWTH_METRICS_FILE)) {
+      growthMetrics = persistGrowthMetricsSnapshot();
+      return;
+    }
+    growthMetrics = JSON.parse(fs.readFileSync(GROWTH_METRICS_FILE, 'utf8'));
+  } catch (_err) {
+    growthMetrics = persistGrowthMetricsSnapshot();
+  }
+}
+
+function incrementGrowthMetric(path, amount = 1) {
+  if (!growthMetrics) loadGrowthMetrics();
+  const [bucket, key] = String(path || '').split('.');
+  if (!bucket || !key) return;
+  if (!growthMetrics[bucket] || typeof growthMetrics[bucket] !== 'object') growthMetrics[bucket] = {};
+  growthMetrics[bucket][key] = Math.max(0, Number(growthMetrics[bucket][key] || 0) + Number(amount || 0));
+  growthMetrics.updatedAt = new Date().toISOString();
+  fs.writeFileSync(GROWTH_METRICS_FILE, JSON.stringify(growthMetrics, null, 2));
+}
+
+function recordFirstMatchCompletion(mode, roomId) {
+  const key = telemetryKey(mode, roomId);
+  if (completedMatchRooms.has(key)) return;
+  completedMatchRooms.add(key);
+  incrementGrowthMetric('funnel.firstMatchesCompleted', 1);
+}
 
 function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
   if (!connect) return null;
@@ -1274,7 +1320,6 @@ function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
     connectedAt: connect.connectedAt,
   };
   if (includeSecrets) {
-    base.callbackProof = connect.callbackProof;
     base.accessToken = connect.accessToken;
   }
   return base;
@@ -1444,6 +1489,7 @@ app.post('/api/auth/session', (req, res) => {
 });
 
 app.post('/api/openclaw/connect-session', (req, res) => {
+  incrementGrowthMetric('funnel.connectSessionStarts', 1);
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
 
@@ -1465,6 +1511,10 @@ app.post('/api/openclaw/connect-session', (req, res) => {
     agentName: null,
   };
   connectSessions.set(id, connect);
+  roomEvents.append('growth', id, 'CONNECT_SESSION_STARTED', {
+    status: connect.status,
+    emailDomain: email.split('@')[1] || null,
+  });
   res.json({ ok: true, connect: sanitizeConnectSession(connect, { includeSecrets: true }) });
 });
 
@@ -1504,6 +1554,12 @@ app.post('/api/openclaw/callback', (req, res) => {
   connect.agentId = agentId;
   connect.agentName = name;
   connect.connectedAt = Date.now();
+  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_CONNECTED', {
+    status: connect.status,
+    agentId,
+    agentName: name,
+    emailDomain: String(connect.email || '').split('@')[1] || null,
+  });
   persistState();
 
   res.json({ ok: true, connect: sanitizeConnectSession(connect), agent });
@@ -1512,25 +1568,18 @@ app.post('/api/openclaw/callback', (req, res) => {
 app.get('/api/openclaw/connect-session/:id', (req, res) => {
   const connect = connectSessions.get(req.params.id);
   if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-  res.json({ ok: true, connect: {
-    id: connect.id,
-    email: connect.email,
-    status: connect.status,
-    command: connect.command,
-    callbackUrl: connect.callbackUrl,
-    createdAt: connect.createdAt,
-    expiresAt: connect.expiresAt,
-    agentId: connect.agentId,
-    agentName: connect.agentName,
-    connectedAt: connect.connectedAt,
-  } });
+  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+  if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
+  res.json({ ok: true, connect: sanitizeConnectSession(connect) });
 });
 
 app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
   const connect = connectSessions.get(req.params.id);
   if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
+  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+  if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
 
-  if (connect.status === 'connected') return res.json({ ok: true, connect });
+  if (connect.status === 'connected') return res.json({ ok: true, connect: sanitizeConnectSession(connect) });
 
   const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
   const style = String(req.body?.style || 'witty').slice(0, 24);
@@ -1557,9 +1606,15 @@ app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
   connect.status = 'connected';
   connect.agentId = agentId;
   connect.connectedAt = Date.now();
+  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_CONNECTED', {
+    status: connect.status,
+    agentId,
+    agentName: name,
+    emailDomain: String(connect.email || '').split('@')[1] || null,
+  });
   persistState();
 
-  res.json({ ok: true, connect, agent });
+  res.json({ ok: true, connect: sanitizeConnectSession(connect), agent });
 });
 
 app.post('/api/agents', (req, res) => {
@@ -2008,6 +2063,12 @@ function startReadyLobby(mode, roomId, playerId) {
 
   const readiness = getLobbyStartReadiness(mode, room, playerId);
   if (!readiness.canStart) {
+    roomEvents.append(mode, room.id, 'LOBBY_START_BLOCKED', {
+      status: room.status,
+      reasonCode: readiness.reasons[0]?.code || 'LOBBY_NOT_READY',
+      missingPlayers: readiness.missingPlayers,
+      disconnectedPlayers: readiness.disconnectedPlayers?.length || 0,
+    });
     return {
       ok: false,
       error: {
@@ -2149,6 +2210,11 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
   let telemetry = getRoomTelemetry(mode, roomId);
   if (hasOutcome) telemetry = recordReconnectAutoTelemetry(mode, roomId, outcome);
   if (hasEvent) telemetry = recordReconnectClickTelemetry(mode, roomId, event);
+  roomEvents.append('growth', roomId, 'RECONNECT_TELEMETRY_RECORDED', {
+    mode,
+    outcome: hasOutcome ? outcome : null,
+    event: hasEvent ? event : null,
+  });
 
   res.json({
     ok: true,
@@ -2167,6 +2233,7 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
 });
 
 app.post('/api/play/quick-join', (req, res) => {
+  incrementGrowthMetric('funnel.quickJoinStarts', 1);
   const modeInput = String(req.body?.mode || 'all').toLowerCase();
   const playerName = String(req.body?.name || '').trim().slice(0, 24) || `Player-${Math.floor(Math.random() * 900) + 100}`;
 
@@ -2175,6 +2242,10 @@ app.post('/api/play/quick-join', (req, res) => {
   }
 
   const selectedMode = pickQuickJoinMode(modeInput);
+  roomEvents.append('growth', selectedMode, 'QUICK_JOIN_REQUESTED', {
+    modeInput,
+    selectedMode,
+  });
   const candidates = listPlayableRooms(selectedMode, 'open')
     .filter((room) => room.canJoin)
     .sort((a, b) => {
@@ -2213,6 +2284,12 @@ app.post('/api/play/quick-join', (req, res) => {
   };
 
   issueQuickJoinTicket(targetRoom.mode, targetRoom.roomId, playerName);
+  roomEvents.append('growth', targetRoom.roomId, 'QUICK_JOIN_TICKET_ISSUED', {
+    mode: targetRoom.mode,
+    created,
+    hasReconnectSuggestion: Boolean(reconnectSuggestion),
+    reasonCode: quickJoinDecision.reasonCode,
+  });
   res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, (targetRoom.mode === 'mafia' ? mafiaRooms : amongUsRooms).get(targetRoom.roomId)), quickJoinDecision, joinTicket });
 });
 
@@ -2243,6 +2320,20 @@ app.post('/api/play/lobby/autofill', (req, res) => {
 });
 
 loadState();
+if (typeof loadGrowthMetrics === 'function') {
+  loadGrowthMetrics();
+} else {
+  growthMetrics = growthMetrics || {
+    funnel: {
+      visits: 0,
+      quickJoinStarts: 0,
+      connectSessionStarts: 0,
+      firstMatchesCompleted: 0,
+      rematchStarts: 0,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -2350,6 +2441,16 @@ app.get('/api/ops/reconnect', (_req, res) => {
   });
 });
 
+app.get('/api/ops/kpis', (_req, res) => {
+  const report = snapshotKpis();
+  res.json({ ok: true, ...report });
+});
+
+app.post('/api/ops/kpis/refresh', (_req, res) => {
+  const payload = persistGrowthMetricsSnapshot();
+  res.json({ ok: true, metrics: payload });
+});
+
 app.get('/api/evals/run', (_req, res) => {
   const report = runEval();
   res.json(report);
@@ -2366,6 +2467,21 @@ app.get('/api/evals/ci', (_req, res) => {
     totals: report.totals,
     failedFixtures: report.failures.map((f) => f.id),
   });
+});
+
+app.get('/api/ops/kpis', (_req, res) => {
+  const report = snapshotKpis();
+  res.json({ ok: true, report });
+});
+
+app.post('/api/ops/kpis/snapshot', (_req, res) => {
+  const metrics = persistGrowthMetricsSnapshot();
+  growthMetrics = metrics;
+  res.json({ ok: true, metrics });
+});
+
+app.get('/api/ops/funnel', (_req, res) => {
+  res.json({ ok: true, metrics: growthMetrics });
 });
 
 app.get('/health', (_req, res) => {
