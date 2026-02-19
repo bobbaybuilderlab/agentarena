@@ -50,6 +50,7 @@ function parseQueryConfig() {
   const queryName = params.get('name');
   const reclaimName = params.get('reclaimName');
   const claimToken = params.get('claimToken');
+  const quickJoinReason = params.get('qjReason');
   const reclaimHost = params.get('reclaimHost') === '1';
   const autojoin = params.get('autojoin') === '1';
 
@@ -72,6 +73,7 @@ function parseQueryConfig() {
     autojoin,
     queryName: normalizedQueryName,
     reclaimName: normalizedReclaimName,
+    quickJoinReason: quickJoinReason ? String(quickJoinReason).trim().slice(0, 180) : '',
     reclaimHost,
     claimToken: claimToken ? String(claimToken).trim() : '',
   };
@@ -655,7 +657,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 async function autoJoinFromQuery() {
-  const { autojoin, reclaimName, reclaimHost, queryName, claimToken } = parseQueryConfig();
+  const { autojoin, reclaimName, reclaimHost, queryName, claimToken, quickJoinReason } = parseQueryConfig();
   if (!autojoin || attemptedAutoJoin) return;
   attemptedAutoJoin = true;
 
@@ -708,7 +710,10 @@ async function autoJoinFromQuery() {
   suggestedReclaim = null;
   me.roomId = res.roomId;
   me.playerId = res.playerId;
-  setStatus(reclaimName ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}` : `Quick-joined ${me.game} room ${me.roomId}`);
+  const joinStatus = reclaimName
+    ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}`
+    : `Quick-joined ${me.game} room ${me.roomId}`;
+  setStatus(quickJoinReason ? `${joinStatus} · ${quickJoinReason}` : joinStatus);
   showRecoveryHint('Connected. If you drop, reopen this room and use Find Reconnect Seats to reclaim identity fast.');
   renderState(res.state);
   void loadClaimableSeats();

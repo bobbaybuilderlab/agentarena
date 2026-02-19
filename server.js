@@ -14,6 +14,7 @@ const { rememberBotRound, summarizeBotMemory } = require('./bots/episodic-memory
 const { runEval } = require('./lib/eval-harness');
 const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
 const { createCanaryMode } = require('./lib/canary-mode');
+const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
 
 const app = express();
 const server = http.createServer(app);
@@ -205,35 +206,42 @@ function issueReconnectClaimTicket(mode, roomId, name) {
   return token;
 }
 
-function consumeReconnectClaimTicket(mode, roomId, token) {
+function readReconnectClaimTicket(mode, roomId, token, consume = false) {
   const now = Date.now();
   sweepExpiredReconnectClaimTickets(now);
   const key = reconnectTicketKey(mode, roomId, token);
   const found = reconnectClaimTickets.get(key);
   if (!found) return null;
-  reconnectClaimTickets.delete(key);
-  if ((now - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) return null;
+  if ((now - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) {
+    reconnectClaimTickets.delete(key);
+    return null;
+  }
+  if (consume) reconnectClaimTickets.delete(key);
   return found;
+}
+
+function consumeReconnectClaimTicket(mode, roomId, token) {
+  return readReconnectClaimTicket(mode, roomId, token, true);
 }
 
 function resolveReconnectJoinName(mode, roomId, requestedName, claimToken) {
   const normalizedRequested = String(requestedName || '').trim();
   const claims = getClaimableLobbySeats(mode, roomId);
   if (!claims.ok || !Array.isArray(claims.claimable) || !claims.claimable.length) {
-    return { name: normalizedRequested, suggested: null };
+    return { name: normalizedRequested, suggested: null, consumedClaimToken: null };
   }
 
   const lowerRequested = normalizedRequested.toLowerCase();
   const direct = claims.claimable.find((seat) => seat.name.toLowerCase() === lowerRequested) || null;
-  if (direct) return { name: direct.name, suggested: direct.name };
+  if (direct) return { name: direct.name, suggested: direct.name, consumedClaimToken: null };
 
-  const ticket = claimToken ? consumeReconnectClaimTicket(mode, roomId, claimToken) : null;
+  const ticket = claimToken ? readReconnectClaimTicket(mode, roomId, claimToken, false) : null;
   if (ticket?.name) {
     const matched = claims.claimable.find((seat) => seat.name.toLowerCase() === ticket.name.toLowerCase());
-    if (matched) return { name: matched.name, suggested: matched.name };
+    if (matched) return { name: matched.name, suggested: matched.name, consumedClaimToken: claimToken };
   }
 
-  return { name: normalizedRequested, suggested: null };
+  return { name: normalizedRequested, suggested: null, consumedClaimToken: null };
 }
 
 function pickReconnectSuggestion(mode, roomId, requestedName) {
@@ -826,6 +834,7 @@ io.on('connection', (socket) => {
     const reconnect = resolveReconnectJoinName('mafia', roomId, name, claimToken);
     const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name: reconnect.name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
+    if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('mafia', joined.room.id, reconnect.consumedClaimToken);
     socket.join(`mafia:${joined.room.id}`);
     recordQuickJoinConversion('mafia', joined.room.id, joined.player.name);
     logRoomEvent('mafia', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
@@ -906,6 +915,7 @@ io.on('connection', (socket) => {
     const reconnect = resolveReconnectJoinName('amongus', roomId, name, claimToken);
     const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name: reconnect.name, socketId: socket.id });
     if (!joined.ok) return cb?.(joined);
+    if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('amongus', joined.room.id, reconnect.consumedClaimToken);
     socket.join(`amongus:${joined.room.id}`);
     recordQuickJoinConversion('amongus', joined.room.id, joined.player.name);
     logRoomEvent('amongus', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
@@ -1239,6 +1249,8 @@ app.use(express.json());
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
+const ROOM_EVENTS_FILE = path.join(DATA_DIR, 'room-events.ndjson');
+const GROWTH_METRICS_FILE = path.join(__dirname, 'growth-metrics.json');
 
 const agentProfiles = new Map();
 const roastFeed = [];
@@ -1246,6 +1258,44 @@ const votes = new Set();
 // pair vote caps removed: agent voting is unlimited except self/owner restrictions
 const sessions = new Map();
 const connectSessions = new Map();
+
+function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
+  if (!connect) return null;
+  const base = {
+    id: connect.id,
+    email: connect.email,
+    status: connect.status,
+    command: connect.command,
+    callbackUrl: connect.callbackUrl,
+    createdAt: connect.createdAt,
+    expiresAt: connect.expiresAt,
+    agentId: connect.agentId,
+    agentName: connect.agentName,
+    connectedAt: connect.connectedAt,
+  };
+  if (includeSecrets) {
+    base.callbackProof = connect.callbackProof;
+    base.accessToken = connect.accessToken;
+  }
+  return base;
+}
+
+function readConnectAccessToken(req) {
+  return String(
+    req.query?.accessToken
+      || req.headers['x-connect-access-token']
+      || req.body?.accessToken
+      || req.body?.proof
+      || ''
+  ).trim();
+}
+
+function authorizeConnectSession(req, connect) {
+  if (!connect) return false;
+  const token = readConnectAccessToken(req);
+  if (!token) return false;
+  return token === connect.accessToken || token === connect.callbackProof;
+}
 
 function persistState() {
   try {
@@ -1271,6 +1321,45 @@ function loadState() {
   } catch (err) {
     console.error('loadState failed', err.message);
   }
+}
+
+function snapshotKpis() {
+  const events = loadEvents(ROOM_EVENTS_FILE);
+  return buildKpiReport({ events, playRoomTelemetry });
+}
+
+function persistGrowthMetricsSnapshot() {
+  const report = snapshotKpis();
+  const payload = {
+    updatedAt: report.updatedAt,
+    window: 'all_time',
+    funnel: {
+      visits: report.funnel.created,
+      connectSessionStarts: report.funnel.activationJoined,
+      quickJoinStarts: report.quickJoin.tickets,
+      firstMatchesCompleted: report.funnel.started,
+      rematchStarts: report.rematch.clicked,
+      d1ReturnRate: report.rematch.retentionProxy,
+    },
+    referral: {
+      inviteSends: 0,
+      inviteToFirstMatchConversion: 0,
+    },
+    kpi: {
+      activationRate: report.funnel.activationRate,
+      roomStartRate: report.funnel.roomStartRate,
+      reconnectSuccessRate: report.reconnect.successRate,
+      rematchRate: report.rematch.rematchRate,
+      retentionProxy: report.rematch.retentionProxy,
+      quickJoinConversionRate: report.quickJoin.conversionRate,
+    },
+    byMode: report.byMode,
+    sample: report.sample,
+    notes: 'Auto-generated from room events + in-memory play telemetry via /api/ops/kpis.',
+  };
+
+  fs.writeFileSync(GROWTH_METRICS_FILE, JSON.stringify(payload, null, 2));
+  return payload;
 }
 
 function registerRoast({ battleId, agentId, agentName, text }) {
@@ -1361,6 +1450,7 @@ app.post('/api/openclaw/connect-session', (req, res) => {
   const id = shortId(18);
   const callbackUrl = `${req.protocol}://${req.get('host')}/api/openclaw/callback`;
   const callbackProof = shortId(24);
+  const accessToken = shortId(24);
   const connect = {
     id,
     email,
@@ -1368,23 +1458,14 @@ app.post('/api/openclaw/connect-session', (req, res) => {
     command: `openclaw agentarena connect --token ${id} --callback '${callbackUrl}' --proof ${callbackProof}`,
     callbackUrl,
     callbackProof,
+    accessToken,
     createdAt: Date.now(),
     expiresAt: Date.now() + 15 * 60_000,
     agentId: null,
     agentName: null,
   };
   connectSessions.set(id, connect);
-  res.json({ ok: true, connect: {
-    id: connect.id,
-    email: connect.email,
-    status: connect.status,
-    command: connect.command,
-    callbackUrl: connect.callbackUrl,
-    createdAt: connect.createdAt,
-    expiresAt: connect.expiresAt,
-    agentId: connect.agentId,
-    agentName: connect.agentName,
-  } });
+  res.json({ ok: true, connect: sanitizeConnectSession(connect, { includeSecrets: true }) });
 });
 
 app.post('/api/openclaw/callback', (req, res) => {
@@ -1395,7 +1476,7 @@ app.post('/api/openclaw/callback', (req, res) => {
   if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
   if (!proof || proof !== connect.callbackProof) return res.status(401).json({ ok: false, error: 'invalid callback proof' });
 
-  if (connect.status === 'connected') return res.json({ ok: true, connect });
+  if (connect.status === 'connected') return res.json({ ok: true, connect: sanitizeConnectSession(connect) });
 
   const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
   const style = String(req.body?.style || 'witty').slice(0, 24);
@@ -1425,7 +1506,7 @@ app.post('/api/openclaw/callback', (req, res) => {
   connect.connectedAt = Date.now();
   persistState();
 
-  res.json({ ok: true, connect, agent });
+  res.json({ ok: true, connect: sanitizeConnectSession(connect), agent });
 });
 
 app.get('/api/openclaw/connect-session/:id', (req, res) => {
@@ -1804,6 +1885,53 @@ function pickQuickJoinMode(mode) {
   return openMafia <= openAmongUs ? 'mafia' : 'amongus';
 }
 
+function buildQuickJoinDecision(candidates, targetRoom, created) {
+  if (created) {
+    return {
+      code: 'CREATED_NEW_ROOM',
+      message: 'No open lobby was ready, so we created a fresh room and auto-filled bots to start fast.',
+      signals: {
+        openCandidates: 0,
+      },
+    };
+  }
+
+  const others = (candidates || []).filter((room) => room.roomId !== targetRoom.roomId);
+  const avoidedReconnectFriction = others.some((room) => Number(room.matchQuality?.reconnectFrictionPenalty || 0) > Number(targetRoom.matchQuality?.reconnectFrictionPenalty || 0));
+  const avoidedOfflineHost = others.some((room) => !room.launchReadiness?.hostConnected) && Boolean(targetRoom.launchReadiness?.hostConnected);
+
+  if (avoidedReconnectFriction) {
+    return {
+      code: 'LOWER_RECONNECT_FRICTION',
+      message: 'Quick match routed you to a lobby with better reconnect reliability.',
+      signals: {
+        reconnectFrictionPenalty: Number(targetRoom.matchQuality?.reconnectFrictionPenalty || 0),
+        openCandidates: candidates.length,
+      },
+    };
+  }
+
+  if (avoidedOfflineHost) {
+    return {
+      code: 'HOST_ONLINE_PRIORITY',
+      message: 'Quick match prioritized a lobby where the host is currently online.',
+      signals: {
+        hostConnected: true,
+        openCandidates: candidates.length,
+      },
+    };
+  }
+
+  return {
+    code: 'BEST_MATCH_QUALITY',
+    message: 'Quick match picked the highest-quality open lobby based on readiness and momentum.',
+    signals: {
+      score: Number(targetRoom.matchQuality?.score || 0),
+      openCandidates: candidates.length,
+    },
+  };
+}
+
 const QUICK_JOIN_MIN_PLAYERS = 4;
 
 function createQuickJoinRoom(mode, hostName) {
@@ -2071,18 +2199,21 @@ app.post('/api/play/quick-join', (req, res) => {
   const reconnectSuggestion = created ? null : pickReconnectSuggestion(targetRoom.mode, targetRoom.roomId, playerName);
   const suggestedName = reconnectSuggestion?.name || playerName;
   const claimToken = reconnectSuggestion?.token || '';
+  const quickJoinDecision = buildQuickJoinDecision(candidates, targetRoom, created);
+  const quickHint = encodeURIComponent(String(quickJoinDecision.message || '').slice(0, 180));
   const joinTicket = {
     mode: targetRoom.mode,
     roomId: targetRoom.roomId,
     name: playerName,
     autojoin: true,
     reconnect: reconnectSuggestion,
-    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&reclaimHost=${reconnectSuggestion.hostSeat ? '1' : '0'}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
+    quickJoinDecision,
+    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}&qjReason=${quickHint}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&reclaimHost=${reconnectSuggestion.hostSeat ? '1' : '0'}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
     issuedAt: Date.now(),
   };
 
   issueQuickJoinTicket(targetRoom.mode, targetRoom.roomId, playerName);
-  res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, (targetRoom.mode === 'mafia' ? mafiaRooms : amongUsRooms).get(targetRoom.roomId)), joinTicket });
+  res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, (targetRoom.mode === 'mafia' ? mafiaRooms : amongUsRooms).get(targetRoom.roomId)), quickJoinDecision, joinTicket });
 });
 
 app.post('/api/play/lobby/autofill', (req, res) => {

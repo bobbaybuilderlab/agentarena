@@ -109,8 +109,11 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
       assert.equal(quickJoinData.created, false);
       assert.equal(quickJoinData.room.roomId, hotRoom.roomId);
       assert.ok((quickJoinData.room.matchQuality?.score || 0) > 0.5);
+      assert.equal(typeof quickJoinData.quickJoinDecision?.code, 'string');
+      assert.equal(typeof quickJoinData.quickJoinDecision?.message, 'string');
       assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${hotRoom.roomId}`));
       assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
+      assert.match(quickJoinData.joinTicket.joinUrl, /qjReason=/);
 
       const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
       const roomsData = await roomsRes.json();
@@ -137,6 +140,7 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
     const data = await res.json();
     assert.equal(data.ok, true);
     assert.equal(data.created, true);
+    assert.equal(data.quickJoinDecision?.code, 'CREATED_NEW_ROOM');
     assert.equal(data.room.mode, 'amongus');
     assert.equal(data.room.players, 4);
     assert.equal(data.room.hostName, 'FreshPlayer');
@@ -186,6 +190,7 @@ test('quick-join down-ranks reconnect-friction rooms when healthier lobby exists
       assert.equal(quickJoinData.ok, true);
       assert.equal(quickJoinData.created, false);
       assert.equal(quickJoinData.room.roomId, healthyRoom.roomId);
+      assert.equal(quickJoinData.quickJoinDecision?.code, 'LOWER_RECONNECT_FRICTION');
 
       const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
       const roomsData = await roomsRes.json();

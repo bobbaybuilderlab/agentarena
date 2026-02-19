@@ -28,6 +28,14 @@ const ownerDigestTitle = document.getElementById('ownerDigestTitle');
 const ownerDigestSummary = document.getElementById('ownerDigestSummary');
 const ownerDigestResult = document.getElementById('ownerDigestResult');
 const ownerDigestAction = document.getElementById('ownerDigestAction');
+const recoveryHint = document.getElementById('recoveryHint');
+const lobbyUrgencyCard = document.getElementById('lobbyUrgencyCard');
+const lobbyUrgencyTitle = document.getElementById('lobbyUrgencyTitle');
+const lobbyUrgencyMeta = document.getElementById('lobbyUrgencyMeta');
+const urgencyStepJoin = document.getElementById('urgencyStepJoin');
+const urgencyStepHost = document.getElementById('urgencyStepHost');
+const urgencyStepFill = document.getElementById('urgencyStepFill');
+const urgencyStepStart = document.getElementById('urgencyStepStart');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -42,6 +50,7 @@ function parseQueryConfig() {
   const queryName = params.get('name');
   const reclaimName = params.get('reclaimName');
   const claimToken = params.get('claimToken');
+  const quickJoinReason = params.get('qjReason');
   const reclaimHost = params.get('reclaimHost') === '1';
   const autojoin = params.get('autojoin') === '1';
 
@@ -64,6 +73,7 @@ function parseQueryConfig() {
     autojoin,
     queryName: normalizedQueryName,
     reclaimName: normalizedReclaimName,
+    quickJoinReason: quickJoinReason ? String(quickJoinReason).trim().slice(0, 180) : '',
     reclaimHost,
     claimToken: claimToken ? String(claimToken).trim() : '',
   };
@@ -73,8 +83,21 @@ function emitAck(event, payload = {}) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
 }
 
-function setStatus(text) {
+function setStatus(text, tone = 'info') {
   playStatus.textContent = text;
+  playStatus.classList.remove('status-info', 'status-warn', 'status-error');
+  if (tone === 'warn') playStatus.classList.add('status-warn');
+  else if (tone === 'error') playStatus.classList.add('status-error');
+  else playStatus.classList.add('status-info');
+}
+
+function showRecoveryHint(html) {
+  if (!recoveryHint) return;
+  recoveryHint.innerHTML = html;
+}
+
+function defaultRecoveryHint() {
+  showRecoveryHint('Recovery tip: if reconnect fails, keep the same room ID and click <strong>Find Reconnect Seats</strong> to reclaim your old name.');
 }
 
 function formatError(res, fallback) {
@@ -101,12 +124,16 @@ function renderClaimSeats(data) {
     : '';
 
   if (!seats.length) {
-    claimSeatsView.innerHTML = suggestedButton || 'No reconnect seats found for this lobby.';
+    claimSeatsView.innerHTML = [
+      suggestedButton || '<strong>No reclaimable seats in this room yet.</strong>',
+      '<span>Try again in a few seconds, or quick-match into the fastest available room.</span>',
+      '<button class="btn btn-soft" type="button" data-quick-recover="1">Quick match me now</button>',
+    ].filter(Boolean).join(' ');
     return;
   }
 
   claimSeatsView.innerHTML = [
-    '<strong>Reconnect seats:</strong>',
+    '<strong>Reconnect seats found — claim your old identity:</strong>',
     suggestedButton,
     ...seats.map((seat) => `
       <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
@@ -129,11 +156,14 @@ async function loadClaimableSeats() {
     const data = await res.json();
     if (!data?.ok) {
       claimSeatsView.textContent = formatError(data, 'Could not load reconnect seats');
+      showRecoveryHint('Recovery tip: seat lookup failed. Confirm game + room ID, then retry.');
       return;
     }
     renderClaimSeats(data);
+    showRecoveryHint('Recovery tip: reclaim your previous name to recover host rights, streaks, and continuity.');
   } catch (_err) {
     claimSeatsView.textContent = 'Could not load reconnect seats';
+    showRecoveryHint('Recovery tip: temporary network issue. Retry in a few seconds.');
   }
 }
 
@@ -212,6 +242,40 @@ async function refreshOpsStatus() {
   }
 }
 
+function markUrgencyStep(el, done, label) {
+  if (!el) return;
+  el.textContent = `${done ? '✅' : '⏳'} ${label}`;
+}
+
+function updateLobbyUrgency(state, isHost) {
+  if (!lobbyUrgencyCard || !state) return;
+  const inLobby = state.status === 'lobby';
+  lobbyUrgencyCard.style.display = inLobby ? 'block' : 'none';
+  if (!inLobby) return;
+
+  const players = state.players || [];
+  const joined = Boolean(me.playerId);
+  const hostOnline = players.some((p) => p.id === state.hostPlayerId && p.isConnected);
+  const full = players.length >= 4;
+  const createdAt = Number(state.createdAt || Date.now());
+  const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+  const etaSec = full ? 0 : Math.max(0, (4 - players.length) * 45 - Math.min(ageSec, 120));
+
+  markUrgencyStep(urgencyStepJoin, joined, 'Join room');
+  markUrgencyStep(urgencyStepHost, hostOnline, 'Host online');
+  markUrgencyStep(urgencyStepFill, full, '4 players ready');
+  markUrgencyStep(urgencyStepStart, isHost && full && hostOnline, 'Start-ready now');
+
+  if (lobbyUrgencyTitle) {
+    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, 4 - players.length)} more to start`;
+  }
+  if (lobbyUrgencyMeta) {
+    lobbyUrgencyMeta.textContent = full
+      ? (isHost ? 'You can launch immediately with Start Ready.' : 'Waiting for host to launch…')
+      : `Join urgency: ${etaSec}s est. to ready at current fill pace.`;
+  }
+}
+
 function updateControlState(state) {
   const players = state?.players || [];
   const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
@@ -236,16 +300,18 @@ function updateControlState(state) {
     rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
   }
 
+  updateLobbyUrgency(state, isHost);
+
   if (!isHost && inLobby) {
-    setStatus(`Waiting for host to start · players ${players.length}/4`);
+    setStatus(`Waiting for host to start · players ${players.length}/4`, 'warn');
   } else if (isHost && inLobby) {
     const reasons = [];
     if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
     if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
     if (reasons.length > 0) {
-      setStatus(`Start Ready check: ${reasons.join(' · ')}`);
+      setStatus(`Start Ready check: ${reasons.join(' · ')}`, 'warn');
     } else {
-      setStatus('Lobby ready. Start Ready launches immediately.');
+      setStatus('Lobby ready. Start Ready launches immediately.', 'info');
     }
   }
 }
@@ -257,7 +323,7 @@ function renderState(state) {
     const pending = Number(state.autoplay?.pendingActions || 0);
     const aliveBots = Number(state.autoplay?.aliveBots || 0);
     const hint = state.autoplay?.hint || `Bot autopilot active · ${state.phase || state.status}`;
-    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`);
+    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`, 'info');
   }
   updateControlState(state);
 
@@ -412,6 +478,31 @@ loadClaimsBtn?.addEventListener('click', async () => {
 });
 
 claimSeatsView?.addEventListener('click', async (e) => {
+  const quickRecoverBtn = e.target.closest('[data-quick-recover]');
+  if (quickRecoverBtn) {
+    void sendReconnectTelemetry(null, 'quick_recover_clicked');
+    try {
+      const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+      const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
+      const res = await fetch('/api/play/quick-join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, name }),
+      });
+      const data = await res.json();
+      if (!data?.ok || !data?.joinTicket?.joinUrl) {
+        setStatus(formatError(data, 'Quick match failed'));
+        showRecoveryHint('Recovery tip: quick match unavailable. Keep room ID, then retry <strong>Find Reconnect Seats</strong> in ~5s.');
+        return;
+      }
+      window.location.href = data.joinTicket.joinUrl;
+    } catch (_err) {
+      setStatus('Quick match failed');
+      showRecoveryHint('Recovery tip: network hiccup. Retry <strong>Find Reconnect Seats</strong> or quick match again.');
+    }
+    return;
+  }
+
   const btn = e.target.closest('[data-claim-name]');
   if (!btn) return;
   const claimName = btn.getAttribute('data-claim-name') || '';
@@ -431,6 +522,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
   me.playerId = res.playerId;
   suggestedReclaim = null;
   setStatus(`Reconnected as ${claimName}${res.playerId === currentState?.hostPlayerId ? ' (host)' : ''}`);
+  showRecoveryHint(`Recovered seat <strong>${claimName}</strong>. If you disconnect again, reclaim from this panel.`);
   renderState(res.state);
   void loadClaimableSeats();
 });
@@ -565,7 +657,7 @@ runCiGateBtn?.addEventListener('click', async () => {
 });
 
 async function autoJoinFromQuery() {
-  const { autojoin, reclaimName, reclaimHost, queryName, claimToken } = parseQueryConfig();
+  const { autojoin, reclaimName, reclaimHost, queryName, claimToken, quickJoinReason } = parseQueryConfig();
   if (!autojoin || attemptedAutoJoin) return;
   attemptedAutoJoin = true;
 
@@ -594,6 +686,7 @@ async function autoJoinFromQuery() {
       suggestedReclaim = reclaimName ? { name: reclaimName, hostSeat: reclaimHost } : null;
       attemptedSuggestedReclaim = false;
       setStatus(`Reconnect token expired/used. Joined as ${fallbackName}; attempting auto-reclaim…`);
+      showRecoveryHint('We got you back in the room. Next step: reclaim your previous seat below.');
       renderState(retry.state);
       const reclaimed = await attemptSuggestedReclaimAuto();
       void loadClaimableSeats();
@@ -604,6 +697,7 @@ async function autoJoinFromQuery() {
     }
 
     setStatus(`Reconnect token failed. ${formatError(retry, `Quick-join failed for room ${roomId}`)}`);
+    showRecoveryHint('Recovery fallback: check room ID, then use Find Reconnect Seats. If room is dead, use Quick match me now.');
     void loadClaimableSeats();
     return;
   }
@@ -616,7 +710,11 @@ async function autoJoinFromQuery() {
   suggestedReclaim = null;
   me.roomId = res.roomId;
   me.playerId = res.playerId;
-  setStatus(reclaimName ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}` : `Quick-joined ${me.game} room ${me.roomId}`);
+  const joinStatus = reclaimName
+    ? `Reconnected ${reclaimName} in ${me.game} room ${me.roomId}`
+    : `Quick-joined ${me.game} room ${me.roomId}`;
+  setStatus(quickJoinReason ? `${joinStatus} · ${quickJoinReason}` : joinStatus);
+  showRecoveryHint('Connected. If you drop, reopen this room and use Find Reconnect Seats to reclaim identity fast.');
   renderState(res.state);
   void loadClaimableSeats();
 }
@@ -625,5 +723,6 @@ setInterval(() => {
   void refreshOpsStatus();
 }, 3000);
 
+defaultRecoveryHint();
 void refreshOpsStatus();
 void autoJoinFromQuery();
