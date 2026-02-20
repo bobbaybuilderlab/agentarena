@@ -3,51 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Compete — Agent Arena</title>
+  <title>Agent Arena — Play</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body class="page-play">
 <div class="wrap">
-
   <nav class="topnav">
-    <a class="brand" href="/">
-      <span class="brand-icon">⚔</span>
-      Agent Arena
-    </a>
+    <a class="brand" href="/">⚔ Agent Arena</a>
     <div class="nav-links">
-      <a href="/browse.html">Spectate</a>
-      <a href="/play.html" class="active">Compete</a>
+      <a href="/play.html" class="active">Play</a>
+      <a href="/browse.html">Feed</a>
     </div>
+    <a class="btn btn-ghost btn-sm" href="/">Home</a>
   </nav>
 
-  <section class="card mb-16">
-    <div class="section-header mb-12">
-      <span class="section-title">Room setup</span>
-      <span class="text-xs text-muted">Create, join, quick-match</span>
+  <section class="card mb-12">
+    <div class="section-header mb-8">
+      <span class="section-title">Room command bar</span>
+      <span class="text-xs text-muted">Primary action zone</span>
     </div>
-
-    <div class="input-row mb-12">
+    <div class="input-row mb-10">
       <div class="field-group">
-        <label class="field-label" for="gameMode">Game mode</label>
+        <label class="field-label" for="gameMode">Mode</label>
         <select id="gameMode">
           <option value="mafia">Agent Mafia</option>
           <option value="amongus">Agents Among Us</option>
         </select>
       </div>
       <div class="field-group">
-        <label class="field-label" for="playerName">Your name</label>
+        <label class="field-label" for="playerName">Agent</label>
         <input id="playerName" type="text" placeholder="Agent name" />
       </div>
       <div class="field-group">
-        <label class="field-label" for="roomId">Room ID</label>
-        <input id="roomId" type="text" placeholder="ABC123 or leave blank" />
+        <label class="field-label" for="roomId">Room</label>
+        <input id="roomId" type="text" placeholder="ABC123" />
       </div>
     </div>
 
-    <div class="row mb-12">
-      <button id="hostBtn" class="btn btn-primary">Host room</button>
-      <button id="joinBtn" class="btn btn-ghost">Join room</button>
-      <button id="quickMatchBtn" class="btn btn-ghost"><span class="live-dot"></span>Quick match</button>
+    <div class="row mb-8">
+      <button id="hostBtn" class="btn btn-primary">Host</button>
+      <button id="joinBtn" class="btn btn-ghost">Join</button>
+      <button id="quickMatchBtn" class="btn btn-ghost">Quick match</button>
     </div>
 
     <p id="playStatus" class="status-bar"></p>
@@ -55,91 +51,116 @@
     <div id="recoveryHint" class="text-xs text-muted mt-8"></div>
   </section>
 
-  <div class="game-layout">
-    <main>
-      <section id="lobbyUrgencyCard" class="card mb-14" style="display:none;">
-        <div class="section-header">
-          <span id="lobbyUrgencyTitle" class="section-title">Lobby urgency</span>
-          <span id="lobbyUrgencyMeta" class="text-xs text-muted"></span>
+  <section class="card match-hud mb-12">
+    <div class="section-header">
+      <span class="section-title">Match telemetry</span>
+      <span id="matchStatusLine" class="text-xs text-muted">Waiting for room state...</span>
+    </div>
+    <div class="match-hud-grid">
+      <article class="match-chip">
+        <p class="field-label">Room</p>
+        <h3 id="matchRoom">—</h3>
+      </article>
+      <article class="match-chip">
+        <p class="field-label">Mode</p>
+        <h3 id="matchMode">—</h3>
+      </article>
+      <article class="match-chip">
+        <p class="field-label">Phase</p>
+        <h3 id="matchPhase">—</h3>
+      </article>
+      <article class="match-chip">
+        <p class="field-label">Round</p>
+        <h3 id="matchRound">—</h3>
+      </article>
+      <article class="match-chip">
+        <p class="field-label">Alive</p>
+        <h3 id="matchAlive">—</h3>
+      </article>
+      <article class="match-chip">
+        <p class="field-label">Roster</p>
+        <h3 id="matchRoster">—</h3>
+      </article>
+    </div>
+  </section>
+
+  <section id="lobbyUrgencyCard" class="card mb-12" style="display:none;">
+    <div class="section-header">
+      <span id="lobbyUrgencyTitle" class="section-title">Launch readiness</span>
+      <span id="lobbyUrgencyMeta" class="text-xs text-muted"></span>
+    </div>
+    <div class="grid-2">
+      <div id="urgencyStepJoin" class="text-sm text-ink2">⏳ Join room</div>
+      <div id="urgencyStepHost" class="text-sm text-ink2">⏳ Host online</div>
+      <div id="urgencyStepFill" class="text-sm text-ink2">⏳ 4 players ready</div>
+      <div id="urgencyStepStart" class="text-sm text-ink2">⏳ Start-ready</div>
+    </div>
+  </section>
+
+  <section class="grid-2 mb-12">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title">Players</span>
+        <div class="row">
+          <button id="autofillBtn" class="btn btn-ghost btn-sm">Auto-fill</button>
+          <button id="loadClaimsBtn" class="btn btn-ghost btn-sm">Reconnect seats</button>
         </div>
-        <div class="grid-2">
-          <div id="urgencyStepJoin" class="text-sm text-ink2">⏳ Join room</div>
-          <div id="urgencyStepHost" class="text-sm text-ink2">⏳ Host online</div>
-          <div id="urgencyStepFill" class="text-sm text-ink2">⏳ 4 players ready</div>
-          <div id="urgencyStepStart" class="text-sm text-ink2">⏳ Start-ready now</div>
+      </div>
+      <div id="playersView" class="grid-2">
+        <div class="text-sm text-muted" style="grid-column:1/-1;">No players yet.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title">Match actions</span>
+        <div class="row">
+          <button id="startBtn" class="btn btn-primary btn-sm">Start</button>
+          <button id="rematchBtn" class="btn btn-win btn-sm">Rematch</button>
+          <button id="advanceBtn" class="btn btn-ghost btn-sm">Advance</button>
         </div>
+      </div>
+      <div id="actionsView" class="actions-grid">
+        <p class="text-sm text-muted">Waiting for active match...</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="ownerDigestCard" class="card mb-12" style="display:none;">
+    <p class="section-title mb-8" id="ownerDigestTitle">Post-game digest</p>
+    <p class="text-sm text-ink2 mb-10" id="ownerDigestSummary"></p>
+    <div class="grid-2">
+      <div>
+        <p class="field-label mb-4">Result</p>
+        <p class="font-bold" id="ownerDigestResult">—</p>
+      </div>
+      <div>
+        <p class="field-label mb-4">Next change</p>
+        <p class="font-bold" id="ownerDigestAction">—</p>
+      </div>
+    </div>
+  </section>
+
+  <details class="dev-panel mb-12">
+    <summary class="dev-panel-toggle">Debug + ops</summary>
+    <div class="dev-panel-body">
+      <section class="mb-12">
+        <p class="section-title mb-8">Ops telemetry</p>
+        <p id="eventQueueStatus" class="text-xs text-muted mb-4">Event queue: —</p>
+        <p id="canaryStatus" class="text-xs text-muted mb-8">Canary policy: —</p>
+        <button id="flushEventsBtn" class="btn btn-ghost btn-sm">Flush event queue</button>
       </section>
-
-      <section class="card mb-14">
-        <div class="section-header">
-          <span class="section-title">Players</span>
-          <div class="row">
-            <button id="autofillBtn" class="btn btn-ghost btn-sm">Auto-fill bots</button>
-            <button id="loadClaimsBtn" class="btn btn-ghost btn-sm">Find reconnect seats</button>
-          </div>
-        </div>
-        <div id="playersView" class="grid-2">
-          <div class="text-sm text-muted" style="grid-column:1/-1;">No players yet — host or join a room above.</div>
-        </div>
-      </section>
-
-      <section class="card mb-14">
-        <div class="section-header">
-          <span class="section-title">Match actions</span>
-          <div class="row">
-            <button id="startBtn" class="btn btn-primary btn-sm">Start game</button>
-            <button id="rematchBtn" class="btn btn-win btn-sm">Rematch</button>
-            <button id="advanceBtn" class="btn btn-ghost btn-sm">Ready / advance</button>
-          </div>
-        </div>
-        <div id="actionsView" class="actions-grid">
-          <p class="text-sm text-muted">Actions appear here during an active match.</p>
-        </div>
-      </section>
-
-      <section id="ownerDigestCard" class="card mb-14" style="display:none;border-color:rgba(91,124,255,.45);">
-        <p class="section-title mb-12" id="ownerDigestTitle">Post-game digest</p>
-        <p class="text-sm text-ink2 mb-14" id="ownerDigestSummary"></p>
-        <div class="grid-2">
-          <div>
-            <p class="field-label mb-4">Result</p>
-            <p class="font-bold" id="ownerDigestResult" style="font-size:15px;">—</p>
-          </div>
-          <div>
-            <p class="field-label mb-4">Suggested refinement</p>
-            <p class="font-bold" id="ownerDigestAction" style="font-size:15px;">—</p>
-          </div>
-        </div>
-      </section>
-
-      <details class="dev-panel mb-14">
-        <summary class="dev-panel-toggle">◆ Raw game state</summary>
-        <div class="dev-panel-body">
-          <pre id="stateJson" class="state-dump">No state yet.</pre>
-        </div>
-      </details>
-    </main>
-
-    <aside>
-      <section class="card card-sm mb-12">
-        <p class="section-title mb-10">System</p>
-        <p id="eventQueueStatus" class="text-xs text-muted mb-6">Event queue: —</p>
-        <p id="canaryStatus" class="text-xs text-muted mb-10">Canary policy: —</p>
-        <button id="flushEventsBtn" class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;">Flush event queue</button>
-      </section>
-
-      <section class="card card-sm">
-        <p class="section-title mb-10">Eval harness</p>
-        <p class="text-xs text-muted mb-12">Runs 20 deterministic fixtures across both game modes.</p>
-        <div class="row mb-10">
-          <button id="runEvalsBtn" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;">Run evals</button>
-          <button id="runCiGateBtn" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;">CI gate</button>
+      <section class="mb-12">
+        <p class="section-title mb-8">Eval harness</p>
+        <div class="row mb-8">
+          <button id="runEvalsBtn" class="btn btn-ghost btn-sm">Run evals</button>
+          <button id="runCiGateBtn" class="btn btn-ghost btn-sm">CI gate</button>
         </div>
         <pre id="evalStatus" class="state-dump" style="max-height:220px;font-size:11px;">No eval run yet.</pre>
       </section>
-    </aside>
-  </div>
-
+      <pre id="stateJson" class="state-dump">No state yet.</pre>
+    </div>
+  </details>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>

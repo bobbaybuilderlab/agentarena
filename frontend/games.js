@@ -36,6 +36,13 @@ const urgencyStepJoin = document.getElementById('urgencyStepJoin');
 const urgencyStepHost = document.getElementById('urgencyStepHost');
 const urgencyStepFill = document.getElementById('urgencyStepFill');
 const urgencyStepStart = document.getElementById('urgencyStepStart');
+const matchStatusLine = document.getElementById('matchStatusLine');
+const matchRoom = document.getElementById('matchRoom');
+const matchMode = document.getElementById('matchMode');
+const matchPhase = document.getElementById('matchPhase');
+const matchRound = document.getElementById('matchRound');
+const matchAlive = document.getElementById('matchAlive');
+const matchRoster = document.getElementById('matchRoster');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -326,13 +333,21 @@ function renderState(state) {
     setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`, 'info');
   }
   updateControlState(state);
+  updateMatchHud(state);
 
   playersView.innerHTML = (state.players || []).map((p) => `
-    <article>
-      <h3>${p.name}${p.isBot ? ' 🤖' : ''}</h3>
-      <p>ID: ${p.id}</p>
-      <p>${p.alive === false ? '☠️ dead' : '✅ alive'} · ${p.isConnected ? 'online' : 'offline'}</p>
-      <p>${p.role ? `role: ${p.role}` : ''}</p>
+    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}">
+      <div class="player-head">
+        <h3>${p.name}${p.id === me.playerId ? ' (you)' : ''}</h3>
+        <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
+      </div>
+      <p class="player-meta">ID: ${p.id}</p>
+      <div class="player-meta-row">
+        <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? '☠ eliminated' : '✓ alive'}</span>
+        <span class="player-state ${p.isConnected ? 'state-online' : 'state-offline'}">${p.isConnected ? 'online' : 'offline'}</span>
+        ${p.id === state.hostPlayerId ? '<span class="player-state state-host">host</span>' : ''}
+      </div>
+      <p class="player-role">${p.role ? `Role: ${roleLabel(p.role)}` : 'Role hidden'}</p>
     </article>
   `).join('') || '<p>No players</p>';
 
@@ -355,6 +370,36 @@ function winnerLabel(winner) {
   if (winner === 'imposter') return 'Imposters';
   if (winner === 'crew') return 'Crew';
   return winner || 'Unknown';
+}
+
+function modeLabel(mode) {
+  return mode === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+}
+
+function phaseLabel(state) {
+  if (state.status === 'finished') return 'Finished';
+  if (state.phase) return String(state.phase).charAt(0).toUpperCase() + String(state.phase).slice(1);
+  return String(state.status || 'Lobby').charAt(0).toUpperCase() + String(state.status || 'lobby').slice(1);
+}
+
+function updateMatchHud(state) {
+  if (!state) return;
+  const players = state.players || [];
+  const alive = players.filter((p) => p.alive !== false).length;
+  const bots = players.filter((p) => p.isBot).length;
+  const humans = Math.max(0, players.length - bots);
+  const room = state.id || me.roomId || roomIdInput?.value?.trim().toUpperCase() || '—';
+  const round = state.round || state.day || state.turn || null;
+  const hostPlayer = players.find((p) => p.id === state.hostPlayerId);
+  const hostState = hostPlayer?.isConnected ? 'host online' : 'host reconnecting';
+
+  if (matchRoom) matchRoom.textContent = room;
+  if (matchMode) matchMode.textContent = modeLabel(me.game);
+  if (matchPhase) matchPhase.textContent = phaseLabel(state);
+  if (matchRound) matchRound.textContent = round ? `#${round}` : '—';
+  if (matchAlive) matchAlive.textContent = `${alive}/${players.length}`;
+  if (matchRoster) matchRoster.textContent = `${humans} human · ${bots} bot`;
+  if (matchStatusLine) matchStatusLine.textContent = `${hostState} · ${state.status}${state.botAutoplay ? ' · bot autopilot on' : ''}`;
 }
 
 function suggestedRefinement(result) {
@@ -403,48 +448,48 @@ function renderActions(state) {
 
   if (me.game === 'mafia') {
     if (state.status === 'finished') {
-      actionsView.innerHTML = `<p>Winner: <strong>${state.winner}</strong></p>`;
+      actionsView.innerHTML = `<p class="text-sm text-muted">Winner: <strong>${winnerLabel(state.winner)}</strong></p>`;
       return;
     }
 
     if (state.phase === 'night') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${p.name}</button>`).join('') || '<p>No valid targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No valid targets</p>';
       return;
     }
 
     if (state.phase === 'discussion') {
-      actionsView.innerHTML = '<p>Discussion phase. Click Advance/Ready to move on.</p>';
+      actionsView.innerHTML = '<p class="text-sm text-muted">Discussion phase. Build reads now, then click Advance/Ready.</p>';
       return;
     }
 
     if (state.phase === 'voting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary" data-action="vote" data-target="${p.id}" type="button">Vote ${p.name}</button>`).join('') || '<p>No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
 
   if (me.game === 'amongus') {
     if (state.status === 'finished') {
-      actionsView.innerHTML = `<p>Winner: <strong>${state.winner}</strong></p>`;
+      actionsView.innerHTML = `<p class="text-sm text-muted">Winner: <strong>${winnerLabel(state.winner)}</strong></p>`;
       return;
     }
 
     if (state.phase === 'tasks') {
       actionsView.innerHTML = `
-        <button class="btn btn-primary" data-action="task" type="button">Do task</button>
-        ${aliveOthers.map((p) => `<button class="btn btn-soft" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${p.name}</button>`).join('')}
-        <button class="btn btn-soft" data-action="callMeeting" type="button">Call meeting</button>
+        <button class="btn btn-primary action-task" data-action="task" type="button">Do task</button>
+        ${aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${p.name}</button>`).join('')}
+        <button class="btn btn-soft action-vote" data-action="callMeeting" type="button">Call meeting</button>
       `;
       return;
     }
 
     if (state.phase === 'meeting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary" data-action="vote" data-target="${p.id}" type="button">Vote eject ${p.name}</button>`).join('') || '<p>No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote eject ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
 
-  actionsView.innerHTML = '<p>Waiting...</p>';
+  actionsView.innerHTML = '<p class="text-sm text-muted">Waiting for active match...</p>';
 }
 
 hostBtn?.addEventListener('click', async () => {
