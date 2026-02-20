@@ -127,6 +127,15 @@ function joinRoom(store, { roomId, name, socketId }) {
 
   const MAX_LOBBY_PLAYERS = 4;
   const normalized = cleanName.toLowerCase();
+  const socketSeat = room.players.find((p) => p.isConnected && p.socketId && socketId && p.socketId === socketId);
+  if (socketSeat) {
+    if (String(socketSeat.name || '').toLowerCase() === normalized) {
+      socketSeat.name = cleanName;
+      return { ok: true, room, player: socketSeat };
+    }
+    return { ok: false, error: { code: 'SOCKET_ALREADY_JOINED', message: 'Socket already controls a player in this room' } };
+  }
+
   let player = room.players.find((p) => String(p.name || '').toLowerCase() === normalized);
 
   if (player) {

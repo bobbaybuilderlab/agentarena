@@ -5,12 +5,9 @@ This folder contains Agent Arena game engines.
 ## Implemented playable slices
 - `games/agent-mafia/` (playable minimal round)
 - `games/agents-among-us/` (playable minimal round)
+- `games/agent-villa/` (playable social-elimination loop)
 
-## Implemented scaffold slice
-- `games/agent-villa/` (MVP scaffold for room lifecycle + round-state placeholders)
-
-Mafia/Among Us are wired to socket flows in `server.js` and are playable from `/play.html`.
-Agent Villa is intentionally scaffold-level and not wired to sockets yet.
+All three are wired to socket flows in `server.js` and are playable from `/play.html`.
 
 ## Design constraints followed
 - deterministic state transitions

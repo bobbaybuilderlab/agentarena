@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers } = require('../server');
+const { server, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -11,6 +11,7 @@ function emitAck(socket, event, payload) {
 async function withServer(fn) {
   mafiaRooms.clear();
   amongUsRooms.clear();
+  villaRooms.clear();
   roomEvents.clear();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
@@ -156,6 +157,66 @@ test('socket flow: among-us kill -> meeting vote -> completion', async () => {
     assert.equal(room.status, 'finished');
     assert.equal(room.phase, 'finished');
     assert.ok(['crew', 'imposter'].includes(room.winner));
+
+    sockets.forEach((s) => s.disconnect());
+  });
+});
+
+test('socket flow: villa full loop resolves to terminal state', async () => {
+  await withServer(async (url) => {
+    const sockets = [ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true }), ioc(url, { reconnection: false, autoUnref: true })];
+    const byPlayerId = new Map();
+    const phaseAction = {
+      pairing: 'pair',
+      challenge: 'challengeVote',
+      twist: 'twistVote',
+      recouple: 'recouple',
+      elimination: 'eliminateVote',
+    };
+
+    const c1 = await emitAck(sockets[0], 'villa:room:create', { name: 'A' });
+    byPlayerId.set(c1.playerId, sockets[0]);
+
+    const j2 = await emitAck(sockets[1], 'villa:room:join', { roomId: c1.roomId, name: 'B' });
+    const j3 = await emitAck(sockets[2], 'villa:room:join', { roomId: c1.roomId, name: 'C' });
+    const j4 = await emitAck(sockets[3], 'villa:room:join', { roomId: c1.roomId, name: 'D' });
+    byPlayerId.set(j2.playerId, sockets[1]);
+    byPlayerId.set(j3.playerId, sockets[2]);
+    byPlayerId.set(j4.playerId, sockets[3]);
+
+    const started = await emitAck(sockets[0], 'villa:start', { roomId: c1.roomId, playerId: c1.playerId });
+    assert.equal(started.ok, true);
+    assert.equal(started.state.phase, 'pairing');
+
+    let guard = 0;
+    while (guard < 40) {
+      guard += 1;
+      const room = villaRooms.get(c1.roomId);
+      if (!room || room.status === 'finished') break;
+
+      const type = phaseAction[room.phase];
+      assert.equal(typeof type, 'string');
+
+      const immunity = room.roundState?.challenge?.immunityPlayerId || null;
+      const alive = room.players.filter((p) => p.alive);
+      await Promise.all(alive.map((player) => {
+        const target = alive
+          .filter((p) => p.id !== player.id && !(immunity && (room.phase === 'twist' || room.phase === 'elimination') && p.id === immunity))
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+        return emitAck(byPlayerId.get(player.id), 'villa:action', {
+          roomId: room.id,
+          playerId: player.id,
+          type,
+          targetId: target?.id,
+        });
+      }));
+    }
+
+    const finished = villaRooms.get(c1.roomId);
+    assert.ok(finished, 'villa room should exist');
+    assert.equal(finished.status, 'finished');
+    assert.equal(finished.phase, 'finished');
+    assert.ok(['final_couple', 'viewer_favorite'].includes(finished.winner));
 
     sockets.forEach((s) => s.disconnect());
   });

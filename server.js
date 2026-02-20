@@ -3,9 +3,9 @@ const fs = require('fs');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { randomUUID } = require('crypto');
 const mafiaGame = require('./games/agent-mafia');
 const amongUsGame = require('./games/agents-among-us');
+const villaGame = require('./games/agent-villa');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { runBotTurn } = require('./bots/turn-loop');
@@ -15,6 +15,10 @@ const { runEval } = require('./lib/eval-harness');
 const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
 const { createCanaryMode } = require('./lib/canary-mode');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
+const { shortId, correlationId, logStructured } = require('./server/state/helpers');
+const { createPlayTelemetryService } = require('./server/services/play-telemetry');
+const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
+const { registerRoomEventRoutes } = require('./server/routes/room-events');
 
 const app = express();
 const server = http.createServer(app);
@@ -33,25 +37,6 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
 const VOTE_MS = Number(process.env.VOTE_MS || 20_000);
-
-function shortId(len = 8) {
-  return randomUUID().replace(/-/g, '').slice(0, len);
-}
-
-function correlationId(seed) {
-  const raw = String(seed || '').trim();
-  if (!raw) return shortId(12);
-  return raw.slice(0, 64);
-}
-
-function logStructured(event, fields = {}) {
-  const payload = {
-    at: new Date().toISOString(),
-    event,
-    ...fields,
-  };
-  console.log(JSON.stringify(payload));
-}
 
 const THEMES = [
   'Yo Mama So Fast',
@@ -72,6 +57,7 @@ const rooms = new Map();
 
 const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
+const villaRooms = villaGame.createStore();
 const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
 const playRoomTelemetry = new Map();
@@ -86,220 +72,31 @@ function clearAllGameTimers() {
   roomScheduler.clearAll();
 }
 
-function telemetryKey(mode, roomId) {
-  return `${mode}:${String(roomId || '').toUpperCase()}`;
-}
-
-function getRoomTelemetry(mode, roomId) {
-  const key = telemetryKey(mode, roomId);
-  if (!playRoomTelemetry.has(key)) {
-    playRoomTelemetry.set(key, {
-      mode,
-      roomId: String(roomId || '').toUpperCase(),
-      rematchCount: 0,
-      partyStreakExtended: 0,
-      telemetryEvents: {
-        rematch_clicked: 0,
-        party_streak_extended: 0,
-      },
-      recentWinners: [],
-      quickMatchTickets: 0,
-      quickMatchConversions: 0,
-      reconnectAutoAttempts: 0,
-      reconnectAutoSuccesses: 0,
-      reconnectAutoFailures: 0,
-      reclaimClicked: 0,
-      quickRecoverClicked: 0,
-      updatedAt: Date.now(),
-    });
-  }
-  return playRoomTelemetry.get(key);
-}
-
-function recordRoomWinner(mode, room) {
-  if (!room?.id || !room?.winner || room.status !== 'finished') return;
-  const telemetry = getRoomTelemetry(mode, room.id);
-  const winnerName = room.players?.find((p) => p.role === room.winner)?.name || room.winner;
-  const latest = telemetry.recentWinners[telemetry.recentWinners.length - 1];
-  if (latest && latest.winner === room.winner && Date.now() - latest.at < 1_000) return;
-  telemetry.recentWinners.push({ winner: room.winner, winnerName, at: Date.now() });
-  telemetry.recentWinners = telemetry.recentWinners.slice(-5);
-  telemetry.updatedAt = Date.now();
-}
-
-function recordTelemetryEvent(mode, roomId, eventName) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  if (!telemetry.telemetryEvents || typeof telemetry.telemetryEvents !== 'object') {
-    telemetry.telemetryEvents = { rematch_clicked: 0, party_streak_extended: 0 };
-  }
-  telemetry.telemetryEvents[eventName] = Math.max(0, Number(telemetry.telemetryEvents[eventName] || 0)) + 1;
-  telemetry.updatedAt = Date.now();
-  return telemetry;
-}
-
-function recordRematch(mode, roomId) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  telemetry.rematchCount += 1;
-  telemetry.updatedAt = Date.now();
-  return telemetry;
-}
-
-function quickJoinTicketKey(mode, roomId, name) {
-  return `${telemetryKey(mode, roomId)}:${String(name || '').trim().toLowerCase()}`;
-}
-
-function issueQuickJoinTicket(mode, roomId, name) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  telemetry.quickMatchTickets += 1;
-  telemetry.updatedAt = Date.now();
-  pendingQuickJoinTickets.set(quickJoinTicketKey(mode, roomId, name), Date.now());
-}
-
-function recordQuickJoinConversion(mode, roomId, name) {
-  const key = quickJoinTicketKey(mode, roomId, name);
-  if (!pendingQuickJoinTickets.has(key)) return;
-  pendingQuickJoinTickets.delete(key);
-  const telemetry = getRoomTelemetry(mode, roomId);
-  telemetry.quickMatchConversions += 1;
-  telemetry.updatedAt = Date.now();
-  roomEvents.append('growth', roomId, 'QUICK_JOIN_CONVERTED', { mode, name: String(name || '').slice(0, 24) });
-}
-
-function recordReconnectAutoTelemetry(mode, roomId, outcome) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  if (outcome === 'attempt') telemetry.reconnectAutoAttempts += 1;
-  else if (outcome === 'success') telemetry.reconnectAutoSuccesses += 1;
-  else if (outcome === 'failure') telemetry.reconnectAutoFailures += 1;
-  telemetry.updatedAt = Date.now();
-  return telemetry;
-}
-
-function recordReconnectClickTelemetry(mode, roomId, event) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  if (event === 'reclaim_clicked') telemetry.reclaimClicked += 1;
-  else if (event === 'quick_recover_clicked') telemetry.quickRecoverClicked += 1;
-  telemetry.updatedAt = Date.now();
-  return telemetry;
-}
-
-const RECONNECT_TICKET_TTL_MS = 30 * 60 * 1000;
-
-function reconnectTicketKey(mode, roomId, token) {
-  return `${telemetryKey(mode, roomId)}:${String(token || '').trim()}`;
-}
-
-function sweepExpiredReconnectClaimTickets(now = Date.now()) {
-  for (const [key, ticket] of reconnectClaimTickets.entries()) {
-    if ((now - Number(ticket?.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) {
-      reconnectClaimTickets.delete(key);
-    }
-  }
-}
-
-function issueReconnectClaimTicket(mode, roomId, name) {
-  const now = Date.now();
-  sweepExpiredReconnectClaimTickets(now);
-  const token = shortId(16);
-  reconnectClaimTickets.set(reconnectTicketKey(mode, roomId, token), {
-    name: String(name || '').trim(),
-    issuedAt: now,
-  });
-  return token;
-}
-
-function readReconnectClaimTicket(mode, roomId, token, consume = false) {
-  const now = Date.now();
-  sweepExpiredReconnectClaimTickets(now);
-  const key = reconnectTicketKey(mode, roomId, token);
-  const found = reconnectClaimTickets.get(key);
-  if (!found) return null;
-  if ((now - Number(found.issuedAt || 0)) > RECONNECT_TICKET_TTL_MS) {
-    reconnectClaimTickets.delete(key);
-    return null;
-  }
-  if (consume) reconnectClaimTickets.delete(key);
-  return found;
-}
-
-function consumeReconnectClaimTicket(mode, roomId, token) {
-  return readReconnectClaimTicket(mode, roomId, token, true);
-}
-
-function resolveReconnectJoinName(mode, roomId, requestedName, claimToken) {
-  const normalizedRequested = String(requestedName || '').trim();
-  const claims = getClaimableLobbySeats(mode, roomId);
-  if (!claims.ok || !Array.isArray(claims.claimable) || !claims.claimable.length) {
-    return { name: normalizedRequested, suggested: null, consumedClaimToken: null };
-  }
-
-  const lowerRequested = normalizedRequested.toLowerCase();
-  const direct = claims.claimable.find((seat) => seat.name.toLowerCase() === lowerRequested) || null;
-  if (direct) return { name: direct.name, suggested: direct.name, consumedClaimToken: null };
-
-  const ticket = claimToken ? readReconnectClaimTicket(mode, roomId, claimToken, false) : null;
-  if (ticket?.name) {
-    const matched = claims.claimable.find((seat) => seat.name.toLowerCase() === ticket.name.toLowerCase());
-    if (matched) return { name: matched.name, suggested: matched.name, consumedClaimToken: claimToken };
-  }
-
-  return { name: normalizedRequested, suggested: null, consumedClaimToken: null };
-}
-
-function pickReconnectSuggestion(mode, roomId, requestedName) {
-  const claims = getClaimableLobbySeats(mode, roomId);
-  if (!claims.ok || !Array.isArray(claims.claimable) || !claims.claimable.length) return null;
-
-  const preferredByName = claims.claimable.find((seat) => seat.name.toLowerCase() === String(requestedName || '').trim().toLowerCase());
-  const preferred = preferredByName || claims.claimable.find((seat) => seat.hostSeat) || claims.claimable[0];
-  if (!preferred?.name) return null;
-
-  const token = issueReconnectClaimTicket(mode, roomId, preferred.name);
-  return { name: preferred.name, hostSeat: Boolean(preferred.hostSeat), token };
-}
-
-function seedPlayTelemetry(mode, roomId, patch = {}) {
-  const telemetry = getRoomTelemetry(mode, roomId);
-  if (!patch || typeof patch !== 'object') return telemetry;
-
-  if (Number.isFinite(patch.rematchCount)) telemetry.rematchCount = Math.max(0, Number(patch.rematchCount));
-  if (Number.isFinite(patch.partyStreakExtended)) telemetry.partyStreakExtended = Math.max(0, Number(patch.partyStreakExtended));
-  if (Number.isFinite(patch.quickMatchTickets)) telemetry.quickMatchTickets = Math.max(0, Number(patch.quickMatchTickets));
-  if (Number.isFinite(patch.quickMatchConversions)) {
-    telemetry.quickMatchConversions = Math.max(0, Number(patch.quickMatchConversions));
-  }
-  if (Number.isFinite(patch.reconnectAutoAttempts)) {
-    telemetry.reconnectAutoAttempts = Math.max(0, Number(patch.reconnectAutoAttempts));
-  }
-  if (Number.isFinite(patch.reconnectAutoSuccesses)) {
-    telemetry.reconnectAutoSuccesses = Math.max(0, Number(patch.reconnectAutoSuccesses));
-  }
-  if (Number.isFinite(patch.reconnectAutoFailures)) {
-    telemetry.reconnectAutoFailures = Math.max(0, Number(patch.reconnectAutoFailures));
-  }
-  if (Number.isFinite(patch.reclaimClicked)) {
-    telemetry.reclaimClicked = Math.max(0, Number(patch.reclaimClicked));
-  }
-  if (Number.isFinite(patch.quickRecoverClicked)) {
-    telemetry.quickRecoverClicked = Math.max(0, Number(patch.quickRecoverClicked));
-  }
-  if (patch.telemetryEvents && typeof patch.telemetryEvents === 'object') {
-    telemetry.telemetryEvents = {
-      rematch_clicked: Math.max(0, Number(patch.telemetryEvents.rematch_clicked || 0)),
-      party_streak_extended: Math.max(0, Number(patch.telemetryEvents.party_streak_extended || 0)),
-    };
-  }
-  if (Array.isArray(patch.recentWinners)) {
-    telemetry.recentWinners = patch.recentWinners.slice(-5);
-  }
-  telemetry.updatedAt = Date.now();
-  return telemetry;
-}
-
-function resetPlayTelemetry() {
-  playRoomTelemetry.clear();
-  pendingQuickJoinTickets.clear();
-  reconnectClaimTickets.clear();
-}
+const {
+  telemetryKey,
+  getRoomTelemetry,
+  recordRoomWinner,
+  recordTelemetryEvent,
+  recordRematch,
+  issueQuickJoinTicket,
+  recordQuickJoinConversion,
+  recordReconnectAutoTelemetry,
+  recordReconnectClickTelemetry,
+  recordJoinAttempt,
+  recordSocketSeatCapBlocked,
+  consumeReconnectClaimTicket,
+  resolveReconnectJoinName,
+  pickReconnectSuggestion,
+  seedPlayTelemetry,
+  resetPlayTelemetry,
+} = createPlayTelemetryService({
+  playRoomTelemetry,
+  pendingQuickJoinTickets,
+  reconnectClaimTickets,
+  roomEvents,
+  shortId,
+  getClaimableLobbySeats: (mode, roomId) => getClaimableLobbySeats(mode, roomId),
+});
 
 const ROOM_TRANSITIONS = {
   BATTLE_RESET: {
@@ -659,10 +456,25 @@ function emitAmongUsRoom(room) {
   io.to(`amongus:${room.id}`).emit('amongus:state', amongUsGame.toPublic(room));
 }
 
+function emitVillaRoom(room) {
+  io.to(`villa:${room.id}`).emit('villa:state', villaGame.toPublic(room));
+}
+
 function pickDeterministicTarget(players, actorId) {
   return players
     .filter((p) => p.alive && p.id !== actorId)
     .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+}
+
+function pickVillaTarget(room, actorId) {
+  const immunity = room.roundState?.challenge?.immunityPlayerId || null;
+  const players = room.players || [];
+  if (room.phase === 'twist' || room.phase === 'elimination') {
+    return players
+      .filter((p) => p.alive && p.id !== actorId && p.id !== immunity)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+  }
+  return pickDeterministicTarget(players, actorId);
 }
 
 function runMafiaBotAutoplay(room) {
@@ -755,6 +567,42 @@ function runAmongUsBotAutoplay(room) {
   return { acted };
 }
 
+function runVillaBotAutoplay(room) {
+  if (!room || room.status !== 'in_progress') return { acted: 0 };
+  let acted = 0;
+  const startingPhase = room.phase;
+  const phaseType = {
+    pairing: 'pair',
+    challenge: 'challengeVote',
+    twist: 'twistVote',
+    recouple: 'recouple',
+    elimination: 'eliminateVote',
+  }[startingPhase];
+  if (!phaseType) return { acted: 0 };
+
+  const phaseActions = room.actions?.[startingPhase] || {};
+  const bots = room.players.filter((p) => p.alive && p.isBot);
+  for (const bot of bots) {
+    if (phaseActions[bot.id]) continue;
+    const target = pickVillaTarget(room, bot.id);
+    if (!target) continue;
+    const result = villaGame.submitAction(villaRooms, {
+      roomId: room.id,
+      playerId: bot.id,
+      type: phaseType,
+      targetId: target.id,
+    });
+    if (!result.ok) continue;
+    acted += 1;
+    if (room.status !== 'in_progress' || room.phase !== startingPhase) break;
+  }
+
+  if (acted > 0) {
+    logRoomEvent('villa', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, round: room.round, status: room.status });
+  }
+  return { acted };
+}
+
 function scheduleMafiaPhase(room) {
   if (room.status !== 'in_progress') {
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
@@ -809,14 +657,56 @@ function scheduleAmongUsPhase(room) {
   });
 }
 
-function socketOwnsPlayer(room, socketId, playerId) {
-  const player = room?.players?.find((p) => p.id === playerId);
-  return Boolean(player && player.socketId && player.socketId === socketId);
+function scheduleVillaPhase(room) {
+  if (room.status !== 'in_progress') {
+    roomScheduler.clear({ namespace: 'villa', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  const auto = runVillaBotAutoplay(room);
+  if (auto.acted > 0) emitVillaRoom(room);
+  if (room.status !== 'in_progress') {
+    roomScheduler.clear({ namespace: 'villa', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  const token = `${room.phase}:${Date.now()}`;
+  const ms = room.phase === 'pairing'
+    ? 7000
+    : room.phase === 'challenge'
+      ? 7000
+      : room.phase === 'twist'
+        ? 6000
+        : room.phase === 'recouple'
+          ? 7000
+          : room.phase === 'elimination'
+            ? 7000
+            : 0;
+  if (!ms) return;
+
+  roomScheduler.schedule({ namespace: 'villa', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
+    const advanced = villaGame.forceAdvance(villaRooms, { roomId: room.id });
+    if (advanced.ok) {
+      if (room.status === 'finished') recordFirstMatchCompletion('villa', room.id);
+      emitVillaRoom(room);
+      scheduleVillaPhase(room);
+    }
+  });
 }
 
-function socketIsHostPlayer(room, socketId, playerId) {
-  if (!room || !playerId) return false;
-  return room.hostPlayerId === playerId && socketOwnsPlayer(room, socketId, playerId);
+function recordJoinHardeningEvent(mode, roomId, socketId, attemptedName) {
+  const normalizedRoomId = String(roomId || '').trim().toUpperCase();
+  if (!normalizedRoomId) return;
+  recordSocketSeatCapBlocked(mode, normalizedRoomId);
+  const store = getLobbyStore(mode);
+  const room = store?.get(normalizedRoomId) || null;
+  if (!room) return;
+  logRoomEvent(mode, room, 'JOIN_BLOCKED_SOCKET_MULTI_SEAT', {
+    socketId,
+    attemptedName: String(attemptedName || '').slice(0, 24),
+    status: room.status,
+    phase: room.phase,
+  });
 }
 
 io.use((socket, next) => {
@@ -845,9 +735,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:room:join', ({ roomId, name, claimToken }, cb) => {
+    const normalizedRoomId = String(roomId || '').trim().toUpperCase();
+    if (normalizedRoomId && mafiaRooms.has(normalizedRoomId)) recordJoinAttempt('mafia', normalizedRoomId);
     const reconnect = resolveReconnectJoinName('mafia', roomId, name, claimToken);
     const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name: reconnect.name, socketId: socket.id });
-    if (!joined.ok) return cb?.(joined);
+    if (!joined.ok) {
+      if (joined.error?.code === 'SOCKET_ALREADY_JOINED') {
+        recordJoinHardeningEvent('mafia', normalizedRoomId, socket.id, reconnect.name);
+      }
+      return cb?.(joined);
+    }
     if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('mafia', joined.room.id, reconnect.consumedClaimToken);
     socket.join(`mafia:${joined.room.id}`);
     recordQuickJoinConversion('mafia', joined.room.id, joined.player.name);
@@ -940,9 +837,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('amongus:room:join', ({ roomId, name, claimToken }, cb) => {
+    const normalizedRoomId = String(roomId || '').trim().toUpperCase();
+    if (normalizedRoomId && amongUsRooms.has(normalizedRoomId)) recordJoinAttempt('amongus', normalizedRoomId);
     const reconnect = resolveReconnectJoinName('amongus', roomId, name, claimToken);
     const joined = amongUsGame.joinRoom(amongUsRooms, { roomId, name: reconnect.name, socketId: socket.id });
-    if (!joined.ok) return cb?.(joined);
+    if (!joined.ok) {
+      if (joined.error?.code === 'SOCKET_ALREADY_JOINED') {
+        recordJoinHardeningEvent('amongus', normalizedRoomId, socket.id, reconnect.name);
+      }
+      return cb?.(joined);
+    }
     if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('amongus', joined.room.id, reconnect.consumedClaimToken);
     socket.join(`amongus:${joined.room.id}`);
     recordQuickJoinConversion('amongus', joined.room.id, joined.player.name);
@@ -1023,6 +927,113 @@ io.on('connection', (socket) => {
     emitAmongUsRoom(result.room);
     scheduleAmongUsPhase(result.room);
     cb?.({ ok: true, state: amongUsGame.toPublic(result.room) });
+  });
+
+  socket.on('villa:room:create', ({ name }, cb) => {
+    const created = villaGame.createRoom(villaRooms, { hostName: name, hostSocketId: socket.id });
+    if (!created.ok) return cb?.(created);
+    socket.join(`villa:${created.room.id}`);
+    logRoomEvent('villa', created.room, 'ROOM_CREATED', { status: created.room.status, phase: created.room.phase });
+    emitVillaRoom(created.room);
+    cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: villaGame.toPublic(created.room) });
+  });
+
+  socket.on('villa:room:join', ({ roomId, name, claimToken }, cb) => {
+    const normalizedRoomId = String(roomId || '').trim().toUpperCase();
+    if (normalizedRoomId && villaRooms.has(normalizedRoomId)) recordJoinAttempt('villa', normalizedRoomId);
+    const reconnect = resolveReconnectJoinName('villa', roomId, name, claimToken);
+    const joined = villaGame.joinRoom(villaRooms, { roomId, name: reconnect.name, socketId: socket.id });
+    if (!joined.ok) {
+      if (joined.error?.code === 'SOCKET_ALREADY_JOINED') {
+        recordJoinHardeningEvent('villa', normalizedRoomId, socket.id, reconnect.name);
+      }
+      return cb?.(joined);
+    }
+    if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('villa', joined.room.id, reconnect.consumedClaimToken);
+    socket.join(`villa:${joined.room.id}`);
+    recordQuickJoinConversion('villa', joined.room.id, joined.player.name);
+    logRoomEvent('villa', joined.room, 'PLAYER_JOINED', {
+      playerId: joined.player.id,
+      playerName: joined.player.name,
+      status: joined.room.status,
+      phase: joined.room.phase,
+    });
+    emitVillaRoom(joined.room);
+    cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: villaGame.toPublic(joined.room) });
+  });
+
+  socket.on('villa:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    const result = autoFillLobbyBots('villa', room.id, minPlayers);
+    if (!result.ok) return cb?.(result);
+    cb?.({ ok: true, addedBots: result.addedBots, state: villaGame.toPublic(result.room) });
+  });
+
+  socket.on('villa:start', ({ roomId, playerId }, cb) => {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    const started = villaGame.startGame(villaRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    logRoomEvent('villa', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, round: started.room.round });
+    emitVillaRoom(started.room);
+    scheduleVillaPhase(started.room);
+    cb?.({ ok: true, state: villaGame.toPublic(started.room) });
+  });
+
+  socket.on('villa:start-ready', ({ roomId, playerId }, cb) => {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    const started = startReadyLobby('villa', roomId, playerId);
+    cb?.(started);
+  });
+
+  socket.on('villa:rematch', ({ roomId, playerId }, cb) => {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'villa');
+    const reset = villaGame.prepareRematch(villaRooms, { roomId, hostPlayerId: playerId });
+    if (!reset.ok) return cb?.(reset);
+    const started = villaGame.startGame(villaRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    const telemetry = recordRematch('villa', started.room.id);
+    incrementGrowthMetric('funnel.rematchStarts', 1);
+    recordTelemetryEvent('villa', started.room.id, 'rematch_clicked');
+    const partyStreak = Math.max(0, Number(started.room.partyStreak || 0));
+    if (partyStreak > 0) {
+      telemetry.partyStreakExtended = Math.max(0, Number(telemetry.partyStreakExtended || 0)) + 1;
+      recordTelemetryEvent('villa', started.room.id, 'party_streak_extended');
+    }
+    logRoomEvent('villa', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase, round: started.room.round });
+    emitVillaRoom(started.room);
+    scheduleVillaPhase(started.room);
+    cb?.({ ok: true, state: villaGame.toPublic(started.room) });
+  });
+
+  socket.on('villa:action', ({ roomId, playerId, type, targetId }, cb) => {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
+    const result = villaGame.submitAction(villaRooms, { roomId, playerId, type, targetId });
+    if (!result.ok) return cb?.(result);
+    recordRoomWinner('villa', result.room);
+    if (result.room.status === 'finished') recordFirstMatchCompletion('villa', result.room.id);
+    logRoomEvent('villa', result.room, 'ACTION_SUBMITTED', {
+      actorId: playerId,
+      action: type,
+      targetId: targetId || null,
+      status: result.room.status,
+      phase: result.room.phase,
+      round: result.room.round,
+      winner: result.room.winner || null,
+    });
+    emitVillaRoom(result.room);
+    scheduleVillaPhase(result.room);
+    cb?.({ ok: true, state: villaGame.toPublic(result.room) });
   });
 
   socket.on('room:create', (payload, cb) => {
@@ -1255,6 +1266,11 @@ io.on('connection', (socket) => {
       const changed = amongUsGame.disconnectPlayer(amongUsRooms, { roomId: room.id, socketId: socket.id });
       if (changed) emitAmongUsRoom(room);
     }
+
+    for (const room of villaRooms.values()) {
+      const changed = villaGame.disconnectPlayer(villaRooms, { roomId: room.id, socketId: socket.id });
+      if (changed) emitVillaRoom(room);
+    }
   });
 });
 
@@ -1431,7 +1447,9 @@ function persistGrowthMetricsSnapshot() {
       rematchRate: report.rematch.rematchRate,
       retentionProxy: report.rematch.retentionProxy,
       quickJoinConversionRate: report.quickJoin.conversionRate,
+      fairnessSocketSeatCapBlockRate: report.fairness?.socketSeatCapBlockRate || 0,
     },
+    fairness: report.fairness,
     byMode: report.byMode,
     sample: report.sample,
     notes: 'Auto-generated from room events + in-memory play telemetry via /api/ops/kpis.',
@@ -1876,6 +1894,13 @@ function summarizePlayableRoom(mode, room) {
     reclaim_clicked: telemetry.reclaimClicked || 0,
     quick_recover_clicked: telemetry.quickRecoverClicked || 0,
   };
+  const fairness = {
+    joinAttempts: Number(telemetry.joinAttempts || 0),
+    socketSeatCapBlocked: Number(telemetry.socketSeatCapBlocked || 0),
+  };
+  fairness.socketSeatCapBlockRate = fairness.joinAttempts
+    ? Number((fairness.socketSeatCapBlocked / fairness.joinAttempts).toFixed(2))
+    : 0;
 
   const summary = {
     mode,
@@ -1898,6 +1923,7 @@ function summarizePlayableRoom(mode, room) {
     quickMatch,
     reconnectAuto,
     reconnectRecoveryClicks,
+    fairness,
     recentWinners: telemetry.recentWinners,
     launchReadiness,
   };
@@ -1919,8 +1945,11 @@ function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
   const amongus = modeFilter === 'all' || modeFilter === 'amongus'
     ? [...amongUsRooms.values()].map((room) => summarizePlayableRoom('amongus', room))
     : [];
+  const villa = modeFilter === 'all' || modeFilter === 'villa'
+    ? [...villaRooms.values()].map((room) => summarizePlayableRoom('villa', room))
+    : [];
 
-  let roomsList = [...mafia, ...amongus];
+  let roomsList = [...mafia, ...amongus, ...villa];
 
   if (includeStatuses) {
     roomsList = roomsList.filter((room) => includeStatuses.has(room.status));
@@ -1936,13 +1965,13 @@ function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
 }
 
 function getLobbyStore(mode) {
-  return mode === 'amongus' ? amongUsRooms : mode === 'mafia' ? mafiaRooms : null;
+  return mode === 'amongus' ? amongUsRooms : mode === 'mafia' ? mafiaRooms : mode === 'villa' ? villaRooms : null;
 }
 
 function getClaimableLobbySeats(mode, roomId) {
   const store = getLobbyStore(mode);
   if (!store) {
-    return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } };
+    return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } };
   }
 
   const room = store.get(String(roomId || '').toUpperCase());
@@ -1968,10 +1997,15 @@ function getClaimableLobbySeats(mode, roomId) {
 }
 
 function pickQuickJoinMode(mode) {
-  if (mode === 'mafia' || mode === 'amongus') return mode;
+  if (mode === 'mafia' || mode === 'amongus' || mode === 'villa') return mode;
   const openMafia = listPlayableRooms('mafia', 'open').length;
   const openAmongUs = listPlayableRooms('amongus', 'open').length;
-  return openMafia <= openAmongUs ? 'mafia' : 'amongus';
+  const openVilla = listPlayableRooms('villa', 'open').length;
+  return [
+    { mode: 'mafia', open: openMafia },
+    { mode: 'amongus', open: openAmongUs },
+    { mode: 'villa', open: openVilla },
+  ].sort((a, b) => a.open - b.open || String(a.mode).localeCompare(String(b.mode)))[0].mode;
 }
 
 function buildQuickJoinDecision(candidates, targetRoom, created) {
@@ -2028,6 +2062,9 @@ function createQuickJoinRoom(mode, hostName) {
   if (mode === 'amongus') {
     return amongUsGame.createRoom(amongUsRooms, { hostName, hostSocketId: socketId });
   }
+  if (mode === 'villa') {
+    return villaGame.createRoom(villaRooms, { hostName, hostSocketId: socketId });
+  }
   return mafiaGame.createRoom(mafiaRooms, { hostName, hostSocketId: socketId });
 }
 
@@ -2046,6 +2083,18 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
     return { ok: true, mode, room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
   }
 
+  if (mode === 'villa') {
+    const room = villaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+    if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
+    const needed = Math.max(0, safeMinPlayers - room.players.length);
+    const added = villaGame.addLobbyBots(villaRooms, { roomId: room.id, count: needed, namePrefix: 'Villa Bot' });
+    if (!added.ok) return added;
+    logRoomEvent('villa', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers: safeMinPlayers, players: room.players.length });
+    emitVillaRoom(room);
+    return { ok: true, mode, room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
+  }
+
   const room = mafiaRooms.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
@@ -2058,7 +2107,9 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
 }
 
 function stripDisconnectedLobbyHumans(mode, roomId) {
-  const room = (mode === 'amongus' ? amongUsRooms : mafiaRooms).get(String(roomId || '').toUpperCase());
+  const store = getLobbyStore(mode);
+  if (!store) return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } };
+  const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only update lobby rooms' } };
 
@@ -2089,9 +2140,9 @@ function getLobbyStartReadiness(mode, room, playerId) {
 }
 
 function startReadyLobby(mode, roomId, playerId) {
-  const store = mode === 'amongus' ? amongUsRooms : mafiaRooms;
-  const game = mode === 'amongus' ? amongUsGame : mafiaGame;
-  const emitRoom = mode === 'amongus' ? emitAmongUsRoom : emitMafiaRoom;
+  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
+  const game = mode === 'amongus' ? amongUsGame : mode === 'villa' ? villaGame : mafiaGame;
+  const emitRoom = mode === 'amongus' ? emitAmongUsRoom : mode === 'villa' ? emitVillaRoom : emitMafiaRoom;
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
 
@@ -2136,6 +2187,7 @@ function startReadyLobby(mode, roomId, playerId) {
   });
   emitRoom(started.room);
   if (mode === 'amongus') scheduleAmongUsPhase(started.room);
+  else if (mode === 'villa') scheduleVillaPhase(started.room);
   else scheduleMafiaPhase(started.room);
 
   return {
@@ -2151,7 +2203,7 @@ app.get('/api/play/rooms', (req, res) => {
   const modeFilter = String(req.query.mode || 'all').toLowerCase();
   const statusFilter = String(req.query.status || 'all').toLowerCase();
 
-  if (!['all', 'mafia', 'amongus'].includes(modeFilter)) {
+  if (!['all', 'mafia', 'amongus', 'villa'].includes(modeFilter)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
   }
 
@@ -2161,6 +2213,7 @@ app.get('/api/play/rooms', (req, res) => {
     if (room.canJoin) totals.openRooms += 1;
     if (room.mode === 'mafia') totals.byMode.mafia += 1;
     if (room.mode === 'amongus') totals.byMode.amongus += 1;
+    if (room.mode === 'villa') totals.byMode.villa += 1;
 
     totals.reconnectAuto.attempts += Number(room.reconnectAuto?.attempts || 0);
     totals.reconnectAuto.successes += Number(room.reconnectAuto?.successes || 0);
@@ -2171,15 +2224,18 @@ app.get('/api/play/rooms', (req, res) => {
 
     totals.telemetryEvents.rematch_clicked += Number(room.telemetryEvents?.rematch_clicked || 0);
     totals.telemetryEvents.party_streak_extended += Number(room.telemetryEvents?.party_streak_extended || 0);
+    totals.fairness.joinAttempts += Number(room.fairness?.joinAttempts || 0);
+    totals.fairness.socketSeatCapBlocked += Number(room.fairness?.socketSeatCapBlocked || 0);
 
     return totals;
   }, {
     playersOnline: 0,
     openRooms: 0,
-    byMode: { mafia: 0, amongus: 0 },
+    byMode: { mafia: 0, amongus: 0, villa: 0 },
     reconnectAuto: { attempts: 0, successes: 0, failures: 0 },
     reconnectRecoveryClicks: { reclaim_clicked: 0, quick_recover_clicked: 0 },
     telemetryEvents: { rematch_clicked: 0, party_streak_extended: 0 },
+    fairness: { joinAttempts: 0, socketSeatCapBlocked: 0 },
   });
 
   const summary = {
@@ -2195,6 +2251,12 @@ app.get('/api/play/rooms', (req, res) => {
     },
     reconnectRecoveryClicks: aggregate.reconnectRecoveryClicks,
     telemetryEvents: aggregate.telemetryEvents,
+    fairness: {
+      ...aggregate.fairness,
+      socketSeatCapBlockRate: aggregate.fairness.joinAttempts
+        ? Number((aggregate.fairness.socketSeatCapBlocked / aggregate.fairness.joinAttempts).toFixed(2))
+        : 0,
+    },
   };
 
   res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
@@ -2222,8 +2284,8 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
   const outcome = String(req.body?.outcome || '').toLowerCase();
   const event = String(req.body?.event || '').toLowerCase();
 
-  if (!['mafia', 'amongus'].includes(mode)) {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } });
+  if (!['mafia', 'amongus', 'villa'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } });
   }
   if (!roomId) {
     return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
@@ -2271,7 +2333,7 @@ app.post('/api/play/quick-join', (req, res) => {
   const modeInput = String(req.body?.mode || 'all').toLowerCase();
   const playerName = String(req.body?.name || '').trim().slice(0, 24) || `Player-${Math.floor(Math.random() * 900) + 100}`;
 
-  if (!['all', 'mafia', 'amongus'].includes(modeInput)) {
+  if (!['all', 'mafia', 'amongus', 'villa'].includes(modeInput)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode' });
   }
 
@@ -2324,7 +2386,12 @@ app.post('/api/play/quick-join', (req, res) => {
     hasReconnectSuggestion: Boolean(reconnectSuggestion),
     reasonCode: quickJoinDecision.reasonCode,
   });
-  res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, (targetRoom.mode === 'mafia' ? mafiaRooms : amongUsRooms).get(targetRoom.roomId)), quickJoinDecision, joinTicket });
+  const targetStore = targetRoom.mode === 'mafia'
+    ? mafiaRooms
+    : targetRoom.mode === 'amongus'
+      ? amongUsRooms
+      : villaRooms;
+  res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, targetStore.get(targetRoom.roomId)), quickJoinDecision, joinTicket });
 });
 
 app.post('/api/play/lobby/autofill', (req, res) => {
@@ -2332,8 +2399,8 @@ app.post('/api/play/lobby/autofill', (req, res) => {
   const roomId = String(req.body?.roomId || '').trim().toUpperCase();
   const minPlayers = Number(req.body?.minPlayers || QUICK_JOIN_MIN_PLAYERS);
 
-  if (!['mafia', 'amongus'].includes(mode)) {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus' } });
+  if (!['mafia', 'amongus', 'villa'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } });
   }
 
   if (!roomId) {
@@ -2349,7 +2416,11 @@ app.post('/api/play/lobby/autofill', (req, res) => {
     roomId: result.room.id,
     targetPlayers: result.targetPlayers,
     addedBots: result.addedBots,
-    state: mode === 'mafia' ? mafiaGame.toPublic(result.room) : amongUsGame.toPublic(result.room),
+    state: mode === 'mafia'
+      ? mafiaGame.toPublic(result.room)
+      : mode === 'amongus'
+        ? amongUsGame.toPublic(result.room)
+        : villaGame.toPublic(result.room),
   });
 });
 
@@ -2371,29 +2442,7 @@ if (typeof loadGrowthMetrics === 'function') {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/rooms/:roomId/events', (req, res) => {
-  const roomId = String(req.params.roomId || '').toUpperCase();
-  const mode = String(req.query.mode || 'arena').toLowerCase();
-  const limit = Number(req.query.limit || 1000);
-  if (!['arena', 'mafia', 'amongus'].includes(mode)) {
-    return res.status(400).json({ ok: false, error: 'Invalid mode' });
-  }
-
-  const events = roomEvents.list(mode, roomId, limit);
-  res.json({ ok: true, mode, roomId, count: events.length, events });
-});
-
-app.get('/api/rooms/:roomId/replay', (req, res) => {
-  const roomId = String(req.params.roomId || '').toUpperCase();
-  const mode = String(req.query.mode || 'arena').toLowerCase();
-  if (!['arena', 'mafia', 'amongus'].includes(mode)) {
-    return res.status(400).json({ ok: false, error: 'Invalid mode' });
-  }
-
-  const replay = roomEvents.replay(mode, roomId);
-  if (!replay.ok) return res.status(404).json({ ok: false, error: 'No events for room', mode, roomId });
-  res.json({ ok: true, ...replay });
-});
+registerRoomEventRoutes(app, { roomEvents });
 
 app.get('/api/ops/events', (_req, res) => {
   res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
@@ -2417,6 +2466,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
     quick_recover_clicked: 0,
     rematch_clicked: 0,
     party_streak_extended: 0,
+    join_attempts: 0,
+    socket_seat_cap_blocked: 0,
   };
   const byMode = {
     mafia: {
@@ -2427,6 +2478,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
       quick_recover_clicked: 0,
       rematch_clicked: 0,
       party_streak_extended: 0,
+      join_attempts: 0,
+      socket_seat_cap_blocked: 0,
     },
     amongus: {
       attempts: 0,
@@ -2436,11 +2489,24 @@ app.get('/api/ops/reconnect', (_req, res) => {
       quick_recover_clicked: 0,
       rematch_clicked: 0,
       party_streak_extended: 0,
+      join_attempts: 0,
+      socket_seat_cap_blocked: 0,
+    },
+    villa: {
+      attempts: 0,
+      successes: 0,
+      failures: 0,
+      reclaim_clicked: 0,
+      quick_recover_clicked: 0,
+      rematch_clicked: 0,
+      party_streak_extended: 0,
+      join_attempts: 0,
+      socket_seat_cap_blocked: 0,
     },
   };
 
   for (const telemetry of playRoomTelemetry.values()) {
-    const mode = telemetry.mode === 'amongus' ? 'amongus' : 'mafia';
+    const mode = telemetry.mode === 'amongus' ? 'amongus' : telemetry.mode === 'villa' ? 'villa' : 'mafia';
     const attempts = Number(telemetry.reconnectAutoAttempts || 0);
     const successes = Number(telemetry.reconnectAutoSuccesses || 0);
     const failures = Number(telemetry.reconnectAutoFailures || 0);
@@ -2448,6 +2514,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
     const quickRecoverClicked = Number(telemetry.quickRecoverClicked || 0);
     const rematchClicked = Number(telemetry.telemetryEvents?.rematch_clicked || telemetry.rematchCount || 0);
     const partyStreakExtended = Number(telemetry.telemetryEvents?.party_streak_extended || telemetry.partyStreakExtended || 0);
+    const joinAttempts = Number(telemetry.joinAttempts || 0);
+    const socketSeatCapBlocked = Number(telemetry.socketSeatCapBlocked || 0);
     totals.attempts += attempts;
     totals.successes += successes;
     totals.failures += failures;
@@ -2455,6 +2523,8 @@ app.get('/api/ops/reconnect', (_req, res) => {
     totals.quick_recover_clicked += quickRecoverClicked;
     totals.rematch_clicked += rematchClicked;
     totals.party_streak_extended += partyStreakExtended;
+    totals.join_attempts += joinAttempts;
+    totals.socket_seat_cap_blocked += socketSeatCapBlocked;
     byMode[mode].attempts += attempts;
     byMode[mode].successes += successes;
     byMode[mode].failures += failures;
@@ -2462,15 +2532,19 @@ app.get('/api/ops/reconnect', (_req, res) => {
     byMode[mode].quick_recover_clicked += quickRecoverClicked;
     byMode[mode].rematch_clicked += rematchClicked;
     byMode[mode].party_streak_extended += partyStreakExtended;
+    byMode[mode].join_attempts += joinAttempts;
+    byMode[mode].socket_seat_cap_blocked += socketSeatCapBlocked;
   }
 
   const toRate = (row) => (row.attempts ? Number((row.successes / row.attempts).toFixed(2)) : 0);
+  const toBlockRate = (row) => (row.join_attempts ? Number((row.socket_seat_cap_blocked / row.join_attempts).toFixed(2)) : 0);
   res.json({
     ok: true,
-    totals: { ...totals, successRate: toRate(totals) },
+    totals: { ...totals, successRate: toRate(totals), socketSeatCapBlockRate: toBlockRate(totals) },
     byMode: {
-      mafia: { ...byMode.mafia, successRate: toRate(byMode.mafia) },
-      amongus: { ...byMode.amongus, successRate: toRate(byMode.amongus) },
+      mafia: { ...byMode.mafia, successRate: toRate(byMode.mafia), socketSeatCapBlockRate: toBlockRate(byMode.mafia) },
+      amongus: { ...byMode.amongus, successRate: toRate(byMode.amongus), socketSeatCapBlockRate: toBlockRate(byMode.amongus) },
+      villa: { ...byMode.villa, successRate: toRate(byMode.villa), socketSeatCapBlockRate: toBlockRate(byMode.villa) },
     },
   });
 });
@@ -2529,6 +2603,7 @@ app.get('/health', (_req, res) => {
       arena: rooms.size,
       mafia: mafiaRooms.size,
       amongus: amongUsRooms.size,
+      villa: villaRooms.size,
     },
     agents: agentProfiles.size,
     roasts: roastFeed.length,
@@ -2574,6 +2649,7 @@ module.exports = {
   rooms,
   mafiaRooms,
   amongUsRooms,
+  villaRooms,
   roomEvents,
   arenaCanary,
   clearAllGameTimers,

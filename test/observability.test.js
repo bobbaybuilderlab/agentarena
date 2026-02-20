@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, rooms, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers } = require('../server');
+const { server, rooms, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -12,6 +12,7 @@ async function withServer(fn) {
   rooms.clear();
   mafiaRooms.clear();
   amongUsRooms.clear();
+  villaRooms.clear();
   roomEvents.clear();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;

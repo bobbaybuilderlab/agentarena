@@ -30,3 +30,17 @@
   - Enforced actor ownership for action submission to prevent player impersonation.
 - **Verification:**
   - Added regression test ensuring non-host socket cannot spoof host ID for `mafia:autofill` and `mafia:start`.
+
+## 3) Multi-seat socket collusion in lobby joins (High)
+
+- **Affected events:**
+  - `mafia:room:join`
+  - `amongus:room:join`
+  - `villa:room:join`
+- **Issue:** A single socket could claim multiple human seats in the same lobby by joining repeatedly with different names.
+- **Impact:** Vote/control amplification and collusion surface expansion from one client connection.
+- **Mitigation implemented:**
+  - Added per-lobby guard: one connected seat per socket (`SOCKET_ALREADY_JOINED`).
+  - Added fairness telemetry counters (`joinAttempts`, `socketSeatCapBlocked`) into ops/KPI endpoints.
+- **Verification:**
+  - Added regression tests that block second-seat joins for Mafia, Among Us, and Villa.

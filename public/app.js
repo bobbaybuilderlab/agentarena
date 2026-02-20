@@ -187,7 +187,9 @@ feedList?.addEventListener('click', async (e) => {
 });
 
 function roomModeLabel(mode) {
-  return mode === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+  if (mode === 'amongus') return 'Agents Among Us';
+  if (mode === 'villa') return 'Agent Villa';
+  return 'Agent Mafia';
 }
 
 function roomJumpUrl(room) {

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers } = require('../server');
+const { server, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -25,6 +25,7 @@ async function waitFor(predicate, timeoutMs = 20000, intervalMs = 150) {
 async function withServer(fn) {
   mafiaRooms.clear();
   amongUsRooms.clear();
+  villaRooms.clear();
   roomEvents.clear();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
@@ -100,6 +101,40 @@ test('among-us bot autopilot can finish bot-filled room loop with one human', as
 
     assert.ok(finished, 'amongus room should finish with bot autopilot');
     assert.ok(['crew', 'imposter'].includes(finished.winner));
+
+    host.disconnect();
+  });
+});
+
+test('villa bot autopilot can finish bot-filled room loop with one human', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+
+    const created = await emitAck(host, 'villa:room:create', { name: 'SoloHost' });
+    assert.equal(created.ok, true);
+
+    const autofilled = await emitAck(host, 'villa:autofill', {
+      roomId: created.roomId,
+      playerId: created.playerId,
+      minPlayers: 4,
+    });
+    assert.equal(autofilled.ok, true);
+    assert.equal(autofilled.state.players.length, 4);
+
+    const started = await emitAck(host, 'villa:start', { roomId: created.roomId, playerId: created.playerId });
+    assert.equal(started.ok, true);
+    assert.equal(started.state.botAutoplay, true);
+    assert.ok(started.state.autoplay);
+    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
+
+    const finished = await waitFor(() => {
+      const room = villaRooms.get(created.roomId);
+      return room && room.status === 'finished' ? room : null;
+    });
+
+    assert.ok(finished, 'villa room should finish with bot autopilot');
+    assert.ok(['final_couple', 'viewer_favorite'].includes(finished.winner));
 
     host.disconnect();
   });

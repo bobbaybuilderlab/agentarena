@@ -51,6 +51,12 @@ let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
 let pendingUiAction = false;
 
+function selectedMode() {
+  const value = String(gameMode?.value || me.game || 'mafia').toLowerCase();
+  if (value === 'amongus' || value === 'villa') return value;
+  return 'mafia';
+}
+
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
   const queryGame = params.get('game');
@@ -65,7 +71,7 @@ function parseQueryConfig() {
   const normalizedQueryName = queryName ? String(queryName).trim().slice(0, 24) : '';
   const normalizedReclaimName = reclaimName ? String(reclaimName).trim().slice(0, 24) : '';
 
-  if (queryGame === 'mafia' || queryGame === 'amongus') {
+  if (queryGame === 'mafia' || queryGame === 'amongus' || queryGame === 'villa') {
     me.game = queryGame;
     if (gameMode) gameMode.value = queryGame;
   }
@@ -132,7 +138,7 @@ function formatError(res, fallback) {
 }
 
 function activeEvent(name) {
-  return me.game === 'mafia' ? `mafia:${name}` : `amongus:${name}`;
+  return `${me.game || 'mafia'}:${name}`;
 }
 
 function renderClaimSeats(data) {
@@ -164,7 +170,7 @@ function renderClaimSeats(data) {
 }
 
 async function loadClaimableSeats() {
-  const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const mode = selectedMode();
   const roomId = roomIdInput?.value?.trim().toUpperCase();
   if (!roomId) {
     setStatus('Enter room ID first');
@@ -188,7 +194,7 @@ async function loadClaimableSeats() {
 }
 
 async function sendReconnectTelemetry(outcome, event) {
-  const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  const mode = selectedMode();
   const roomId = (me.roomId || roomIdInput?.value || '').toString().trim().toUpperCase();
   if (!roomId) return;
   const payload = { mode, roomId };
@@ -446,6 +452,7 @@ function roleLabel(role) {
   if (role === 'town') return 'Town';
   if (role === 'imposter') return 'Imposter';
   if (role === 'crew') return 'Crew';
+  if (role === 'islander') return 'Islander';
   return role || 'Unknown';
 }
 
@@ -454,11 +461,15 @@ function winnerLabel(winner) {
   if (winner === 'town') return 'Town';
   if (winner === 'imposter') return 'Imposters';
   if (winner === 'crew') return 'Crew';
+  if (winner === 'final_couple') return 'Final Couple';
+  if (winner === 'viewer_favorite') return 'Viewer Favorite';
   return winner || 'Unknown';
 }
 
 function modeLabel(mode) {
-  return mode === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+  if (mode === 'amongus') return 'Agents Among Us';
+  if (mode === 'villa') return 'Agent Villa';
+  return 'Agent Mafia';
 }
 
 function phaseLabel(state) {
@@ -515,10 +526,14 @@ function renderOwnerDigest(state) {
 
   const role = mePlayer.role || '';
   const winner = state.winner || '';
-  const didWin = Boolean(role && winner && role === winner);
+  const didWin = me.game === 'villa'
+    ? (Array.isArray(state.winnerPlayerIds)
+      ? state.winnerPlayerIds.includes(me.playerId)
+      : mePlayer.alive !== false)
+    : Boolean(role && winner && role === winner);
   const resultTag = didWin ? '✅ Win' : '❌ Loss';
   const aliveTag = mePlayer.alive === false ? 'eliminated' : 'survived';
-  const gameLabel = me.game === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+  const gameLabel = modeLabel(me.game);
   const result = { didWin, role, winner };
 
   ownerDigestCard.style.display = 'block';
@@ -593,12 +608,57 @@ function renderActions(state) {
     }
   }
 
+  if (me.game === 'villa') {
+    if (state.status === 'finished') {
+      actionsView.innerHTML = `<p class=\"text-sm text-muted\">Winner: <strong>${winnerLabel(state.winner)}</strong></p>`;
+      return;
+    }
+
+    const immunityId = state.roundState?.challenge?.immunityPlayerId || null;
+    const vulnerableId = state.roundState?.twist?.vulnerablePlayerId || null;
+    const targetButtons = (type, label) => aliveOthers
+      .filter((p) => !(immunityId && (state.phase === 'twist' || state.phase === 'elimination') && p.id === immunityId))
+      .map((p) => `<button class=\"btn btn-primary\" data-action=\"${type}\" data-target=\"${p.id}\" type=\"button\">${label} ${p.name}</button>`)
+      .join('');
+
+    if (state.phase === 'pairing') {
+      actionsView.innerHTML = targetButtons('pair', 'Pair with') || '<p class=\"text-sm text-muted\">No valid pairing targets</p>';
+      return;
+    }
+
+    if (state.phase === 'challenge') {
+      actionsView.innerHTML = targetButtons('challengeVote', 'Back');
+      return;
+    }
+
+    if (state.phase === 'twist') {
+      const immunityNote = immunityId ? `<p class=\"text-sm text-muted\">Immunity: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}</p>` : '';
+      actionsView.innerHTML = `${immunityNote}${targetButtons('twistVote', 'Expose') || '<p class=\"text-sm text-muted\">No eligible twist targets</p>'}`;
+      return;
+    }
+
+    if (state.phase === 'recouple') {
+      actionsView.innerHTML = targetButtons('recouple', 'Recouple with') || '<p class=\"text-sm text-muted\">No valid recouple targets</p>';
+      return;
+    }
+
+    if (state.phase === 'elimination') {
+      const context = [
+        immunityId ? `Immune: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}` : '',
+        vulnerableId ? `At risk: ${state.players.find((p) => p.id === vulnerableId)?.name || vulnerableId}` : '',
+      ].filter(Boolean).join(' · ');
+      const contextLine = context ? `<p class=\"text-sm text-muted\">${context}</p>` : '';
+      actionsView.innerHTML = `${contextLine}${targetButtons('eliminateVote', 'Vote out') || '<p class=\"text-sm text-muted\">No elimination targets</p>'}`;
+      return;
+    }
+  }
+
   actionsView.innerHTML = '<p class="text-sm text-muted">Waiting for active match...</p>';
 }
 
 hostBtn?.addEventListener('click', async () => {
   await withPendingUiAction(async () => {
-    me.game = gameMode.value;
+    me.game = selectedMode();
     const res = await emitAck(activeEvent('room:create'), { name: playerName.value.trim() || 'Host' });
     if (!res?.ok) return setStatus(formatError(res, 'Host failed'), 'error');
     me.roomId = res.roomId;
@@ -612,7 +672,7 @@ hostBtn?.addEventListener('click', async () => {
 
 joinBtn?.addEventListener('click', async () => {
   await withPendingUiAction(async () => {
-    me.game = gameMode.value;
+    me.game = selectedMode();
     const res = await emitAck(activeEvent('room:join'), {
       roomId: roomIdInput.value.trim().toUpperCase(),
       name: playerName.value.trim() || 'Player',
@@ -635,7 +695,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
   if (quickRecoverBtn) {
     void sendReconnectTelemetry(null, 'quick_recover_clicked');
     try {
-      const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+      const mode = selectedMode();
       const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
       const res = await fetch('/api/play/quick-join', {
         method: 'POST',
@@ -664,7 +724,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
 
   void sendReconnectTelemetry(null, 'reclaim_clicked');
 
-  me.game = gameMode.value;
+  me.game = selectedMode();
   const res = await emitAck(activeEvent('room:join'), {
     roomId: roomIdInput.value.trim().toUpperCase(),
     name: claimName,
@@ -683,7 +743,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
 quickMatchBtn?.addEventListener('click', async () => {
   await withPendingUiAction(async () => {
     try {
-      const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+      const mode = selectedMode();
       const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
       const res = await fetch('/api/play/quick-join', {
         method: 'POST',
@@ -777,6 +837,12 @@ socket.on('amongus:state', (state) => {
   renderState(state);
 });
 
+socket.on('villa:state', (state) => {
+  if (me.game !== 'villa') return;
+  if (state.id !== me.roomId) return;
+  renderState(state);
+});
+
 flushEventsBtn?.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/ops/events/flush', { method: 'POST' });
@@ -830,7 +896,7 @@ async function autoJoinFromQuery() {
   const roomId = roomIdInput?.value?.trim().toUpperCase();
   if (!roomId) return;
 
-  me.game = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+  me.game = selectedMode();
   const fallbackName = queryName || `Player-${Math.floor(Math.random() * 999)}`;
   const requestedName = playerName?.value?.trim() || fallbackName;
 
@@ -891,7 +957,7 @@ setInterval(() => {
 
 gameMode?.addEventListener('change', () => {
   if (!currentState || !me.roomId) {
-    me.game = gameMode.value === 'amongus' ? 'amongus' : 'mafia';
+    me.game = selectedMode();
   }
 });
 

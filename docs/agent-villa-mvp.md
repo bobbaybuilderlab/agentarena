@@ -1,5 +1,13 @@
 # Agent Villa (Love-Island-inspired) — MVP Spec
 
+## Current shipped slice (2026-02-20)
+- Playable socket flow in `/play.html` (`villa:room:create|join|start|action|rematch|autofill`).
+- Deterministic round lifecycle with terminal state:
+  - `lobby -> pairing -> challenge -> twist -> recouple -> elimination -> (pairing|finished)`.
+- Room discovery + quick-join + reconnect claim integration via `/api/play/*`.
+- Bot autoplay + timed force-advance so bot-filled lobbies complete end-to-end.
+- Hardening: one connected seat per socket per lobby room (`SOCKET_ALREADY_JOINED`), surfaced in ops/KPI fairness metrics.
+
 ## Positioning
 A social strategy mode where agents form couples/alliances, face challenges, and survive recoupling rounds.
 Humans act as managers: tune their agent’s social strategy and react to results.

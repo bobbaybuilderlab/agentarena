@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry, seedPlayTelemetry } = require('../server');
+const { server, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry, seedPlayTelemetry } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -11,6 +11,7 @@ function emitAck(socket, event, payload) {
 async function withServer(fn) {
   mafiaRooms.clear();
   amongUsRooms.clear();
+  villaRooms.clear();
   roomEvents.clear();
   resetPlayTelemetry();
   await new Promise((resolve) => server.listen(0, resolve));
@@ -28,22 +29,25 @@ test('play rooms API lists cross-mode room discovery with open-room filtering', 
   await withServer(async (url) => {
     const s1 = ioc(url, { reconnection: false, autoUnref: true });
     const s2 = ioc(url, { reconnection: false, autoUnref: true });
+    const sVilla = ioc(url, { reconnection: false, autoUnref: true });
 
     const mafiaCreate = await emitAck(s1, 'mafia:room:create', { name: 'MHost' });
     assert.equal(mafiaCreate.ok, true);
 
     const amongCreate = await emitAck(s2, 'amongus:room:create', { name: 'AHost' });
     assert.equal(amongCreate.ok, true);
+    const villaCreate = await emitAck(sVilla, 'villa:room:create', { name: 'VHost' });
+    assert.equal(villaCreate.ok, true);
 
     const allRes = await fetch(`${url}/api/play/rooms`);
     const allData = await allRes.json();
 
     assert.equal(allData.ok, true);
-    assert.equal(allData.summary.totalRooms, 2);
-    assert.equal(allData.summary.openRooms, 2);
+    assert.equal(allData.summary.totalRooms, 3);
+    assert.equal(allData.summary.openRooms, 3);
 
     const modes = allData.rooms.map((r) => r.mode).sort();
-    assert.deepEqual(modes, ['amongus', 'mafia']);
+    assert.deepEqual(modes, ['amongus', 'mafia', 'villa']);
 
     const mafiaItem = allData.rooms.find((r) => r.mode === 'mafia');
     assert.equal(mafiaItem.roomId, mafiaCreate.roomId);
@@ -63,9 +67,10 @@ test('play rooms API lists cross-mode room discovery with open-room filtering', 
     const openRes = await fetch(`${url}/api/play/rooms?status=open`);
     const openData = await openRes.json();
     assert.equal(openData.ok, true);
-    assert.equal(openData.summary.openRooms, 1);
-    assert.equal(openData.rooms.length, 1);
-    assert.equal(openData.rooms[0].mode, 'amongus');
+    assert.equal(openData.summary.openRooms, 2);
+    assert.equal(openData.rooms.length, 2);
+    assert.ok(openData.rooms.some((r) => r.mode === 'amongus'));
+    assert.ok(openData.rooms.some((r) => r.mode === 'villa'));
     assert.ok(openData.rooms.every((r) => r.status === 'lobby'));
 
     s1.disconnect();
@@ -73,6 +78,7 @@ test('play rooms API lists cross-mode room discovery with open-room filtering', 
     s3.disconnect();
     s4.disconnect();
     s5.disconnect();
+    sVilla.disconnect();
   });
 });
 
@@ -145,6 +151,35 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
     assert.equal(data.room.players, 4);
     assert.equal(data.room.hostName, 'FreshPlayer');
     assert.match(data.joinTicket.joinUrl, /game=amongus/);
+  });
+});
+
+test('quick-join supports villa mode and room cards include fairness counters', async () => {
+  await withServer(async (url) => {
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const created = await emitAck(host, 'villa:room:create', { name: 'VillaHost' });
+    assert.equal(created.ok, true);
+
+    const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'villa', name: 'VillaRunner' }),
+    });
+    const quickJoinData = await quickJoinRes.json();
+
+    assert.equal(quickJoinData.ok, true);
+    assert.equal(quickJoinData.created, false);
+    assert.equal(quickJoinData.room.mode, 'villa');
+    assert.match(quickJoinData.joinTicket.joinUrl, /game=villa/);
+
+    const roomsRes = await fetch(`${url}/api/play/rooms?mode=villa`);
+    const roomsData = await roomsRes.json();
+    assert.equal(roomsData.ok, true);
+    assert.equal(roomsData.summary.byMode.villa, 1);
+    assert.equal(typeof roomsData.summary.fairness.joinAttempts, 'number');
+    assert.equal(typeof roomsData.summary.fairness.socketSeatCapBlockRate, 'number');
+
+    host.disconnect();
   });
 });
 
