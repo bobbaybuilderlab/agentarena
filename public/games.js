@@ -49,6 +49,7 @@ let currentState = null;
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
+let pendingUiAction = false;
 
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
@@ -96,6 +97,18 @@ function setStatus(text, tone = 'info') {
   if (tone === 'warn') playStatus.classList.add('status-warn');
   else if (tone === 'error') playStatus.classList.add('status-error');
   else playStatus.classList.add('status-info');
+}
+
+function withPendingUiAction(run) {
+  if (pendingUiAction) return Promise.resolve(null);
+  pendingUiAction = true;
+  updateControlState(currentState);
+  return Promise.resolve()
+    .then(run)
+    .finally(() => {
+      pendingUiAction = false;
+      updateControlState(currentState);
+    });
 }
 
 function showRecoveryHint(html) {
@@ -283,28 +296,98 @@ function updateLobbyUrgency(state, isHost) {
   }
 }
 
+function meInState(state) {
+  if (!state || !me.playerId) return null;
+  return (state.players || []).find((p) => p.id === me.playerId) || null;
+}
+
+function getAdvanceConfig(state) {
+  if (!state || state.status !== 'in_progress') {
+    return { enabled: false, label: 'Advance', title: 'Available during live matches only' };
+  }
+  if (!me.roomId || !me.playerId) {
+    return { enabled: false, label: 'Advance', title: 'Join a room first' };
+  }
+  const mePlayer = meInState(state);
+  if (!mePlayer) {
+    return { enabled: false, label: 'Advance', title: 'You are spectating this state update' };
+  }
+  if (mePlayer.alive === false) {
+    return { enabled: false, label: 'Spectating', title: 'Eliminated players cannot submit actions' };
+  }
+
+  if (me.game === 'mafia' && state.phase === 'discussion') {
+    return {
+      enabled: true,
+      label: 'Ready up',
+      title: 'Mark ready to move discussion into voting',
+      event: 'mafia:action',
+      payload: { roomId: me.roomId, playerId: me.playerId, type: 'ready' },
+    };
+  }
+
+  if (me.game === 'amongus' && state.phase === 'tasks') {
+    return {
+      enabled: true,
+      label: 'Call meeting',
+      title: 'Force a meeting from the task phase',
+      event: 'amongus:action',
+      payload: { roomId: me.roomId, playerId: me.playerId, type: 'callMeeting' },
+    };
+  }
+
+  return { enabled: false, label: 'Advance', title: 'No manual phase action needed right now' };
+}
+
 function updateControlState(state) {
   const players = state?.players || [];
   const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
+  const inProgress = state?.status === 'in_progress';
   const minPlayersReady = players.length >= 4;
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
+  const mePlayer = meInState(state);
+  const advance = getAdvanceConfig(state);
+
+  if (gameMode) {
+    const lockMode = Boolean(state && me.roomId);
+    gameMode.disabled = lockMode;
+    gameMode.title = lockMode ? 'Mode is locked to your current room session' : '';
+  }
+
+  if (hostBtn) {
+    hostBtn.disabled = pendingUiAction;
+  }
+
+  if (joinBtn) {
+    joinBtn.disabled = pendingUiAction;
+  }
+
+  if (quickMatchBtn) {
+    quickMatchBtn.disabled = pendingUiAction;
+  }
 
   if (startBtn) {
-    startBtn.disabled = !isHost || !inLobby;
+    startBtn.disabled = pendingUiAction || !isHost || !inLobby;
     startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Auto-fills bots + replaces disconnected lobby players';
     startBtn.textContent = inLobby ? 'Start Ready' : 'Start';
   }
 
   if (autofillBtn) {
-    autofillBtn.disabled = !isHost || !inLobby;
+    autofillBtn.disabled = pendingUiAction || !isHost || !inLobby;
     autofillBtn.title = !isHost ? 'Host only' : !inLobby ? 'Only available in lobby' : '';
   }
 
   if (rematchBtn) {
-    rematchBtn.disabled = !isHost || !finished;
+    rematchBtn.disabled = pendingUiAction || !isHost || !finished;
     rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
+  }
+
+  if (advanceBtn) {
+    advanceBtn.disabled = pendingUiAction || !advance.enabled;
+    advanceBtn.title = advance.title || '';
+    advanceBtn.textContent = advance.label;
   }
 
   updateLobbyUrgency(state, isHost);
@@ -320,6 +403,8 @@ function updateControlState(state) {
     } else {
       setStatus('Lobby ready. Start Ready launches immediately.', 'info');
     }
+  } else if (inProgress && mePlayer?.alive === false) {
+    setStatus('You are eliminated and now spectating. Watch the match finish, then run rematch.', 'warn');
   }
 }
 
@@ -444,6 +529,22 @@ function renderOwnerDigest(state) {
 }
 
 function renderActions(state) {
+  if (!me.roomId || !me.playerId) {
+    actionsView.innerHTML = '<p class="text-sm text-muted">Join a room to unlock actions.</p>';
+    return;
+  }
+
+  const mePlayer = meInState(state);
+  if (!mePlayer) {
+    actionsView.innerHTML = '<p class="text-sm text-muted">Spectating this room update. Rejoin to act.</p>';
+    return;
+  }
+
+  if (mePlayer.alive === false && state.status === 'in_progress') {
+    actionsView.innerHTML = '<p class="text-sm text-muted">You are eliminated. No further actions this round.</p>';
+    return;
+  }
+
   const aliveOthers = (state.players || []).filter((p) => p.id !== me.playerId && p.alive !== false);
 
   if (me.game === 'mafia') {
@@ -458,7 +559,10 @@ function renderActions(state) {
     }
 
     if (state.phase === 'discussion') {
-      actionsView.innerHTML = '<p class="text-sm text-muted">Discussion phase. Build reads now, then click Advance/Ready.</p>';
+      actionsView.innerHTML = `
+        <p class="text-sm text-muted">Discussion phase. Build reads, then ready up when your read is locked.</p>
+        <button class="btn btn-primary" data-action="ready" type="button">Ready up</button>
+      `;
       return;
     }
 
@@ -493,29 +597,33 @@ function renderActions(state) {
 }
 
 hostBtn?.addEventListener('click', async () => {
-  me.game = gameMode.value;
-  const res = await emitAck(activeEvent('room:create'), { name: playerName.value.trim() || 'Host' });
-  if (!res?.ok) return setStatus(formatError(res, 'Host failed'));
-  me.roomId = res.roomId;
-  me.playerId = res.playerId;
-  roomIdInput.value = me.roomId;
-  setStatus(`Hosted ${me.game} room ${me.roomId}`);
-  renderState(res.state);
-  void loadClaimableSeats();
+  await withPendingUiAction(async () => {
+    me.game = gameMode.value;
+    const res = await emitAck(activeEvent('room:create'), { name: playerName.value.trim() || 'Host' });
+    if (!res?.ok) return setStatus(formatError(res, 'Host failed'), 'error');
+    me.roomId = res.roomId;
+    me.playerId = res.playerId;
+    roomIdInput.value = me.roomId;
+    setStatus(`Hosted ${me.game} room ${me.roomId}`);
+    renderState(res.state);
+    void loadClaimableSeats();
+  });
 });
 
 joinBtn?.addEventListener('click', async () => {
-  me.game = gameMode.value;
-  const res = await emitAck(activeEvent('room:join'), {
-    roomId: roomIdInput.value.trim().toUpperCase(),
-    name: playerName.value.trim() || 'Player',
+  await withPendingUiAction(async () => {
+    me.game = gameMode.value;
+    const res = await emitAck(activeEvent('room:join'), {
+      roomId: roomIdInput.value.trim().toUpperCase(),
+      name: playerName.value.trim() || 'Player',
+    });
+    if (!res?.ok) return setStatus(formatError(res, 'Join failed'), 'error');
+    me.roomId = res.roomId;
+    me.playerId = res.playerId;
+    setStatus(`Joined ${me.game} room ${me.roomId}`);
+    renderState(res.state);
+    void loadClaimableSeats();
   });
-  if (!res?.ok) return setStatus(formatError(res, 'Join failed'));
-  me.roomId = res.roomId;
-  me.playerId = res.playerId;
-  setStatus(`Joined ${me.game} room ${me.roomId}`);
-  renderState(res.state);
-  void loadClaimableSeats();
 });
 
 loadClaimsBtn?.addEventListener('click', async () => {
@@ -536,13 +644,13 @@ claimSeatsView?.addEventListener('click', async (e) => {
       });
       const data = await res.json();
       if (!data?.ok || !data?.joinTicket?.joinUrl) {
-        setStatus(formatError(data, 'Quick match failed'));
+        setStatus(formatError(data, 'Quick match failed'), 'error');
         showRecoveryHint('Recovery tip: quick match unavailable. Keep room ID, then retry <strong>Find Reconnect Seats</strong> in ~5s.');
         return;
       }
       window.location.href = data.joinTicket.joinUrl;
     } catch (_err) {
-      setStatus('Quick match failed');
+      setStatus('Quick match failed', 'error');
       showRecoveryHint('Recovery tip: network hiccup. Retry <strong>Find Reconnect Seats</strong> or quick match again.');
     }
     return;
@@ -561,77 +669,88 @@ claimSeatsView?.addEventListener('click', async (e) => {
     roomId: roomIdInput.value.trim().toUpperCase(),
     name: claimName,
   });
-  if (!res?.ok) return setStatus(formatError(res, 'Claim failed'));
+  if (!res?.ok) return setStatus(formatError(res, 'Claim failed'), 'error');
 
   me.roomId = res.roomId;
   me.playerId = res.playerId;
   suggestedReclaim = null;
-  setStatus(`Reconnected as ${claimName}${res.playerId === currentState?.hostPlayerId ? ' (host)' : ''}`);
+  setStatus(`Reconnected as ${claimName}${res.playerId === res.state?.hostPlayerId ? ' (host)' : ''}`);
   showRecoveryHint(`Recovered seat <strong>${claimName}</strong>. If you disconnect again, reclaim from this panel.`);
   renderState(res.state);
   void loadClaimableSeats();
 });
 
 quickMatchBtn?.addEventListener('click', async () => {
-  try {
-    const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
-    const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
-    const res = await fetch('/api/play/quick-join', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, name }),
-    });
-    const data = await res.json();
-    if (!data?.ok || !data?.joinTicket?.joinUrl) {
-      setStatus(formatError(data, 'Quick match failed'));
-      return;
+  await withPendingUiAction(async () => {
+    try {
+      const mode = gameMode?.value === 'amongus' ? 'amongus' : 'mafia';
+      const name = playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`;
+      const res = await fetch('/api/play/quick-join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, name }),
+      });
+      const data = await res.json();
+      if (!data?.ok || !data?.joinTicket?.joinUrl) {
+        setStatus(formatError(data, 'Quick match failed'), 'error');
+        return;
+      }
+      window.location.href = data.joinTicket.joinUrl;
+    } catch (_err) {
+      setStatus('Quick match failed', 'error');
     }
-    window.location.href = data.joinTicket.joinUrl;
-  } catch (_err) {
-    setStatus('Quick match failed');
-  }
+  });
 });
 
 startBtn?.addEventListener('click', async () => {
-  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
-  const eventName = currentState?.status === 'lobby' ? activeEvent('start-ready') : activeEvent('start');
-  const res = await emitAck(eventName, { roomId: me.roomId, playerId: me.playerId });
-  if (!res?.ok) return setStatus(formatError(res, 'Start failed'));
-  const addedBots = Number(res.addedBots || 0);
-  const removed = Number(res.removedDisconnectedHumans || 0);
-  if (addedBots > 0 || removed > 0) {
-    setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
-  } else {
-    setStatus('Game started');
-  }
-  renderState(res.state);
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
+  await withPendingUiAction(async () => {
+    const eventName = currentState?.status === 'lobby' ? activeEvent('start-ready') : activeEvent('start');
+    const res = await emitAck(eventName, { roomId: me.roomId, playerId: me.playerId });
+    if (!res?.ok) return setStatus(formatError(res, 'Start failed'), 'error');
+    const addedBots = Number(res.addedBots || 0);
+    const removed = Number(res.removedDisconnectedHumans || 0);
+    if (addedBots > 0 || removed > 0) {
+      setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
+    } else {
+      setStatus('Game started');
+    }
+    renderState(res.state);
+  });
 });
 
 rematchBtn?.addEventListener('click', async () => {
-  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
-  const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
-  if (!res?.ok) return setStatus(formatError(res, 'Rematch failed'));
-  setStatus('Rematch started');
-  renderState(res.state);
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
+  await withPendingUiAction(async () => {
+    const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
+    if (!res?.ok) return setStatus(formatError(res, 'Rematch failed'), 'error');
+    setStatus('Rematch started');
+    renderState(res.state);
+  });
 });
 
 autofillBtn?.addEventListener('click', async () => {
-  if (!me.roomId || !me.playerId) return setStatus('Host or join first');
-  const res = await emitAck(activeEvent('autofill'), { roomId: me.roomId, playerId: me.playerId, minPlayers: 4 });
-  if (!res?.ok) return setStatus(formatError(res, 'Auto-fill failed'));
-  setStatus(`Auto-filled ${res.addedBots || 0} bot(s)`);
-  renderState(res.state);
+  if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
+  await withPendingUiAction(async () => {
+    const res = await emitAck(activeEvent('autofill'), { roomId: me.roomId, playerId: me.playerId, minPlayers: 4 });
+    if (!res?.ok) return setStatus(formatError(res, 'Auto-fill failed'), 'error');
+    setStatus(`Auto-filled ${res.addedBots || 0} bot(s)`);
+    renderState(res.state);
+  });
 });
 
 advanceBtn?.addEventListener('click', async () => {
-  if (!me.roomId) return;
-  if (me.game === 'mafia' && currentState?.phase === 'discussion') {
-    const res = await emitAck('mafia:action', { roomId: me.roomId, playerId: me.playerId, type: 'ready' });
-    if (res?.ok) renderState(res.state);
-  } else if (me.game === 'amongus' && currentState?.phase === 'tasks') {
-    const res = await emitAck('amongus:action', { roomId: me.roomId, playerId: me.playerId, type: 'callMeeting' });
-    if (res?.ok) renderState(res.state);
+  const advance = getAdvanceConfig(currentState);
+  if (!advance.enabled || !advance.event || !advance.payload) {
+    setStatus(advance.title || 'No phase action available right now.', 'warn');
+    return;
   }
+
+  await withPendingUiAction(async () => {
+    const res = await emitAck(advance.event, advance.payload);
+    if (!res?.ok) return setStatus(formatError(res, 'Advance failed'), 'error');
+    renderState(res.state);
+  });
 });
 
 actionsView?.addEventListener('click', async (e) => {
@@ -639,9 +758,11 @@ actionsView?.addEventListener('click', async (e) => {
   if (!btn) return;
   const type = btn.getAttribute('data-action');
   const targetId = btn.getAttribute('data-target') || undefined;
-  const res = await emitAck(activeEvent('action'), { roomId: me.roomId, playerId: me.playerId, type, targetId });
-  if (!res?.ok) return setStatus(formatError(res, 'Action failed'));
-  renderState(res.state);
+  await withPendingUiAction(async () => {
+    const res = await emitAck(activeEvent('action'), { roomId: me.roomId, playerId: me.playerId, type, targetId });
+    if (!res?.ok) return setStatus(formatError(res, 'Action failed'), 'error');
+    renderState(res.state);
+  });
 });
 
 socket.on('mafia:state', (state) => {
@@ -741,14 +862,14 @@ async function autoJoinFromQuery() {
       return;
     }
 
-    setStatus(`Reconnect token failed. ${formatError(retry, `Quick-join failed for room ${roomId}`)}`);
+    setStatus(`Reconnect token failed. ${formatError(retry, `Quick-join failed for room ${roomId}`)}`, 'error');
     showRecoveryHint('Recovery fallback: check room ID, then use Find Reconnect Seats. If room is dead, use Quick match me now.');
     void loadClaimableSeats();
     return;
   }
 
   if (!res?.ok) {
-    setStatus(formatError(res, `Quick-join failed for room ${roomId}`));
+    setStatus(formatError(res, `Quick-join failed for room ${roomId}`), 'error');
     return;
   }
 
@@ -768,6 +889,13 @@ setInterval(() => {
   void refreshOpsStatus();
 }, 3000);
 
+gameMode?.addEventListener('change', () => {
+  if (!currentState || !me.roomId) {
+    me.game = gameMode.value === 'amongus' ? 'amongus' : 'mafia';
+  }
+});
+
 defaultRecoveryHint();
+updateControlState(currentState);
 void refreshOpsStatus();
 void autoJoinFromQuery();

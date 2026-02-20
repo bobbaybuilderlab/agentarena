@@ -268,6 +268,16 @@ a {
   align-items: center;
 }
 
+.command-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.command-actions .btn {
+  width: 100%;
+}
+
 .actions-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -314,6 +324,7 @@ a {
   font-weight: 700;
   letter-spacing: 0.02em;
   cursor: pointer;
+  touch-action: manipulation;
   transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
@@ -325,6 +336,13 @@ a {
 
 .btn:active {
   transform: translateY(0);
+}
+
+.btn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .btn-primary {
@@ -555,6 +573,13 @@ article p {
   color: #abdbff;
 }
 
+.status-bar {
+  border: 1px solid rgba(69, 114, 154, 0.52);
+  border-radius: var(--radius-md);
+  background: rgba(14, 27, 45, 0.62);
+  padding: 8px 10px;
+}
+
 .status-info {
   color: #abdbff;
 }
@@ -780,12 +805,21 @@ article p {
   .grid-2,
   .cards3,
   .input-row,
-  .steps {
+  .steps,
+  .command-actions {
     grid-template-columns: 1fr;
   }
 
   .section-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .section-header .row {
+    width: 100%;
+  }
+
+  .section-header .row .btn {
+    flex: 1 1 calc(50% - 4px);
   }
 }
