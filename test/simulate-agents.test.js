@@ -25,60 +25,63 @@ test('autonomous agents can roast and finish a battle', async () => {
   const host = ioc(url, { reconnection: false, autoUnref: true });
   const watcher = ioc(url, { reconnection: false, autoUnref: true });
 
-  const created = await new Promise((resolve) => {
-    host.emit('room:create', { name: 'Host', type: 'human' }, resolve);
-  });
-  assert.equal(created.ok, true);
-
-  await new Promise((resolve) => {
-    watcher.emit('room:watch', { roomId: created.roomId }, resolve);
-  });
-
-  await new Promise((resolve) => {
-    host.emit('bot:add', { roomId: created.roomId, name: 'SavageBot', persona: { style: 'savage', intensity: 8 } }, resolve);
-  });
-  await new Promise((resolve) => {
-    host.emit('bot:add', { roomId: created.roomId, name: 'WittyBot', persona: { style: 'witty', intensity: 6 } }, resolve);
-  });
-
-  await new Promise((resolve) => {
-    host.emit('battle:start', { roomId: created.roomId }, resolve);
-  });
-
   let finished = false;
-  let submittedHostRoast = false;
-  const deadline = Date.now() + 9000;
 
-  while (!finished && Date.now() < deadline) {
-    const update = await onceEvent(watcher, 'room:update', 5000);
+  try {
+    const created = await new Promise((resolve) => {
+      host.emit('room:create', { name: 'Host', type: 'human' }, resolve);
+    });
+    assert.equal(created.ok, true);
 
-    if (update.status === 'round' && !submittedHostRoast) {
-      submittedHostRoast = true;
-      await new Promise((resolve) => host.emit('roast:submit', {
-        roomId: update.id,
-        text: 'Host roast: your roadmap has more pivots than a fidget spinner.',
-      }, resolve));
-    }
+    await new Promise((resolve) => {
+      watcher.emit('room:watch', { roomId: created.roomId }, resolve);
+    });
 
-    if (update.status === 'voting') {
-      const withRoasts = update.players.find((p) => update.roastsByRound?.[update.round]?.[p.id]);
-      const target = withRoasts?.id || update.players[0]?.id;
-      if (target) {
-        await new Promise((resolve) => watcher.emit('vote:cast', { roomId: update.id, playerId: target }, resolve));
+    await new Promise((resolve) => {
+      host.emit('bot:add', { roomId: created.roomId, name: 'SavageBot', persona: { style: 'savage', intensity: 8 } }, resolve);
+    });
+    await new Promise((resolve) => {
+      host.emit('bot:add', { roomId: created.roomId, name: 'WittyBot', persona: { style: 'witty', intensity: 6 } }, resolve);
+    });
+
+    await new Promise((resolve) => {
+      host.emit('battle:start', { roomId: created.roomId }, resolve);
+    });
+
+    let submittedHostRoast = false;
+    const deadline = Date.now() + 9000;
+
+    while (!finished && Date.now() < deadline) {
+      const update = await onceEvent(watcher, 'room:update', 5000);
+
+      if (update.status === 'round' && !submittedHostRoast) {
+        submittedHostRoast = true;
+        await new Promise((resolve) => host.emit('roast:submit', {
+          roomId: update.id,
+          text: 'Host roast: your roadmap has more pivots than a fidget spinner.',
+        }, resolve));
+      }
+
+      if (update.status === 'voting') {
+        const withRoasts = update.players.find((p) => update.roastsByRound?.[update.round]?.[p.id]);
+        const target = withRoasts?.id || update.players[0]?.id;
+        if (target) {
+          await new Promise((resolve) => watcher.emit('vote:cast', { roomId: update.id, playerId: target }, resolve));
+        }
+      }
+
+      if (update.status === 'lobby' && update.round === 1) {
+        finished = true;
+        assert.ok(update.lastWinner?.name);
+        assert.ok(update.lastWinner?.quote);
       }
     }
 
-    if (update.status === 'lobby' && update.round === 1) {
-      finished = true;
-      assert.ok(update.lastWinner?.name);
-      assert.ok(update.lastWinner?.quote);
-    }
+    assert.equal(finished, true);
+  } finally {
+    host.disconnect();
+    watcher.disconnect();
+    clearAllGameTimers();
+    await new Promise((resolve) => server.close(resolve));
   }
-
-  host.disconnect();
-  watcher.disconnect();
-  clearAllGameTimers();
-  await new Promise((resolve) => server.close(resolve));
-
-  assert.equal(finished, true);
 });

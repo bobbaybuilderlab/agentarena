@@ -41,101 +41,104 @@ async function withServer(fn) {
 test('mafia bot autopilot can finish bot-filled room loop with one human', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
+    try {
+      const created = await emitAck(host, 'mafia:room:create', { name: 'SoloHost' });
+      assert.equal(created.ok, true);
 
-    const created = await emitAck(host, 'mafia:room:create', { name: 'SoloHost' });
-    assert.equal(created.ok, true);
+      const autofilled = await emitAck(host, 'mafia:autofill', {
+        roomId: created.roomId,
+        playerId: created.playerId,
+        minPlayers: 4,
+      });
+      assert.equal(autofilled.ok, true);
+      assert.equal(autofilled.state.players.length, 4);
 
-    const autofilled = await emitAck(host, 'mafia:autofill', {
-      roomId: created.roomId,
-      playerId: created.playerId,
-      minPlayers: 4,
-    });
-    assert.equal(autofilled.ok, true);
-    assert.equal(autofilled.state.players.length, 4);
+      const started = await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(started.ok, true);
+      assert.equal(started.state.botAutoplay, true);
+      assert.ok(started.state.autoplay);
+      assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+      assert.equal(typeof started.state.autoplay.aliveBots, 'number');
 
-    const started = await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
-    assert.equal(started.ok, true);
-    assert.equal(started.state.botAutoplay, true);
-    assert.ok(started.state.autoplay);
-    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
-    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
+      const finished = await waitFor(() => {
+        const room = mafiaRooms.get(created.roomId);
+        return room && room.status === 'finished' ? room : null;
+      });
 
-    const finished = await waitFor(() => {
-      const room = mafiaRooms.get(created.roomId);
-      return room && room.status === 'finished' ? room : null;
-    });
-
-    assert.ok(finished, 'mafia room should finish with bot autopilot');
-    assert.ok(['mafia', 'town'].includes(finished.winner));
-
-    host.disconnect();
+      assert.ok(finished, 'mafia room should finish with bot autopilot');
+      assert.ok(['mafia', 'town'].includes(finished.winner));
+    } finally {
+      host.disconnect();
+    }
   });
 });
 
 test('among-us bot autopilot can finish bot-filled room loop with one human', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
+    try {
+      const created = await emitAck(host, 'amongus:room:create', { name: 'SoloHost' });
+      assert.equal(created.ok, true);
 
-    const created = await emitAck(host, 'amongus:room:create', { name: 'SoloHost' });
-    assert.equal(created.ok, true);
+      const autofilled = await emitAck(host, 'amongus:autofill', {
+        roomId: created.roomId,
+        playerId: created.playerId,
+        minPlayers: 4,
+      });
+      assert.equal(autofilled.ok, true);
+      assert.equal(autofilled.state.players.length, 4);
 
-    const autofilled = await emitAck(host, 'amongus:autofill', {
-      roomId: created.roomId,
-      playerId: created.playerId,
-      minPlayers: 4,
-    });
-    assert.equal(autofilled.ok, true);
-    assert.equal(autofilled.state.players.length, 4);
+      const started = await emitAck(host, 'amongus:start', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(started.ok, true);
+      assert.equal(started.state.botAutoplay, true);
+      assert.ok(started.state.autoplay);
+      assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+      assert.equal(typeof started.state.autoplay.aliveBots, 'number');
 
-    const started = await emitAck(host, 'amongus:start', { roomId: created.roomId, playerId: created.playerId });
-    assert.equal(started.ok, true);
-    assert.equal(started.state.botAutoplay, true);
-    assert.ok(started.state.autoplay);
-    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
-    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
+      const finished = await waitFor(() => {
+        const room = amongUsRooms.get(created.roomId);
+        return room && room.status === 'finished' ? room : null;
+      });
 
-    const finished = await waitFor(() => {
-      const room = amongUsRooms.get(created.roomId);
-      return room && room.status === 'finished' ? room : null;
-    });
-
-    assert.ok(finished, 'amongus room should finish with bot autopilot');
-    assert.ok(['crew', 'imposter'].includes(finished.winner));
-
-    host.disconnect();
+      assert.ok(finished, 'amongus room should finish with bot autopilot');
+      assert.ok(['crew', 'imposter'].includes(finished.winner));
+    } finally {
+      host.disconnect();
+    }
   });
 });
 
 test('villa bot autopilot can finish bot-filled room loop with one human', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
+    try {
+      const created = await emitAck(host, 'villa:room:create', { name: 'SoloHost' });
+      assert.equal(created.ok, true);
 
-    const created = await emitAck(host, 'villa:room:create', { name: 'SoloHost' });
-    assert.equal(created.ok, true);
+      const autofilled = await emitAck(host, 'villa:autofill', {
+        roomId: created.roomId,
+        playerId: created.playerId,
+        minPlayers: 4,
+      });
+      assert.equal(autofilled.ok, true);
+      assert.equal(autofilled.state.players.length, 4);
 
-    const autofilled = await emitAck(host, 'villa:autofill', {
-      roomId: created.roomId,
-      playerId: created.playerId,
-      minPlayers: 4,
-    });
-    assert.equal(autofilled.ok, true);
-    assert.equal(autofilled.state.players.length, 4);
+      const started = await emitAck(host, 'villa:start', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(started.ok, true);
+      assert.equal(started.state.botAutoplay, true);
+      assert.ok(started.state.autoplay);
+      assert.equal(typeof started.state.autoplay.pendingActions, 'number');
+      assert.equal(typeof started.state.autoplay.aliveBots, 'number');
 
-    const started = await emitAck(host, 'villa:start', { roomId: created.roomId, playerId: created.playerId });
-    assert.equal(started.ok, true);
-    assert.equal(started.state.botAutoplay, true);
-    assert.ok(started.state.autoplay);
-    assert.equal(typeof started.state.autoplay.pendingActions, 'number');
-    assert.equal(typeof started.state.autoplay.aliveBots, 'number');
+      const finished = await waitFor(() => {
+        const room = villaRooms.get(created.roomId);
+        return room && room.status === 'finished' ? room : null;
+      });
 
-    const finished = await waitFor(() => {
-      const room = villaRooms.get(created.roomId);
-      return room && room.status === 'finished' ? room : null;
-    });
-
-    assert.ok(finished, 'villa room should finish with bot autopilot');
-    assert.ok(['final_couple', 'viewer_favorite'].includes(finished.winner));
-
-    host.disconnect();
+      assert.ok(finished, 'villa room should finish with bot autopilot');
+      assert.ok(['final_couple', 'viewer_favorite'].includes(finished.winner));
+    } finally {
+      host.disconnect();
+    }
   });
 });

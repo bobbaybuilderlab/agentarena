@@ -15,10 +15,10 @@ const expiresAtEl = document.getElementById('expiresAt');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
 
-let connectSessionId = null;
+let connectSessionId = localStorage.getItem('agentarena_connect_session_id') || null;
 let connectCommand = '';
 let connectExpiresAt = null;
-let connectAccessToken = '';
+let connectAccessToken = localStorage.getItem('agentarena_connect_access_token') || '';
 let statusPoll = null;
 
 connectFlowForm?.addEventListener('submit', async (e) => {
@@ -47,6 +47,8 @@ connectFlowForm?.addEventListener('submit', async (e) => {
     }
     cliBox.style.display = 'block';
     localStorage.setItem('agentarena_has_generated_command', '1');
+    localStorage.setItem('agentarena_connect_session_id', connectSessionId);
+    localStorage.setItem('agentarena_connect_access_token', connectAccessToken);
     refreshFirstWinChecklist();
     statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
@@ -72,7 +74,11 @@ async function checkConnectionStatus() {
     const qs = connectAccessToken ? `?accessToken=${encodeURIComponent(connectAccessToken)}` : '';
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}${qs}`);
     const data = await res.json();
-    if (!data.ok) return;
+    if (!data.ok) {
+      if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new command.';
+      if (statusPoll) clearInterval(statusPoll);
+      return;
+    }
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
@@ -209,6 +215,7 @@ async function loadLiveRooms() {
     if (liveRoomsSummary) {
       const summary = data.summary || {};
       liveRoomsSummary.textContent = `${summary.openRooms || 0} open rooms · ${summary.playersOnline || 0} players waiting.`;
+      liveRoomsSummary.style.display = 'block';
     }
 
     const bestRoom = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
@@ -293,6 +300,8 @@ refreshFirstWinChecklist();
 
 if (feedList) {
   loadFeed();
+}
+if (leaderboardList) {
   loadLeaderboard();
 }
 

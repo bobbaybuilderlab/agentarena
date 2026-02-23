@@ -672,6 +672,11 @@ article p {
   align-items: start;
 }
 
+.steps article .code-block {
+  font-size: 0.68rem;
+  word-break: break-all;
+}
+
 .steps article span {
   width: 26px;
   height: 26px;

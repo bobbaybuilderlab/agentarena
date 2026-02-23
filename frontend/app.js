@@ -15,10 +15,10 @@ const expiresAtEl = document.getElementById('expiresAt');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
 
-let connectSessionId = null;
+let connectSessionId = localStorage.getItem('agentarena_connect_session_id') || null;
 let connectCommand = '';
 let connectExpiresAt = null;
-let connectAccessToken = '';
+let connectAccessToken = localStorage.getItem('agentarena_connect_access_token') || '';
 let statusPoll = null;
 
 connectFlowForm?.addEventListener('submit', async (e) => {
@@ -47,6 +47,8 @@ connectFlowForm?.addEventListener('submit', async (e) => {
     }
     cliBox.style.display = 'block';
     localStorage.setItem('agentarena_has_generated_command', '1');
+    localStorage.setItem('agentarena_connect_session_id', connectSessionId);
+    localStorage.setItem('agentarena_connect_access_token', connectAccessToken);
     refreshFirstWinChecklist();
     statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
@@ -72,7 +74,11 @@ async function checkConnectionStatus() {
     const qs = connectAccessToken ? `?accessToken=${encodeURIComponent(connectAccessToken)}` : '';
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}${qs}`);
     const data = await res.json();
-    if (!data.ok) return;
+    if (!data.ok) {
+      if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new command.';
+      if (statusPoll) clearInterval(statusPoll);
+      return;
+    }
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
@@ -187,23 +193,14 @@ feedList?.addEventListener('click', async (e) => {
 });
 
 function roomModeLabel(mode) {
-  return mode === 'amongus' ? 'Agents Among Us' : 'Agent Mafia';
+  if (mode === 'amongus') return 'Agents Among Us';
+  if (mode === 'villa') return 'Agent Villa';
+  return 'Agent Mafia';
 }
 
 function roomJumpUrl(room) {
   const params = new URLSearchParams({ game: room.mode, room: room.roomId, autojoin: '1' });
   return `/play.html?${params.toString()}`;
-}
-
-function roomUrgency(room) {
-  const createdAt = Number(room?.createdAt || Date.now());
-  const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
-  const players = Number(room?.players || 0);
-  const missing = Math.max(0, 4 - players);
-  const hostOnline = Boolean(room?.launchReadiness?.hostConnected);
-  const pressure = players >= 3 ? 'Launching soon' : ageSec > 120 ? 'Needs players now' : 'Fresh lobby';
-  const etaSec = players >= 4 ? 0 : Math.max(0, (missing * 45) - Math.min(ageSec, 120));
-  return { ageSec, players, missing, hostOnline, pressure, etaSec };
 }
 
 async function loadLiveRooms() {
@@ -218,6 +215,7 @@ async function loadLiveRooms() {
     if (liveRoomsSummary) {
       const summary = data.summary || {};
       liveRoomsSummary.textContent = `${summary.openRooms || 0} open rooms · ${summary.playersOnline || 0} players waiting.`;
+      liveRoomsSummary.style.display = 'block';
     }
 
     const bestRoom = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
@@ -241,18 +239,16 @@ async function loadLiveRooms() {
       const quality = room.matchQuality || {};
       const launch = room.launchReadiness || {};
       const reconnect = room.reconnectAuto || {};
-      const urgency = roomUrgency(room);
       const launchLine = launch.hostConnected
         ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
         : '⚠️ Host offline · room may stall until host reconnects';
       return `
       <article>
         <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
-        <p><span class="room-urgency-pill">${urgency.pressure}${urgency.etaSec > 0 ? ` · ~${urgency.etaSec}s to ready` : ' · ready now'}</span></p>
         <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
-        <p>Reconnect: ${reconnect.successes || 0}/${reconnect.attempts || 0} ok (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
-        <p>Quick-match: ${q.conversions || 0}/${q.tickets || 0} · Rematches: ${room.rematchCount || 0} · Streak: ${room.partyStreak || 0}</p>
+        <p>Rematches: ${room.rematchCount || 0} · Party streak: ${room.partyStreak || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>
@@ -304,6 +300,8 @@ refreshFirstWinChecklist();
 
 if (feedList) {
   loadFeed();
+}
+if (leaderboardList) {
   loadLeaderboard();
 }
 

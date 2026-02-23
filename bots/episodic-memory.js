@@ -1,7 +1,7 @@
 const MAX_BOT_MEMORY = 3;
 
 function ensureBotMemory(bot) {
-  if (!bot) return [];
+  if (!bot || typeof bot !== 'object') return [];
   if (!Array.isArray(bot.memory)) bot.memory = [];
   return bot.memory;
 }
