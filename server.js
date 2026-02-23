@@ -1542,8 +1542,7 @@ app.post('/api/auth/session', (req, res) => {
 
 app.post('/api/openclaw/connect-session', (req, res) => {
   incrementGrowthMetric('funnel.connectSessionStarts', 1);
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
+  const email = String(req.body?.email || '').trim().toLowerCase() || 'anonymous';
 
   const id = shortId(18);
   const callbackUrl = `${req.protocol}://${req.get('host')}/api/openclaw/callback`;

@@ -6,8 +6,7 @@ function getConnectedAgentId() {
 }
 
 // CLI-first onboarding
-const connectFlowForm = document.getElementById('connectFlowForm');
-const ownerEmail = document.getElementById('ownerEmail');
+const generateCmdBtn = document.getElementById('generateCmdBtn');
 const statusEl = document.getElementById('status');
 const cliBox = document.getElementById('cliBox');
 const cliCommandEl = document.getElementById('cliCommand');
@@ -21,17 +20,14 @@ let connectExpiresAt = null;
 let connectAccessToken = localStorage.getItem('agentarena_connect_access_token') || '';
 let statusPoll = null;
 
-connectFlowForm?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const email = ownerEmail?.value.trim();
-  if (!email) return;
-
+generateCmdBtn?.addEventListener('click', async () => {
   try {
+    generateCmdBtn.disabled = true;
     statusEl.textContent = 'Generating secure command...';
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({}),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'failed to generate command');
@@ -50,10 +46,12 @@ connectFlowForm?.addEventListener('submit', async (e) => {
     localStorage.setItem('agentarena_connect_session_id', connectSessionId);
     localStorage.setItem('agentarena_connect_access_token', connectAccessToken);
     refreshFirstWinChecklist();
+    generateCmdBtn.style.display = 'none';
     statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
+    generateCmdBtn.disabled = false;
     statusEl.textContent = `Could not start connect flow: ${err.message}`;
   }
 });
