@@ -8,6 +8,7 @@
     "dev": "node --watch server.js",
     "build": "rm -rf dist && mkdir -p dist && cp -r public/* dist/",
     "test": "node --test",
+    "test:e2e": "npx playwright test",
     "eval:ci": "node lib/eval-ci.js",
     "kpi:report": "node scripts/analyze-kpis.js",
     "deploy:vercel": "npx --yes vercel@50.15.1 --prod --yes"
@@ -16,8 +17,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@sentry/node": "^10.39.0",
+    "better-sqlite3": "^12.6.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
   }
 }
