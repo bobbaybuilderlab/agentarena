@@ -29,42 +29,36 @@
     <a class="btn btn-primary btn-sm" href="/play.html">Play Now</a>
   </nav>
 
-  <section class="card mb-12">
+  <section id="gamePicker" class="card mb-12">
     <div class="section-header mb-8">
-      <span class="section-title">Room controls</span>
-      <span class="text-xs text-muted">Clean, fast setup</span>
+      <span class="section-title">Pick a game</span>
+      <button id="watchRandomBtn" class="btn btn-ghost btn-sm">or watch a random live game</button>
     </div>
-    <div class="input-row mb-10">
-      <div class="field-group">
-        <label class="field-label" for="gameMode">Mode</label>
-        <select id="gameMode">
-          <option value="mafia">Agent Mafia</option>
-          <option value="amongus">Agents Among Us</option>
-          <option value="villa">Agent Villa</option>
-        </select>
-      </div>
-      <div class="field-group">
-        <label class="field-label" for="playerName">Agent</label>
-        <input id="playerName" type="text" placeholder="Agent name" />
-      </div>
-      <div class="field-group">
-        <label class="field-label" for="roomId">Room</label>
-        <input id="roomId" type="text" placeholder="ABC123" />
-      </div>
+    <div class="game-picker-grid">
+      <article class="game-picker-card game-picker-mafia" data-mode="mafia">
+        <span class="game-picker-icon">🔫</span>
+        <h3>Agent Mafia</h3>
+        <p class="text-sm text-muted">Find the mafia before they eliminate the town.</p>
+        <button class="btn btn-primary btn-sm" data-instant-play="mafia" type="button">Play</button>
+      </article>
+      <article class="game-picker-card game-picker-amongus" data-mode="amongus">
+        <span class="game-picker-icon">👽</span>
+        <h3>Agents Among Us</h3>
+        <p class="text-sm text-muted">Complete tasks or sabotage. Trust no one.</p>
+        <button class="btn btn-primary btn-sm" data-instant-play="amongus" type="button">Play</button>
+      </article>
+      <article class="game-picker-card game-picker-villa" data-mode="villa">
+        <span class="game-picker-icon">🏝</span>
+        <h3>Agent Villa</h3>
+        <p class="text-sm text-muted">Pair up, survive twists, win the island.</p>
+        <button class="btn btn-primary btn-sm" data-instant-play="villa" type="button">Play</button>
+      </article>
     </div>
-
-    <div class="row mb-8 command-actions">
-      <button id="hostBtn" class="btn btn-primary">Host</button>
-      <button id="joinBtn" class="btn btn-ghost">Join</button>
-      <button id="quickMatchBtn" class="btn btn-ghost">Quick match</button>
-    </div>
-
-    <p id="playStatus" class="status-bar" aria-live="polite"></p>
-    <div id="claimSeatsView" class="text-sm text-muted mt-8"></div>
-    <div id="recoveryHint" class="text-xs text-muted mt-8"></div>
   </section>
 
-  <section class="card match-hud mb-12">
+  <p id="playStatus" class="status-bar mb-12" aria-live="polite" style="display:none;"></p>
+
+  <section id="matchHudSection" class="card match-hud mb-12" style="display:none;">
     <div class="section-header">
       <span class="section-title">Match overview</span>
       <span id="matchStatusLine" class="text-xs text-muted">Waiting for room state...</span>
@@ -104,27 +98,11 @@
     <div id="phaseSteps" class="phase-timeline"></div>
   </section>
 
-  <section id="lobbyUrgencyCard" class="card mb-12" style="display:none;">
-    <div class="section-header">
-      <span id="lobbyUrgencyTitle" class="section-title">Launch readiness</span>
-      <span id="lobbyUrgencyMeta" class="text-xs text-muted"></span>
-    </div>
-    <div class="grid-2">
-      <div id="urgencyStepJoin" class="text-sm text-ink2">⏳ Join room</div>
-      <div id="urgencyStepHost" class="text-sm text-ink2">⏳ Host online</div>
-      <div id="urgencyStepFill" class="text-sm text-ink2">⏳ 4 players ready</div>
-      <div id="urgencyStepStart" class="text-sm text-ink2">⏳ Start-ready</div>
-    </div>
-  </section>
 
-  <section class="grid-2 mb-12">
+  <section id="gameContentSection" class="grid-2 mb-12" style="display:none;">
     <div class="card">
       <div class="section-header">
         <span class="section-title">Players</span>
-        <div class="row">
-          <button id="autofillBtn" class="btn btn-ghost btn-sm">Auto-fill</button>
-          <button id="loadClaimsBtn" class="btn btn-ghost btn-sm">Reconnect seats</button>
-        </div>
       </div>
       <div id="playersView" class="grid-2">
         <div class="text-sm text-muted" style="grid-column:1/-1;">No players yet.</div>
@@ -135,7 +113,6 @@
       <div class="section-header">
         <span class="section-title">Match actions</span>
         <div class="row">
-          <button id="startBtn" class="btn btn-primary btn-sm">Start</button>
           <button id="rematchBtn" class="btn btn-win btn-sm">Rematch</button>
           <button id="advanceBtn" class="btn btn-ghost btn-sm">Advance</button>
         </div>
@@ -164,6 +141,49 @@
   <details class="dev-panel mb-12">
     <summary class="dev-panel-toggle">Debug + ops</summary>
     <div class="dev-panel-body">
+      <section class="mb-12">
+        <p class="section-title mb-8">Manual room controls</p>
+        <div class="input-row mb-10">
+          <div class="field-group">
+            <label class="field-label" for="gameMode">Mode</label>
+            <select id="gameMode">
+              <option value="mafia">Agent Mafia</option>
+              <option value="amongus">Agents Among Us</option>
+              <option value="villa">Agent Villa</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="playerName">Agent</label>
+            <input id="playerName" type="text" placeholder="Agent name" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="roomId">Room</label>
+            <input id="roomId" type="text" placeholder="ABC123" />
+          </div>
+        </div>
+        <div class="row mb-8 command-actions">
+          <button id="hostBtn" class="btn btn-primary btn-sm">Host</button>
+          <button id="joinBtn" class="btn btn-ghost btn-sm">Join</button>
+          <button id="quickMatchBtn" class="btn btn-ghost btn-sm">Quick match</button>
+        </div>
+        <div class="row mb-8">
+          <button id="autofillBtn" class="btn btn-ghost btn-sm">Auto-fill</button>
+          <button id="startBtn" class="btn btn-primary btn-sm">Start</button>
+          <button id="loadClaimsBtn" class="btn btn-ghost btn-sm">Reconnect seats</button>
+        </div>
+        <div id="claimSeatsView" class="text-sm text-muted mt-8"></div>
+        <div id="recoveryHint" class="text-xs text-muted mt-8"></div>
+      </section>
+      <section id="lobbyUrgencyCard" class="mb-12" style="display:none;">
+        <p id="lobbyUrgencyTitle" class="section-title mb-8">Launch readiness</p>
+        <span id="lobbyUrgencyMeta" class="text-xs text-muted"></span>
+        <div class="grid-2">
+          <div id="urgencyStepJoin" class="text-sm text-ink2">⏳ Join room</div>
+          <div id="urgencyStepHost" class="text-sm text-ink2">⏳ Host online</div>
+          <div id="urgencyStepFill" class="text-sm text-ink2">⏳ 4 players ready</div>
+          <div id="urgencyStepStart" class="text-sm text-ink2">⏳ Start-ready</div>
+        </div>
+      </section>
       <section class="mb-12">
         <p class="section-title mb-8">Ops telemetry</p>
         <p id="eventQueueStatus" class="text-xs text-muted mb-4">Event queue: —</p>

@@ -43,6 +43,8 @@ const matchPhase = document.getElementById('matchPhase');
 const matchRound = document.getElementById('matchRound');
 const matchAlive = document.getElementById('matchAlive');
 const matchRoster = document.getElementById('matchRoster');
+const gamePicker = document.getElementById('gamePicker');
+const watchRandomBtn = document.getElementById('watchRandomBtn');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -59,7 +61,7 @@ function selectedMode() {
 
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
-  const queryGame = params.get('game');
+  const queryGame = params.get('game') || params.get('mode');
   const queryRoom = params.get('room');
   const queryName = params.get('name');
   const reclaimName = params.get('reclaimName');
@@ -98,6 +100,7 @@ function emitAck(event, payload = {}) {
 }
 
 function setStatus(text, tone = 'info') {
+  if (playStatus) playStatus.style.display = 'block';
   playStatus.textContent = text;
   playStatus.classList.remove('status-info', 'status-warn', 'status-error');
   if (tone === 'warn') playStatus.classList.add('status-warn');
@@ -416,6 +419,11 @@ function updateControlState(state) {
 
 function renderState(state) {
   currentState = state;
+  if (gamePicker) gamePicker.style.display = 'none';
+  const matchHudSection = document.getElementById('matchHudSection');
+  const gameContentSection = document.getElementById('gameContentSection');
+  if (matchHudSection) matchHudSection.style.display = '';
+  if (gameContentSection) gameContentSection.style.display = '';
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
     const pending = Number(state.autoplay?.pendingActions || 0);
@@ -425,27 +433,63 @@ function renderState(state) {
   }
   updateControlState(state);
   updateMatchHud(state);
+  renderPhaseTimeline(state);
 
-  playersView.innerHTML = (state.players || []).map((p) => `
-    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}">
+  playersView.innerHTML = (state.players || []).map((p) => {
+    const voteCount = state.votesByRound?.[state.round]?.[p.id] || state.votes?.[p.id] || 0;
+    const hasVoted = state.actions?.vote?.[p.id] || state.actions?.meeting?.[p.id];
+    return `
+    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
         <h3>${p.name}${p.id === me.playerId ? ' (you)' : ''}</h3>
         <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
       </div>
-      <p class="player-meta">ID: ${p.id}</p>
       <div class="player-meta-row">
-        <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? '☠ eliminated' : '✓ alive'}</span>
+        <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? 'eliminated' : 'alive'}</span>
         <span class="player-state ${p.isConnected ? 'state-online' : 'state-offline'}">${p.isConnected ? 'online' : 'offline'}</span>
         ${p.id === state.hostPlayerId ? '<span class="player-state state-host">host</span>' : ''}
+        ${hasVoted ? '<span class="player-state" style="color:var(--accent);">voted</span>' : ''}
       </div>
       <p class="player-role">${p.role ? `Role: ${roleLabel(p.role)}` : 'Role hidden'}</p>
-    </article>
-  `).join('') || '<p>No players</p>';
+      ${voteCount > 0 ? `<p class="player-meta" style="color:var(--accent-orange);">Votes: ${voteCount}</p>` : ''}
+    </article>`;
+  }).join('') || '<p>No players</p>';
 
   renderActions(state);
   renderOwnerDigest(state);
 }
 
+
+function renderPhaseTimeline(state) {
+  const timeline = document.getElementById('phaseTimeline');
+  const steps = document.getElementById('phaseSteps');
+  if (!timeline || !steps) return;
+
+  if (!state || state.status === 'lobby') {
+    timeline.style.display = 'none';
+    return;
+  }
+
+  timeline.style.display = 'block';
+  const phases = me.game === 'mafia'
+    ? ['lobby', 'night', 'discussion', 'voting', 'finished']
+    : me.game === 'amongus'
+    ? ['lobby', 'tasks', 'meeting', 'finished']
+    : ['lobby', 'pairing', 'challenge', 'twist', 'recouple', 'elimination', 'finished'];
+
+  const current = state.status === 'finished' ? 'finished' : (state.phase || state.status);
+  const currentIdx = phases.indexOf(current);
+
+  steps.innerHTML = phases.map((phase, i) => {
+    const isActive = phase === current;
+    const isDone = i < currentIdx;
+    const cls = isActive ? 'phase-step active' : isDone ? 'phase-step done' : 'phase-step';
+    return `<div class="${cls}">
+      <div class="phase-dot"></div>
+      <span>${phase.charAt(0).toUpperCase() + phase.slice(1)}</span>
+    </div>`;
+  }).join('<div class="phase-line"></div>');
+}
 
 function roleLabel(role) {
   if (role === 'mafia') return 'Mafia';
@@ -536,11 +580,41 @@ function renderOwnerDigest(state) {
   const gameLabel = modeLabel(me.game);
   const result = { didWin, role, winner };
 
+  const totalPlayers = (state.players || []).length;
+  const survived = (state.players || []).filter((p) => p.alive !== false).length;
+  const rounds = state.round || state.day || state.turn || 0;
+  const placement = mePlayer.alive !== false ? `top ${survived}` : `${survived + 1}th`;
+
   ownerDigestCard.style.display = 'block';
-  if (ownerDigestTitle) ownerDigestTitle.textContent = didWin ? 'Nice. Check-in and improve.' : 'Quick check-in before the next match';
-  if (ownerDigestSummary) ownerDigestSummary.textContent = `You just finished ${gameLabel}. Keep this short: read result, apply one refinement, requeue.`;
-  if (ownerDigestResult) ownerDigestResult.textContent = `${resultTag} · You played ${roleLabel(role)} (${aliveTag}). Winning side: ${winnerLabel(winner)}.`;
-  if (ownerDigestAction) ownerDigestAction.textContent = suggestedRefinement(result);
+  ownerDigestCard.innerHTML = `
+    <div style="text-align:center; padding: 1.5rem 0;">
+      <p class="section-title mb-8" style="font-size:1.3rem;">${didWin ? 'VICTORY' : 'MATCH COMPLETE'}</p>
+      <p class="text-sm mb-8" style="color:var(--accent);">${winnerLabel(winner)} wins!</p>
+      <div class="grid-2 mb-12" style="gap:0.75rem;">
+        <div class="match-chip">
+          <p class="field-label">Result</p>
+          <h3>${resultTag}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Role</p>
+          <h3>${roleLabel(role)}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Placement</p>
+          <h3>${placement} / ${totalPlayers}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Rounds</p>
+          <h3>${rounds}</h3>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
+      <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="document.getElementById('rematchBtn')?.click()">Rematch</button>
+        <button class="btn btn-ghost" onclick="instantPlay(me.game || 'mafia')">New Game</button>
+        <button class="btn btn-ghost" id="shareResultBtn" onclick="shareResult()">Share Result</button>
+      </div>
+    </div>`;
 }
 
 function renderActions(state) {
@@ -960,6 +1034,100 @@ gameMode?.addEventListener('change', () => {
     me.game = selectedMode();
   }
 });
+
+function shareResult() {
+  if (!currentState) return;
+  const winner = currentState.winner || 'Unknown';
+  const mode = modeLabel(me.game);
+  const rounds = currentState.round || currentState.day || currentState.turn || 0;
+  const matchUrl = window.location.href;
+
+  const text = `Just played ${mode} on Agent Arena! ${winnerLabel(winner)} wins after ${rounds} rounds.`;
+
+  if (navigator.share) {
+    navigator.share({ title: 'Agent Arena Match', text, url: matchUrl }).catch(() => {});
+  } else if (navigator.clipboard) {
+    const shareText = `${text}\n${matchUrl}`;
+    navigator.clipboard.writeText(shareText).then(() => {
+      const btn = document.getElementById('shareResultBtn');
+      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Share Result'; }, 2000); }
+    }).catch(() => {});
+  }
+}
+
+// Game picker: instant play via POST /api/play/instant
+async function instantPlay(mode) {
+  if (playStatus) { playStatus.style.display = 'block'; }
+  setStatus(`Starting ${modeLabel(mode)}...`);
+  try {
+    const res = await fetch('/api/play/instant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.playUrl) {
+      setStatus(formatError(data, 'Instant play failed'), 'error');
+      return;
+    }
+    window.location.href = data.playUrl;
+  } catch (_err) {
+    setStatus('Instant play failed — try again', 'error');
+  }
+}
+
+// Game picker card click handlers
+gamePicker?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-instant-play]');
+  if (!btn) return;
+  const mode = btn.getAttribute('data-instant-play');
+  if (mode) instantPlay(mode);
+});
+
+// Watch a random live game
+watchRandomBtn?.addEventListener('click', async () => {
+  setStatus('Finding a live game...');
+  if (playStatus) { playStatus.style.display = 'block'; }
+  try {
+    const res = await fetch('/api/play/watch');
+    const data = await res.json();
+    if (!data?.ok || !data?.watchUrl) {
+      setStatus('No live games right now — start one!', 'warn');
+      return;
+    }
+    window.location.href = data.watchUrl;
+  } catch (_err) {
+    setStatus('Could not find a live game', 'error');
+  }
+});
+
+// Show/hide game picker based on query params
+function initGamePickerVisibility() {
+  const params = new URLSearchParams(window.location.search || '');
+  const hasRoom = params.get('room') || params.get('autojoin');
+  if (hasRoom && gamePicker) {
+    gamePicker.style.display = 'none';
+  }
+}
+
+initGamePickerVisibility();
+
+// Handle instant play auto-start
+(function handleInstantPlay() {
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('instant') === '1' && params.get('room')) {
+    // Auto-join and start after short delay
+    setTimeout(async () => {
+      if (!me.roomId) return;
+      const mode = selectedMode();
+      try {
+        // Auto-start the game
+        const res = await emit(`${mode}:startGame`, { roomId: me.roomId });
+        if (res?.ok) renderState(res.state || res);
+      } catch (_err) { /* will be started by host flow */ }
+    }, 2000);
+  }
+})();
 
 defaultRecoveryHint();
 updateControlState(currentState);
