@@ -771,7 +771,6 @@ article p {
   font-weight: 800;
   line-height: 1.0;
   letter-spacing: -0.03em;
-  max-width: 14ch;
   margin-top: 12px;
 }
 
@@ -1086,4 +1085,252 @@ article p {
   .section-header .row .btn {
     flex: 1 1 calc(50% - 4px);
   }
+
+  .phase-timeline {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .phase-line {
+    width: 2px;
+    height: 12px;
+    min-width: unset;
+  }
+}
+
+/* ── Phase Timeline ── */
+.phase-timeline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.phase-step {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-dim, #6b7a90);
+  white-space: nowrap;
+}
+
+.phase-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-subtle, #1e2a3a);
+  flex-shrink: 0;
+}
+
+.phase-step.active .phase-dot {
+  background: var(--accent, #45b9ff);
+  box-shadow: 0 0 8px var(--accent, #45b9ff);
+}
+
+.phase-step.active {
+  color: var(--accent, #45b9ff);
+  font-weight: 600;
+}
+
+.phase-step.done .phase-dot {
+  background: var(--green, #27d5ad);
+}
+
+.phase-step.done {
+  color: var(--green, #27d5ad);
+}
+
+.phase-line {
+  width: 24px;
+  height: 2px;
+  background: var(--border-subtle, #1e2a3a);
+  flex-shrink: 0;
+}
+
+/* ── Enhanced Player Cards ── */
+.player-card.is-me {
+  border-color: var(--accent, #45b9ff);
+  box-shadow: 0 0 0 1px var(--accent, #45b9ff);
+}
+
+.player-card.is-dead {
+  opacity: 0.5;
+}
+
+/* ── Game Showcase ── */
+.game-showcase {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Mini game cards (homepage) ── */
+.game-card-mini {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: 14px 18px;
+  text-decoration: none;
+  color: var(--text);
+  transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+
+.game-card-mini:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(2, 8, 19, 0.35), 0 0 18px rgba(69, 185, 255, 0.06);
+  border-color: var(--line-strong);
+}
+
+.game-card-mini-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.game-card-mini-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.game-card-mini-text strong {
+  font-size: 0.92rem;
+}
+
+.game-card-mini-text .text-muted {
+  font-size: 0.78rem;
+}
+
+.game-card-mini .btn {
+  flex-shrink: 0;
+}
+
+.game-card-mini.game-card-mafia {
+  border-left: 3px solid var(--danger);
+}
+
+.game-card-mini.game-card-amongus {
+  border-left: 3px solid var(--warning);
+}
+
+.game-card-mini.game-card-villa {
+  border-left: 3px solid var(--secondary);
+}
+
+/* ── Hero two-column layout ── */
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 32px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .hero-inner {
+    grid-template-columns: 1fr;
+  }
+
+  .game-card {
+    grid-template-columns: 1fr;
+  }
+
+  .game-icon {
+    display: none;
+  }
+}
+
+/* ── Hero live card ── */
+.hero-live-card {
+  border: 1px solid rgba(104, 148, 194, 0.25);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 29, 48, 0.6);
+  backdrop-filter: blur(16px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-live-card h4 {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.hero-live-card p {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* ── Hero glow accent ── */
+.hero-glow-accent {
+  position: absolute;
+  bottom: -80px;
+  right: -60px;
+  width: 320px;
+  height: 320px;
+  border-radius: 999px;
+  background: rgba(39, 213, 173, 0.12);
+  filter: blur(100px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Battle ticker track ── */
+.ticker-track {
+  display: flex;
+  white-space: nowrap;
+  animation: marquee 24s linear infinite;
+  gap: 32px;
+}
+
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+.ticker-track span {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  font-weight: 700;
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+/* ── Leaderboard rank accents ── */
+.lb-rank-1 {
+  border-color: #ffc978;
+  background: linear-gradient(145deg, rgba(255, 201, 120, 0.1), var(--panel));
+}
+
+.lb-rank-2 {
+  border-color: #c0cfe0;
+  background: linear-gradient(145deg, rgba(192, 207, 224, 0.08), var(--panel));
+}
+
+.lb-rank-3 {
+  border-color: #d4956a;
+  background: linear-gradient(145deg, rgba(212, 149, 106, 0.08), var(--panel));
+}
+
+/* ── Spacing utilities ── */
+.mb-32 { margin-bottom: 32px; }
+.mb-48 { margin-bottom: 48px; }
+
+/* ── Section title accent ── */
+.section-title {
+  border-left: 2px solid var(--primary);
+  padding-left: 10px;
 }

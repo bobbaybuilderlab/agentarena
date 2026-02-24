@@ -1164,126 +1164,63 @@ article p {
 .game-showcase {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
-.game-card {
-  display: grid;
-  grid-template-columns: 52px 1fr auto;
-  gap: 16px;
-  align-items: start;
+/* ── Mini game cards (homepage) ── */
+.game-card-mini {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--panel);
-  box-shadow: var(--shadow-md);
-  padding: 20px;
+  padding: 14px 18px;
+  text-decoration: none;
+  color: var(--text);
   transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
 }
 
-.game-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 16px 40px rgba(2, 8, 19, 0.4), 0 0 24px rgba(69, 185, 255, 0.08);
+.game-card-mini:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(2, 8, 19, 0.35), 0 0 18px rgba(69, 185, 255, 0.06);
   border-color: var(--line-strong);
 }
 
-.game-card-mafia {
-  border-left: 3px solid var(--danger);
-  background: radial-gradient(ellipse 60% 80% at 0% 50%, rgba(255, 135, 153, 0.06), transparent 60%), var(--panel);
-}
-
-.game-card-amongus {
-  border-left: 3px solid var(--warning);
-  background: radial-gradient(ellipse 60% 80% at 0% 50%, rgba(255, 201, 120, 0.06), transparent 60%), var(--panel);
-}
-
-.game-card-villa {
-  border-left: 3px solid var(--secondary);
-  background: radial-gradient(ellipse 60% 80% at 0% 50%, rgba(39, 213, 173, 0.06), transparent 60%), var(--panel);
-}
-
-.game-icon {
-  width: 52px;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.05);
+.game-card-mini-icon {
   font-size: 1.5rem;
-}
-
-/* ── Role pills ── */
-.role-pill {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.role-pill-mafia {
-  background: rgba(255, 135, 153, 0.15);
-  color: #ffa8b6;
-  border: 1px solid rgba(255, 135, 153, 0.35);
-}
-
-.role-pill-town {
-  background: rgba(68, 229, 174, 0.15);
-  color: #98f3cd;
-  border: 1px solid rgba(68, 229, 174, 0.35);
-}
-
-.role-pill-imp {
-  background: rgba(255, 201, 120, 0.15);
-  color: #ffd89a;
-  border: 1px solid rgba(255, 201, 120, 0.35);
-}
-
-.role-pill-crew {
-  background: rgba(69, 185, 255, 0.15);
-  color: #a0d8ff;
-  border: 1px solid rgba(69, 185, 255, 0.35);
-}
-
-.role-pill-isle {
-  background: rgba(39, 213, 173, 0.15);
-  color: #8ef0d2;
-  border: 1px solid rgba(39, 213, 173, 0.35);
-}
-
-/* ── Phase mini-timeline (game cards) ── */
-.phase-mini {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  margin: 8px 0;
-}
-
-.phase-mini-step {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.68rem;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.phase-mini-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgba(69, 185, 255, 0.3);
   flex-shrink: 0;
 }
 
-.phase-mini-line {
-  width: 16px;
-  height: 1px;
-  background: rgba(104, 148, 194, 0.3);
+.game-card-mini-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.game-card-mini-text strong {
+  font-size: 0.92rem;
+}
+
+.game-card-mini-text .text-muted {
+  font-size: 0.78rem;
+}
+
+.game-card-mini .btn {
   flex-shrink: 0;
+}
+
+.game-card-mini.game-card-mafia {
+  border-left: 3px solid var(--danger);
+}
+
+.game-card-mini.game-card-amongus {
+  border-left: 3px solid var(--warning);
+}
+
+.game-card-mini.game-card-villa {
+  border-left: 3px solid var(--secondary);
 }
 
 /* ── Hero two-column layout ── */

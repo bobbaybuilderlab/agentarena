@@ -1,31 +1,64 @@
 const { test, expect } = require('@playwright/test');
 
-// All public-facing pages and whether they should have a "Games" nav link
+// All public-facing pages
 const PAGES = [
   { path: '/', name: 'index' },
   { path: '/play.html', name: 'play' },
   { path: '/browse.html', name: 'browse' },
   { path: '/guide.html', name: 'guide' },
   { path: '/games-info.html', name: 'games-info' },
-  { path: '/for-agents.html', name: 'for-agents' },
-  { path: '/how-it-works.html', name: 'how-it-works' },
   { path: '/agent-villa.html', name: 'agent-villa' },
   { path: '/dobby-dashboard.html', name: 'dobby-dashboard' },
 ];
 
+const NAV_LINKS = [
+  { href: '/play.html', text: 'Play' },
+  { href: '/games-info.html', text: 'Games' },
+  { href: '/browse.html', text: 'Feed' },
+  { href: '/guide.html', text: 'Docs' },
+];
+
 test.describe('Navigation consistency', () => {
   for (const page of PAGES) {
-    test(`${page.name} has "Games" nav link`, async ({ page: p }) => {
+    test(`${page.name} has unified 4-link nav`, async ({ page: p }) => {
       await p.goto(page.path);
-      const gamesLink = p.locator('nav a[href="/games-info.html"]');
-      await expect(gamesLink).toBeVisible();
+      for (const link of NAV_LINKS) {
+        const navLink = p.locator(`nav a[href="${link.href}"]`);
+        await expect(navLink).toBeVisible();
+      }
+    });
+
+    test(`${page.name} has "Play Now" CTA`, async ({ page: p }) => {
+      await p.goto(page.path);
+      const cta = p.locator('nav a.btn-primary:has-text("Play Now")');
+      await expect(cta).toBeVisible();
     });
 
     test(`${page.name} returns 200`, async ({ page: p }) => {
       const res = await p.goto(page.path);
       expect(res.status()).toBe(200);
     });
+
+    test(`${page.name} does not link to deleted pages`, async ({ page: p }) => {
+      await p.goto(page.path);
+      const forAgentsLinks = p.locator('a[href*="for-agents.html"]');
+      await expect(forAgentsLinks).toHaveCount(0);
+      const howItWorksLinks = p.locator('a[href*="how-it-works.html"]');
+      await expect(howItWorksLinks).toHaveCount(0);
+    });
   }
+});
+
+test.describe('Deleted pages return 404', () => {
+  test('for-agents.html returns 404', async ({ page: p }) => {
+    const res = await p.goto('/for-agents.html');
+    expect(res.status()).toBe(404);
+  });
+
+  test('how-it-works.html returns 404', async ({ page: p }) => {
+    const res = await p.goto('/how-it-works.html');
+    expect(res.status()).toBe(404);
+  });
 });
 
 test.describe('No stale guide.html game anchors', () => {
@@ -46,69 +79,74 @@ test.describe('Games page anchors', () => {
       await p.goto(`/games-info.html${anchor}`);
       const target = p.locator(anchor);
       await expect(target).toBeVisible();
-      // Verify element is in viewport (scrolled to)
       await expect(target).toBeInViewport();
     });
   }
 });
 
-test.describe('How to play CTAs on index', () => {
-  test('Mafia "How to play" links to games-info.html#mafia', async ({ page: p }) => {
+test.describe('Homepage simplified', () => {
+  test('has minimal game cards', async ({ page: p }) => {
     await p.goto('/');
-    const links = p.locator('a[href="/games-info.html#mafia"]');
-    await expect(links.first()).toBeVisible();
+    const miniCards = p.locator('.game-card-mini');
+    await expect(miniCards).toHaveCount(3);
   });
 
-  test('Among Us "How to play" links to games-info.html#amongus', async ({ page: p }) => {
+  test('no phase diagrams or role pills', async ({ page: p }) => {
     await p.goto('/');
-    const links = p.locator('a[href="/games-info.html#amongus"]');
-    await expect(links.first()).toBeVisible();
+    const phaseMini = p.locator('.phase-mini');
+    await expect(phaseMini).toHaveCount(0);
+    const rolePills = p.locator('.role-pill');
+    await expect(rolePills).toHaveCount(0);
   });
 
-  test('Villa "How to play" links to games-info.html#villa', async ({ page: p }) => {
+  test('no CLI/connect section', async ({ page: p }) => {
     await p.goto('/');
-    const links = p.locator('a[href="/games-info.html#villa"]');
-    await expect(links.first()).toBeVisible();
+    const joinSection = p.locator('#join');
+    await expect(joinSection).toHaveCount(0);
+    const onboarding = p.locator('.onboarding-steps');
+    await expect(onboarding).toHaveCount(0);
   });
 
-  test('"All games" section link points to games-info.html', async ({ page: p }) => {
+  test('"Learn how each game works" link to games-info.html', async ({ page: p }) => {
     await p.goto('/');
-    const link = p.locator('a.section-action[href="/games-info.html"]');
+    const link = p.locator('a[href="/games-info.html"]:has-text("Learn how each game works")');
     await expect(link).toBeVisible();
-    await expect(link).toHaveText('All games →');
   });
 });
 
-test.describe('Guide page trimmed correctly', () => {
-  test('guide.html has no #game-modes section', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    const section = p.locator('#game-modes');
-    await expect(section).toHaveCount(0);
+test.describe('Games page human-readable', () => {
+  test('has plain English structure', async ({ page: p }) => {
+    await p.goto('/games-info.html');
+    await expect(p.locator('text=The setup').first()).toBeVisible();
+    await expect(p.locator('text=How it plays').first()).toBeVisible();
+    await expect(p.locator('text=How you win').first()).toBeVisible();
   });
 
-  test('guide.html has no #tips section', async ({ page: p }) => {
+  test('no code action names or tables', async ({ page: p }) => {
+    await p.goto('/games-info.html');
+    const tables = p.locator('table');
+    await expect(tables).toHaveCount(0);
+  });
+});
+
+test.describe('Guide page', () => {
+  test('has Connect Runtime section', async ({ page: p }) => {
     await p.goto('/guide.html');
-    const section = p.locator('#tips');
-    await expect(section).toHaveCount(0);
+    await expect(p.locator('#join')).toBeVisible();
+    await expect(p.locator('#generateCmdBtn')).toBeVisible();
   });
 
-  test('guide.html has cross-link to games-info.html', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    const link = p.locator('a[href="/games-info.html"]');
-    await expect(link.first()).toBeVisible();
-  });
-
-  test('guide.html retains quickstart section', async ({ page: p }) => {
+  test('retains quickstart section', async ({ page: p }) => {
     await p.goto('/guide.html');
     await expect(p.locator('#quickstart')).toBeVisible();
   });
 
-  test('guide.html retains socket events section', async ({ page: p }) => {
+  test('retains socket events section', async ({ page: p }) => {
     await p.goto('/guide.html');
     await expect(p.locator('#events')).toBeVisible();
   });
 
-  test('guide.html retains persona section', async ({ page: p }) => {
+  test('retains persona section', async ({ page: p }) => {
     await p.goto('/guide.html');
     await expect(p.locator('#persona')).toBeVisible();
   });

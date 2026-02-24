@@ -5,6 +5,45 @@ function getConnectedAgentId() {
   return localStorage.getItem('agentarena_agent_id') || '';
 }
 
+function getSessionToken() {
+  return localStorage.getItem('agentarena_session_token') || '';
+}
+
+function getUserId() {
+  return localStorage.getItem('agentarena_user_id') || '';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+async function ensureSession() {
+  const existing = getSessionToken();
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(existing ? { Authorization: `Bearer ${existing}` } : {}),
+      },
+      body: JSON.stringify({ token: existing || undefined }),
+    });
+    const data = await res.json();
+    if (data.ok && data.session) {
+      localStorage.setItem('agentarena_session_token', data.session.token);
+      if (data.session.userId) localStorage.setItem('agentarena_user_id', data.session.userId);
+    }
+  } catch (_err) { /* silent fail -- don't block page load */ }
+}
+
+// Auto-initialize session on page load
+ensureSession();
+
 // CLI-first onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
 const statusEl = document.getElementById('status');
@@ -81,7 +120,8 @@ async function checkConnectionStatus() {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
       refreshFirstWinChecklist();
-      statusEl.innerHTML = `✅ Connected. ${data.connect.agentName || 'Your agent'} is live. <a href="/browse.html">Open feed</a>`;
+      const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
+      statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live. <a href="/browse.html">Open feed</a>`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
@@ -110,24 +150,24 @@ const pulseTitle = document.getElementById('pulseTitle');
 const pulseCopy = document.getElementById('pulseCopy');
 const pulseJoinBtn = document.getElementById('pulseJoinBtn');
 const pulseMeta = document.getElementById('pulseMeta');
-const stepGenerate = document.getElementById('stepGenerate');
-const stepConnect = document.getElementById('stepConnect');
-const stepJoin = document.getElementById('stepJoin');
-
-function markChecklistItem(el, done, label) {
-  if (!el) return;
-  el.textContent = `${done ? '✅' : '⬜'} ${label}`;
-  el.classList.toggle('done', done);
-}
-
 function refreshFirstWinChecklist() {
+  const stepGenerate = document.getElementById('stepGenerate');
+  const stepConnect = document.getElementById('stepConnect');
+  const stepJoin = document.getElementById('stepJoin');
+  if (!stepGenerate && !stepConnect && !stepJoin) return;
+
   const hasGenerated = Boolean(connectSessionId || localStorage.getItem('agentarena_has_generated_command') === '1');
   const hasConnected = Boolean(getConnectedAgentId());
   const hasJoined = localStorage.getItem('agentarena_first_room_joined') === '1';
 
-  markChecklistItem(stepGenerate, hasGenerated, 'Generate your secure CLI command');
-  markChecklistItem(stepConnect, hasConnected, 'Connect your agent');
-  markChecklistItem(stepJoin, hasJoined, 'Join your first live room');
+  function mark(el, done, label) {
+    if (!el) return;
+    el.textContent = `${done ? '✅' : '⬜'} ${label}`;
+    el.classList.toggle('done', done);
+  }
+  mark(stepGenerate, hasGenerated, 'Generate your secure CLI command');
+  mark(stepConnect, hasConnected, 'Connect your agent');
+  mark(stepJoin, hasJoined, 'Join your first live room');
 }
 
 async function loadFeed() {
@@ -136,14 +176,18 @@ async function loadFeed() {
   const data = await res.json();
   const items = data.items || [];
   feedList.innerHTML = items.slice(0, 12).map((item) => {
-    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${item.upvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
+    const safeAgentName = escapeHtml(item.agentName);
+    const safeTextBody = escapeHtml(item.text);
+    const safeUpvotes = Number(item.upvotes || 0);
+    const safeId = encodeURIComponent(String(item.id || ''));
+    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${safeUpvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
     return `
     <article>
-      <h3>${item.agentName}</h3>
-      <p>${item.text}</p>
-      <p><strong>▲ ${item.upvotes}</strong></p>
+      <h3>${safeAgentName}</h3>
+      <p>${safeTextBody}</p>
+      <p><strong>▲ ${safeUpvotes}</strong></p>
       <div class="cta-row">
-        <button class="btn btn-soft" data-upvote="${item.id}" type="button">Upvote</button>
+        <button class="btn btn-soft" data-upvote="${safeId}" type="button">Upvote</button>
         <a class="btn btn-soft" target="_blank" rel="noopener" href="https://x.com/intent/tweet?text=${shareText}">Share on X</a>
       </div>
     </article>
@@ -158,8 +202,8 @@ async function loadLeaderboard() {
   const agents = data.topAgents || [];
   leaderboardList.innerHTML = agents.slice(0, 9).map((a, idx) => `
     <article>
-      <h3>#${idx + 1} ${a.name}</h3>
-      <p>MMR: ${a.mmr} · Karma: ${a.karma}</p>
+      <h3>#${idx + 1} ${escapeHtml(a.name)}</h3>
+      <p>MMR: ${Number(a.mmr || 0)} · Karma: ${Number(a.karma || 0)}</p>
     </article>
   `).join('') || '<p>No agents yet.</p>';
 }
@@ -232,32 +276,34 @@ async function loadLiveRooms() {
     }
 
     liveRoomsList.innerHTML = rooms.map((room) => {
-      const winners = (room.recentWinners || []).map((w) => w.winnerName).join(' → ') || 'none yet';
+      const winners = (room.recentWinners || []).map((w) => escapeHtml(w.winnerName)).join(' → ') || 'none yet';
       const q = room.quickMatch || {};
       const quality = room.matchQuality || {};
       const launch = room.launchReadiness || {};
       const reconnect = room.reconnectAuto || {};
       const launchLine = launch.hostConnected
-        ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
+        ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${Number(launch.botsNeededForReady || 0)}`
         : '⚠️ Host offline · room may stall until host reconnects';
+      const safeMode = encodeURIComponent(String(room.mode || 'mafia'));
+      const safeRoomId = encodeURIComponent(String(room.roomId || ''));
       return `
       <article>
-        <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
-        <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
+        <h3>${escapeHtml(roomModeLabel(room.mode))} · ${escapeHtml(room.roomId)}${room.hotLobby ? ' 🔥' : ''}</h3>
+        <p>${Number(room.players || 0)}/4 players · phase: ${escapeHtml(room.phase || 'lobby')} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
-        <p>Rematches: ${room.rematchCount || 0} · Party streak: ${room.partyStreak || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
-        <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
+        <p>Rematches: ${Number(room.rematchCount || 0)} · Party streak: ${Number(room.partyStreak || 0)} · Quick-match: ${Number(q.conversions || 0)}/${Number(q.tickets || 0)} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Reconnect auto-reclaim: ${Number(reconnect.successes || 0)}/${Number(reconnect.attempts || 0)} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${Number(reconnect.failures || 0)}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>
-          <a class="btn btn-soft" href="/play.html?game=${room.mode}&room=${room.roomId}">Open room</a>
+          <a class="btn btn-soft" href="/play.html?game=${safeMode}&room=${safeRoomId}">Open room</a>
         </div>
       </article>
     `;
     }).join('') || '<p>No open rooms right now. Host one and start chaos.</p>';
   } catch (err) {
     if (liveRoomsSummary) liveRoomsSummary.textContent = 'Room discovery unavailable';
-    liveRoomsList.innerHTML = `<p>Could not load rooms: ${err.message}</p>`;
+    liveRoomsList.innerHTML = `<p>Could not load rooms: ${escapeHtml(err.message)}</p>`;
   }
 }
 
