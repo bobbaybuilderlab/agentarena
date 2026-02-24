@@ -59,7 +59,7 @@ function selectedMode() {
 
 function parseQueryConfig() {
   const params = new URLSearchParams(window.location.search || '');
-  const queryGame = params.get('game');
+  const queryGame = params.get('game') || params.get('mode');
   const queryRoom = params.get('room');
   const queryName = params.get('name');
   const reclaimName = params.get('reclaimName');
@@ -346,8 +346,9 @@ function getAdvanceConfig(state) {
 }
 
 function updateControlState(state) {
+  const spectating = isSpectating() || (me.roomId && state && !meInState(state));
   const players = state?.players || [];
-  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const isHost = !spectating && !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const inProgress = state?.status === 'in_progress';
@@ -355,6 +356,17 @@ function updateControlState(state) {
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
   const mePlayer = meInState(state);
   const advance = getAdvanceConfig(state);
+
+  if (spectating) {
+    if (startBtn) { startBtn.disabled = true; startBtn.title = 'Spectating'; }
+    if (autofillBtn) { autofillBtn.disabled = true; }
+    if (rematchBtn) { rematchBtn.disabled = true; }
+    if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
+    if (hostBtn) { hostBtn.disabled = true; }
+    if (joinBtn) { joinBtn.disabled = true; }
+    setStatus('Spectating — watching this game live.', 'info');
+    return;
+  }
 
   if (gameMode) {
     const lockMode = Boolean(state && me.roomId);
@@ -425,27 +437,63 @@ function renderState(state) {
   }
   updateControlState(state);
   updateMatchHud(state);
+  renderPhaseTimeline(state);
 
-  playersView.innerHTML = (state.players || []).map((p) => `
-    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}">
+  playersView.innerHTML = (state.players || []).map((p) => {
+    const voteCount = state.votesByRound?.[state.round]?.[p.id] || state.votes?.[p.id] || 0;
+    const hasVoted = state.actions?.vote?.[p.id] || state.actions?.meeting?.[p.id];
+    return `
+    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
         <h3>${p.name}${p.id === me.playerId ? ' (you)' : ''}</h3>
         <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
       </div>
-      <p class="player-meta">ID: ${p.id}</p>
       <div class="player-meta-row">
-        <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? '☠ eliminated' : '✓ alive'}</span>
+        <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? 'eliminated' : 'alive'}</span>
         <span class="player-state ${p.isConnected ? 'state-online' : 'state-offline'}">${p.isConnected ? 'online' : 'offline'}</span>
         ${p.id === state.hostPlayerId ? '<span class="player-state state-host">host</span>' : ''}
+        ${hasVoted ? '<span class="player-state" style="color:var(--accent);">voted</span>' : ''}
       </div>
       <p class="player-role">${p.role ? `Role: ${roleLabel(p.role)}` : 'Role hidden'}</p>
-    </article>
-  `).join('') || '<p>No players</p>';
+      ${voteCount > 0 ? `<p class="player-meta" style="color:var(--accent-orange);">Votes: ${voteCount}</p>` : ''}
+    </article>`;
+  }).join('') || '<p>No players</p>';
 
   renderActions(state);
   renderOwnerDigest(state);
 }
 
+
+function renderPhaseTimeline(state) {
+  const timeline = document.getElementById('phaseTimeline');
+  const steps = document.getElementById('phaseSteps');
+  if (!timeline || !steps) return;
+
+  if (!state || state.status === 'lobby') {
+    timeline.style.display = 'none';
+    return;
+  }
+
+  timeline.style.display = 'block';
+  const phases = me.game === 'mafia'
+    ? ['lobby', 'night', 'discussion', 'voting', 'finished']
+    : me.game === 'amongus'
+    ? ['lobby', 'tasks', 'meeting', 'finished']
+    : ['lobby', 'pairing', 'challenge', 'twist', 'recouple', 'elimination', 'finished'];
+
+  const current = state.status === 'finished' ? 'finished' : (state.phase || state.status);
+  const currentIdx = phases.indexOf(current);
+
+  steps.innerHTML = phases.map((phase, i) => {
+    const isActive = phase === current;
+    const isDone = i < currentIdx;
+    const cls = isActive ? 'phase-step active' : isDone ? 'phase-step done' : 'phase-step';
+    return `<div class="${cls}">
+      <div class="phase-dot"></div>
+      <span>${phase.charAt(0).toUpperCase() + phase.slice(1)}</span>
+    </div>`;
+  }).join('<div class="phase-line"></div>');
+}
 
 function roleLabel(role) {
   if (role === 'mafia') return 'Mafia';
@@ -536,14 +584,55 @@ function renderOwnerDigest(state) {
   const gameLabel = modeLabel(me.game);
   const result = { didWin, role, winner };
 
+  const totalPlayers = (state.players || []).length;
+  const survived = (state.players || []).filter((p) => p.alive !== false).length;
+  const rounds = state.round || state.day || state.turn || 0;
+  const placement = mePlayer.alive !== false ? `top ${survived}` : `${survived + 1}th`;
+
   ownerDigestCard.style.display = 'block';
-  if (ownerDigestTitle) ownerDigestTitle.textContent = didWin ? 'Nice. Check-in and improve.' : 'Quick check-in before the next match';
-  if (ownerDigestSummary) ownerDigestSummary.textContent = `You just finished ${gameLabel}. Keep this short: read result, apply one refinement, requeue.`;
-  if (ownerDigestResult) ownerDigestResult.textContent = `${resultTag} · You played ${roleLabel(role)} (${aliveTag}). Winning side: ${winnerLabel(winner)}.`;
-  if (ownerDigestAction) ownerDigestAction.textContent = suggestedRefinement(result);
+  ownerDigestCard.innerHTML = `
+    <div style="text-align:center; padding: 1.5rem 0;">
+      <p class="section-title mb-8" style="font-size:1.3rem;">${didWin ? 'VICTORY' : 'MATCH COMPLETE'}</p>
+      <p class="text-sm mb-8" style="color:var(--accent);">${winnerLabel(winner)} wins!</p>
+      <div class="grid-2 mb-12" style="gap:0.75rem;">
+        <div class="match-chip">
+          <p class="field-label">Result</p>
+          <h3>${resultTag}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Role</p>
+          <h3>${roleLabel(role)}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Placement</p>
+          <h3>${placement} / ${totalPlayers}</h3>
+        </div>
+        <div class="match-chip">
+          <p class="field-label">Rounds</p>
+          <h3>${rounds}</h3>
+        </div>
+      </div>
+      <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
+      <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="document.getElementById('rematchBtn')?.click()">Rematch</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('quickMatchBtn')?.click()">New Game</button>
+        <button class="btn btn-ghost" id="shareResultBtn" onclick="shareResult()">Share on X</button>
+        <button class="btn btn-ghost" id="copyLinkBtn" onclick="copyMatchLink()">Copy Link</button>
+      </div>
+    </div>`;
+}
+
+function isSpectating() {
+  const params = new URLSearchParams(window.location.search || '');
+  return params.get('spectate') === '1';
 }
 
 function renderActions(state) {
+  if (isSpectating() || (me.roomId && !meInState(state))) {
+    actionsView.innerHTML = '<p class="text-sm text-muted"><span class="player-pill pill-bot" style="margin-right:6px;">Spectating</span> Watching this game live. No actions available.</p>';
+    return;
+  }
+
   if (!me.roomId || !me.playerId) {
     actionsView.innerHTML = '<p class="text-sm text-muted">Join a room to unlock actions.</p>';
     return;
@@ -949,6 +1038,18 @@ async function autoJoinFromQuery() {
   showRecoveryHint('Connected. If you drop, reopen this room and use Find Reconnect Seats to reclaim identity fast.');
   renderState(res.state);
   void loadClaimableSeats();
+
+  // Instant play: auto-start after joining
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('instant') === '1' && me.roomId) {
+    setTimeout(async () => {
+      if (!me.roomId || !me.playerId) return;
+      try {
+        const startRes = await emitAck(activeEvent('start-ready'), { roomId: me.roomId, playerId: me.playerId });
+        if (startRes?.ok && startRes.state) renderState(startRes.state);
+      } catch (_err) { /* host flow will handle */ }
+    }, 1500);
+  }
 }
 
 setInterval(() => {
@@ -960,6 +1061,34 @@ gameMode?.addEventListener('change', () => {
     me.game = selectedMode();
   }
 });
+
+function shareResult() {
+  if (!currentState) return;
+  const winner = currentState.winner || 'Unknown';
+  const mode = modeLabel(me.game);
+  const rounds = currentState.round || currentState.day || currentState.turn || 0;
+  const matchUrl = window.location.href;
+
+  const text = `Just played ${mode} on Agent Arena! ${winnerLabel(winner)} wins after ${rounds} rounds.`;
+
+  if (navigator.share) {
+    navigator.share({ title: 'Agent Arena Match', text, url: matchUrl }).catch(() => {});
+  } else {
+    // Open share on X
+    const tweetText = encodeURIComponent(`${text}\n\n${matchUrl}`);
+    window.open(`https://x.com/intent/tweet?text=${tweetText}`, '_blank');
+  }
+}
+
+function copyMatchLink() {
+  const url = window.location.href;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.getElementById('copyLinkBtn');
+      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy Link'; }, 2000); }
+    }).catch(() => {});
+  }
+}
 
 defaultRecoveryHint();
 updateControlState(currentState);

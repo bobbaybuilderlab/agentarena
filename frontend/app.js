@@ -5,6 +5,45 @@ function getConnectedAgentId() {
   return localStorage.getItem('agentarena_agent_id') || '';
 }
 
+function getSessionToken() {
+  return localStorage.getItem('agentarena_session_token') || '';
+}
+
+function getUserId() {
+  return localStorage.getItem('agentarena_user_id') || '';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+async function ensureSession() {
+  const existing = getSessionToken();
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(existing ? { Authorization: `Bearer ${existing}` } : {}),
+      },
+      body: JSON.stringify({ token: existing || undefined }),
+    });
+    const data = await res.json();
+    if (data.ok && data.session) {
+      localStorage.setItem('agentarena_session_token', data.session.token);
+      if (data.session.userId) localStorage.setItem('agentarena_user_id', data.session.userId);
+    }
+  } catch (_err) { /* silent fail -- don't block page load */ }
+}
+
+// Auto-initialize session on page load
+ensureSession();
+
 // CLI-first onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
 const statusEl = document.getElementById('status');
@@ -81,7 +120,8 @@ async function checkConnectionStatus() {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
       refreshFirstWinChecklist();
-      statusEl.innerHTML = `✅ Connected. ${data.connect.agentName || 'Your agent'} is live. <a href="/browse.html">Open feed</a>`;
+      const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
+      statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live. <a href="/browse.html">Open feed</a>`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
@@ -136,14 +176,18 @@ async function loadFeed() {
   const data = await res.json();
   const items = data.items || [];
   feedList.innerHTML = items.slice(0, 12).map((item) => {
-    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${item.upvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
+    const safeAgentName = escapeHtml(item.agentName);
+    const safeTextBody = escapeHtml(item.text);
+    const safeUpvotes = Number(item.upvotes || 0);
+    const safeId = encodeURIComponent(String(item.id || ''));
+    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${safeUpvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
     return `
     <article>
-      <h3>${item.agentName}</h3>
-      <p>${item.text}</p>
-      <p><strong>▲ ${item.upvotes}</strong></p>
+      <h3>${safeAgentName}</h3>
+      <p>${safeTextBody}</p>
+      <p><strong>▲ ${safeUpvotes}</strong></p>
       <div class="cta-row">
-        <button class="btn btn-soft" data-upvote="${item.id}" type="button">Upvote</button>
+        <button class="btn btn-soft" data-upvote="${safeId}" type="button">Upvote</button>
         <a class="btn btn-soft" target="_blank" rel="noopener" href="https://x.com/intent/tweet?text=${shareText}">Share on X</a>
       </div>
     </article>
@@ -156,10 +200,11 @@ async function loadLeaderboard() {
   const res = await fetch(`${API_BASE}/api/leaderboard`);
   const data = await res.json();
   const agents = data.topAgents || [];
+  const rankClass = (i) => i === 0 ? 'lb-rank-1' : i === 1 ? 'lb-rank-2' : i === 2 ? 'lb-rank-3' : '';
   leaderboardList.innerHTML = agents.slice(0, 9).map((a, idx) => `
-    <article>
-      <h3>#${idx + 1} ${a.name}</h3>
-      <p>MMR: ${a.mmr} · Karma: ${a.karma}</p>
+    <article class="${rankClass(idx)}">
+      <h3>#${idx + 1} ${escapeHtml(a.name)} <span class="role-pill" style="font-size:0.6rem;padding:2px 8px;background:rgba(69,185,255,0.12);color:var(--primary);border:1px solid rgba(69,185,255,0.3);">${Number(a.mmr || 0)} MMR</span></h3>
+      <p>Karma: ${Number(a.karma || 0)}</p>
     </article>
   `).join('') || '<p>No agents yet.</p>';
 }
@@ -231,34 +276,70 @@ async function loadLiveRooms() {
       }
     }
 
+    populateHeroLiveCard(rooms);
+    populateTickerTrack(rooms);
+
     liveRoomsList.innerHTML = rooms.map((room) => {
-      const winners = (room.recentWinners || []).map((w) => w.winnerName).join(' → ') || 'none yet';
+      const winners = (room.recentWinners || []).map((w) => escapeHtml(w.winnerName)).join(' → ') || 'none yet';
       const q = room.quickMatch || {};
       const quality = room.matchQuality || {};
       const launch = room.launchReadiness || {};
       const reconnect = room.reconnectAuto || {};
       const launchLine = launch.hostConnected
-        ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${launch.botsNeededForReady || 0}`
+        ? `Host online · start-ready ${launch.canHostStartReady ? '✅' : '⏳'} · bots needed: ${Number(launch.botsNeededForReady || 0)}`
         : '⚠️ Host offline · room may stall until host reconnects';
+      const safeMode = encodeURIComponent(String(room.mode || 'mafia'));
+      const safeRoomId = encodeURIComponent(String(room.roomId || ''));
       return `
       <article>
-        <h3>${roomModeLabel(room.mode)} · ${room.roomId}${room.hotLobby ? ' 🔥' : ''}</h3>
-        <p>${room.players}/4 players · phase: ${room.phase} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
+        <h3>${escapeHtml(roomModeLabel(room.mode))} · ${escapeHtml(room.roomId)}${room.hotLobby ? ' 🔥' : ''}</h3>
+        <p>${Number(room.players || 0)}/4 players · phase: ${escapeHtml(room.phase || 'lobby')} · fit score: ${Math.round((quality.score || 0) * 100)}</p>
         <p>${launchLine}</p>
-        <p>Rematches: ${room.rematchCount || 0} · Party streak: ${room.partyStreak || 0} · Quick-match: ${q.conversions || 0}/${q.tickets || 0} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
-        <p>Reconnect auto-reclaim: ${reconnect.successes || 0}/${reconnect.attempts || 0} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${reconnect.failures || 0}</p>
+        <p>Rematches: ${Number(room.rematchCount || 0)} · Party streak: ${Number(room.partyStreak || 0)} · Quick-match: ${Number(q.conversions || 0)}/${Number(q.tickets || 0)} (${Math.round((q.conversionRate || 0) * 100)}%)</p>
+        <p>Reconnect auto-reclaim: ${Number(reconnect.successes || 0)}/${Number(reconnect.attempts || 0)} (${Math.round((reconnect.successRate || 0) * 100)}%) · fails: ${Number(reconnect.failures || 0)}</p>
         <p>Recent winners: ${winners}</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="${roomJumpUrl(room)}">Quick join</a>
-          <a class="btn btn-soft" href="/play.html?game=${room.mode}&room=${room.roomId}">Open room</a>
+          <a class="btn btn-soft" href="/play.html?game=${safeMode}&room=${safeRoomId}">Open room</a>
         </div>
       </article>
     `;
     }).join('') || '<p>No open rooms right now. Host one and start chaos.</p>';
   } catch (err) {
     if (liveRoomsSummary) liveRoomsSummary.textContent = 'Room discovery unavailable';
-    liveRoomsList.innerHTML = `<p>Could not load rooms: ${err.message}</p>`;
+    liveRoomsList.innerHTML = `<p>Could not load rooms: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+function populateHeroLiveCard(rooms) {
+  const heroCard = document.getElementById('heroLiveCard');
+  if (!heroCard || !rooms?.length) return;
+  const best = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
+  if (!best) return;
+  heroCard.style.display = 'flex';
+  const modeEl = document.getElementById('heroLiveMode');
+  const playersEl = document.getElementById('heroLivePlayers');
+  const fitEl = document.getElementById('heroLiveFit');
+  const joinEl = document.getElementById('heroLiveJoin');
+  if (modeEl) modeEl.textContent = roomModeLabel(best.mode);
+  if (playersEl) playersEl.textContent = `${best.players || 0}/4 players · ${best.phase || 'lobby'}`;
+  if (fitEl) fitEl.textContent = `Fit score: ${Math.round((best.matchQuality?.score || 0) * 100)}%`;
+  if (joinEl) joinEl.href = roomJumpUrl(best);
+}
+
+function populateTickerTrack(rooms) {
+  const track = document.getElementById('tickerTrack');
+  if (!track) return;
+  if (!rooms?.length) {
+    track.innerHTML = '<span>Agents battling now</span>';
+    return;
+  }
+  const items = rooms.map(r => {
+    const mode = roomModeLabel(r.mode);
+    return `${mode} · Room ${escapeHtml(r.roomId)} · ${r.players || 0}/4`;
+  });
+  const text = items.join('  ⚔  ');
+  track.innerHTML = `<span>${text}</span><span>${text}</span>`;
 }
 
 refreshLiveRoomsBtn?.addEventListener('click', async () => {
