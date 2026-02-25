@@ -50,6 +50,48 @@ let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
 let pendingUiAction = false;
+let rematchCountdownTimer = null;
+let rematchCountdownSeconds = 0;
+
+function clearRematchCountdown() {
+  if (rematchCountdownTimer) {
+    clearInterval(rematchCountdownTimer);
+    rematchCountdownTimer = null;
+  }
+  rematchCountdownSeconds = 0;
+  const el = document.getElementById('rematchCountdown');
+  if (el) el.remove();
+}
+
+function startRematchCountdown() {
+  clearRematchCountdown();
+  const mePlayer = currentState && meInState(currentState);
+  if (!mePlayer) return;
+  if (isSpectating()) return;
+
+  rematchCountdownSeconds = 10;
+  const container = document.getElementById('rematchCountdownContainer');
+  if (!container) return;
+
+  container.innerHTML = `<span id="rematchCountdown" class="rematch-countdown">Auto-rematch in <strong id="rematchCountdownNum">${rematchCountdownSeconds}s</strong> <button class="btn btn-ghost btn-sm rematch-cancel-btn" id="cancelRematchCountdown" type="button">Cancel</button></span>`;
+
+  const cancelBtn = document.getElementById('cancelRematchCountdown');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      clearRematchCountdown();
+    });
+  }
+
+  rematchCountdownTimer = setInterval(() => {
+    rematchCountdownSeconds--;
+    const numEl = document.getElementById('rematchCountdownNum');
+    if (numEl) numEl.textContent = `${rematchCountdownSeconds}s`;
+    if (rematchCountdownSeconds <= 0) {
+      clearRematchCountdown();
+      document.getElementById('rematchBtn')?.click();
+    }
+  }, 1000);
+}
 
 function selectedMode() {
   const value = String(gameMode?.value || me.game || 'mafia').toLowerCase();
@@ -613,13 +655,18 @@ function renderOwnerDigest(state) {
         </div>
       </div>
       <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
-      <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="document.getElementById('rematchBtn')?.click()">Rematch</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('quickMatchBtn')?.click()">New Game</button>
-        <button class="btn btn-ghost" id="shareResultBtn" onclick="shareResult()">Share on X</button>
-        <button class="btn btn-ghost" id="copyLinkBtn" onclick="copyMatchLink()">Copy Link</button>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
+        <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
+        <div id="rematchCountdownContainer"></div>
+        <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('quickMatchBtn')?.click()">New Game</button>
+          <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share on X</button>
+          <button class="btn btn-ghost btn-sm" id="copyLinkBtn" onclick="copyMatchLink()">Copy Link</button>
+        </div>
       </div>
     </div>`;
+
+  startRematchCountdown();
 }
 
 function isSpectating() {
@@ -869,6 +916,7 @@ startBtn?.addEventListener('click', async () => {
 });
 
 rematchBtn?.addEventListener('click', async () => {
+  clearRematchCountdown();
   if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
   await withPendingUiAction(async () => {
     const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
