@@ -29,7 +29,7 @@ const { shortId, correlationId, logStructured } = require('./server/state/helper
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
-const { initDb, recordMatch, closeDb } = require('./server/db');
+const { initDb, recordMatch, getPlayerMatches, closeDb } = require('./server/db');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
@@ -1642,6 +1642,11 @@ function runAutoBattle() {
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
+app.post('/api/track/share', (_req, res) => {
+  incrementGrowthMetric('referral.inviteSends', 1);
+  res.json({ ok: true });
+});
+
 app.post('/api/auth/session', (req, res) => {
   const { createAnonymousUser, createSession, getSessionByToken } = require('./server/db');
 
@@ -1950,6 +1955,19 @@ app.get('/api/leaderboard', (_req, res) => {
     .slice(0, 25);
 
   res.json({ ok: true, topAgents, topRoasts });
+});
+
+app.get('/api/matches', (req, res) => {
+  const userId = String(req.query.userId || '').trim();
+  if (!userId) return res.status(400).json({ ok: false, error: 'userId is required' });
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+  try {
+    const matches = getPlayerMatches(userId, limit);
+    res.json({ ok: true, matches });
+  } catch (err) {
+    console.error('getPlayerMatches failed:', err.message);
+    res.status(500).json({ ok: false, error: 'failed to fetch matches' });
+  }
 });
 
 function buildRoomLaunchReadiness(room) {

@@ -1139,15 +1139,18 @@ function shareResult() {
   if (!currentState) return;
   const winner = currentState.winner || 'Unknown';
   const mode = modeLabel(me.game);
+  const modeKey = me.game || 'mafia';
   const rounds = currentState.round || currentState.day || currentState.turn || 0;
-  const matchUrl = window.location.href;
+  const shareUrl = `${window.location.origin}/?mode=${encodeURIComponent(modeKey)}&autojoin=1`;
 
-  const text = `Just played ${mode} on Agent Arena! ${winnerLabel(winner)} wins after ${rounds} rounds.`;
+  const text = `${winnerLabel(winner)} just won ${mode} in ${rounds} rounds. Can you beat them?`;
+
+  fetch('/api/track/share', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: modeKey }) }).catch(() => {});
 
   if (navigator.share) {
-    navigator.share({ title: 'Agent Arena Match', text, url: matchUrl }).catch(() => {});
+    navigator.share({ title: 'Agent Arena Match', text, url: shareUrl }).catch(() => {});
   } else if (navigator.clipboard) {
-    const shareText = `${text}\n${matchUrl}`;
+    const shareText = `${text}\n${shareUrl}`;
     navigator.clipboard.writeText(shareText).then(() => {
       const btn = document.getElementById('shareResultBtn');
       if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Share Result'; }, 2000); }
@@ -1229,7 +1232,74 @@ initGamePickerVisibility();
   }
 })();
 
+// ── Recent Games widget ──
+
+const MODE_LABELS = { mafia: 'Agent Mafia', amongus: 'Among Us', villa: 'Agent Villa' };
+
+function getStoredUserId() {
+  return localStorage.getItem('agentarena_user_id') || '';
+}
+
+async function loadRecentMatches() {
+  const userId = getStoredUserId();
+  if (!userId) return; // no session — skip for first-time visitors
+
+  const section = document.getElementById('recentGamesSection');
+  const list = document.getElementById('recentGamesList');
+  const streakBadge = document.getElementById('winStreakBadge');
+  if (!section || !list) return;
+
+  try {
+    const res = await fetch(`/api/matches?userId=${encodeURIComponent(userId)}&limit=5`);
+    const data = await res.json();
+    if (!data.ok || !data.matches || data.matches.length === 0) return;
+
+    // Calculate win streak (consecutive survived matches from most recent)
+    let winStreak = 0;
+    for (const m of data.matches) {
+      if (m.survived) winStreak++;
+      else break;
+    }
+
+    section.style.display = '';
+
+    if (streakBadge && winStreak >= 2) {
+      streakBadge.innerHTML = `<span class="win-streak-badge">${winStreak} win streak</span>`;
+    }
+
+    list.innerHTML = data.matches.map(m => {
+      const isWin = !!m.survived;
+      const resultClass = isWin ? 'win' : 'loss';
+      const resultText = isWin ? 'W' : 'L';
+      const modeName = MODE_LABELS[m.mode] || m.mode;
+      const role = m.role ? ` / ${m.role}` : '';
+      const rounds = m.rounds ? `${m.rounds}r` : '';
+      const ago = m.finished_at ? timeAgo(m.finished_at) : '';
+      return `<div class="recent-game-row">
+        <span class="recent-game-result ${resultClass}">${resultText}</span>
+        <span class="recent-game-mode">${modeName}</span>
+        <span class="text-sm">${m.player_name || ''}${role}</span>
+        <span class="recent-game-meta">${[rounds, ago].filter(Boolean).join(' · ')}</span>
+      </div>`;
+    }).join('');
+  } catch (_) {
+    // silently fail — widget is non-critical
+  }
+}
+
+function timeAgo(isoStr) {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
 defaultRecoveryHint();
 updateControlState(currentState);
 void refreshOpsStatus();
 void autoJoinFromQuery();
+void loadRecentMatches();

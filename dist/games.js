@@ -43,6 +43,8 @@ const matchPhase = document.getElementById('matchPhase');
 const matchRound = document.getElementById('matchRound');
 const matchAlive = document.getElementById('matchAlive');
 const matchRoster = document.getElementById('matchRoster');
+const gamePicker = document.getElementById('gamePicker');
+const watchRandomBtn = document.getElementById('watchRandomBtn');
 
 let me = { roomId: '', playerId: '', game: 'mafia' };
 let currentState = null;
@@ -50,48 +52,6 @@ let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
 let pendingUiAction = false;
-let rematchCountdownTimer = null;
-let rematchCountdownSeconds = 0;
-
-function clearRematchCountdown() {
-  if (rematchCountdownTimer) {
-    clearInterval(rematchCountdownTimer);
-    rematchCountdownTimer = null;
-  }
-  rematchCountdownSeconds = 0;
-  const el = document.getElementById('rematchCountdown');
-  if (el) el.remove();
-}
-
-function startRematchCountdown() {
-  clearRematchCountdown();
-  const mePlayer = currentState && meInState(currentState);
-  if (!mePlayer) return;
-  if (isSpectating()) return;
-
-  rematchCountdownSeconds = 10;
-  const container = document.getElementById('rematchCountdownContainer');
-  if (!container) return;
-
-  container.innerHTML = `<span id="rematchCountdown" class="rematch-countdown">Auto-rematch in <strong id="rematchCountdownNum">${rematchCountdownSeconds}s</strong> <button class="btn btn-ghost btn-sm rematch-cancel-btn" id="cancelRematchCountdown" type="button">Cancel</button></span>`;
-
-  const cancelBtn = document.getElementById('cancelRematchCountdown');
-  if (cancelBtn) {
-    cancelBtn.addEventListener('click', () => {
-      clearRematchCountdown();
-    });
-  }
-
-  rematchCountdownTimer = setInterval(() => {
-    rematchCountdownSeconds--;
-    const numEl = document.getElementById('rematchCountdownNum');
-    if (numEl) numEl.textContent = `${rematchCountdownSeconds}s`;
-    if (rematchCountdownSeconds <= 0) {
-      clearRematchCountdown();
-      document.getElementById('rematchBtn')?.click();
-    }
-  }, 1000);
-}
 
 function selectedMode() {
   const value = String(gameMode?.value || me.game || 'mafia').toLowerCase();
@@ -140,6 +100,7 @@ function emitAck(event, payload = {}) {
 }
 
 function setStatus(text, tone = 'info') {
+  if (playStatus) playStatus.style.display = 'block';
   playStatus.textContent = text;
   playStatus.classList.remove('status-info', 'status-warn', 'status-error');
   if (tone === 'warn') playStatus.classList.add('status-warn');
@@ -157,6 +118,15 @@ function withPendingUiAction(run) {
       pendingUiAction = false;
       updateControlState(currentState);
     });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function showRecoveryHint(html) {
@@ -188,7 +158,7 @@ function renderClaimSeats(data) {
   const seats = data?.claimable || [];
 
   const suggestedButton = suggestedReclaim?.name
-    ? `<button class="btn btn-primary" type="button" data-claim-name="${suggestedReclaim.name}" data-claim-suggested="1">Reclaim suggested seat: ${suggestedReclaim.name}${suggestedReclaim.hostSeat ? ' (host)' : ''}</button>`
+    ? `<button class="btn btn-primary" type="button" data-claim-name="${escapeHtml(suggestedReclaim.name)}" data-claim-suggested="1">Reclaim suggested seat: ${escapeHtml(suggestedReclaim.name)}${suggestedReclaim.hostSeat ? ' (host)' : ''}</button>`
     : '';
 
   if (!seats.length) {
@@ -204,8 +174,8 @@ function renderClaimSeats(data) {
     '<strong>Reconnect seats found — claim your old identity:</strong>',
     suggestedButton,
     ...seats.map((seat) => `
-      <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
-        Claim ${seat.name}${seat.hostSeat ? ' (host)' : ''}
+      <button class="btn btn-soft" type="button" data-claim-name="${escapeHtml(seat.name)}">
+        Claim ${escapeHtml(seat.name)}${seat.hostSeat ? ' (host)' : ''}
       </button>
     `),
   ].filter(Boolean).join(' ');
@@ -388,9 +358,8 @@ function getAdvanceConfig(state) {
 }
 
 function updateControlState(state) {
-  const spectating = isSpectating() || (me.roomId && state && !meInState(state));
   const players = state?.players || [];
-  const isHost = !spectating && !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const inProgress = state?.status === 'in_progress';
@@ -398,17 +367,6 @@ function updateControlState(state) {
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
   const mePlayer = meInState(state);
   const advance = getAdvanceConfig(state);
-
-  if (spectating) {
-    if (startBtn) { startBtn.disabled = true; startBtn.title = 'Spectating'; }
-    if (autofillBtn) { autofillBtn.disabled = true; }
-    if (rematchBtn) { rematchBtn.disabled = true; }
-    if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
-    if (hostBtn) { hostBtn.disabled = true; }
-    if (joinBtn) { joinBtn.disabled = true; }
-    setStatus('Spectating — watching this game live.', 'info');
-    return;
-  }
 
   if (gameMode) {
     const lockMode = Boolean(state && me.roomId);
@@ -440,8 +398,8 @@ function updateControlState(state) {
   }
 
   if (rematchBtn) {
-    rematchBtn.disabled = pendingUiAction || !mePlayer || !finished;
-    rematchBtn.title = !mePlayer ? 'Players only' : !finished ? 'Available after game ends' : '';
+    rematchBtn.disabled = pendingUiAction || !isHost || !finished;
+    rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
   }
 
   if (advanceBtn) {
@@ -470,6 +428,11 @@ function updateControlState(state) {
 
 function renderState(state) {
   currentState = state;
+  if (gamePicker) gamePicker.style.display = 'none';
+  const matchHudSection = document.getElementById('matchHudSection');
+  const gameContentSection = document.getElementById('gameContentSection');
+  if (matchHudSection) matchHudSection.style.display = '';
+  if (gameContentSection) gameContentSection.style.display = '';
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
     const pending = Number(state.autoplay?.pendingActions || 0);
@@ -487,7 +450,7 @@ function renderState(state) {
     return `
     <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
-        <h3>${p.name}${p.id === me.playerId ? ' (you)' : ''}</h3>
+        <h3>${escapeHtml(p.name)}${p.id === me.playerId ? ' (you)' : ''}</h3>
         <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
       </div>
       <div class="player-meta-row">
@@ -655,74 +618,15 @@ function renderOwnerDigest(state) {
         </div>
       </div>
       <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
-        <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
-        <div id="rematchCountdownContainer"></div>
-        <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
-          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('quickMatchBtn')?.click()">New Game</button>
-          <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share on X</button>
-          <button class="btn btn-ghost btn-sm" id="copyLinkBtn" onclick="copyMatchLink()">Copy Link</button>
-        </div>
-        <div id="postGameLeaderboard" class="post-game-leaderboard"></div>
+      <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="document.getElementById('rematchBtn')?.click()">Rematch</button>
+        <button class="btn btn-ghost" onclick="instantPlay(me.game || 'mafia')">New Game</button>
+        <button class="btn btn-ghost" id="shareResultBtn" onclick="shareResult()">Share Result</button>
       </div>
     </div>`;
-
-  startRematchCountdown();
-  renderPostGameLeaderboard();
-}
-
-async function renderPostGameLeaderboard() {
-  const container = document.getElementById('postGameLeaderboard');
-  if (!container) return;
-  try {
-    const resp = await fetch('/api/leaderboard');
-    const data = await resp.json();
-    if (!data.ok || !Array.isArray(data.topAgents) || data.topAgents.length === 0) return;
-
-    const agents = data.topAgents;
-    const myName = (playerName?.value || '').trim().toLowerCase();
-    const myIndex = myName ? agents.findIndex((a) => a.name.toLowerCase() === myName) : -1;
-    const top5 = agents.slice(0, 5);
-
-    const renderRow = (agent, rank, highlight) => {
-      const rankClass = rank <= 3 ? ` lb-mini-rank-${rank}` : '';
-      const meClass = highlight ? ' lb-mini-me' : '';
-      return `<div class="lb-mini-row${rankClass}${meClass}">
-        <span class="lb-mini-pos">#${rank}</span>
-        <span class="lb-mini-name">${agent.name}</span>
-        <span class="lb-mini-mmr">${agent.mmr} MMR</span>
-      </div>`;
-    };
-
-    let rows = top5.map((a, i) => renderRow(a, i + 1, i === myIndex));
-
-    if (myIndex >= 5) {
-      rows.push('<div class="lb-mini-sep">...</div>');
-      rows.push(renderRow(agents[myIndex], myIndex + 1, true));
-    }
-
-    container.innerHTML = `
-      <a href="/browse.html" class="lb-mini-link">
-        <p class="lb-mini-title">Leaderboard</p>
-        ${rows.join('')}
-        <p class="lb-mini-footer">View full rankings</p>
-      </a>`;
-  } catch (_e) {
-    /* silent fail — leaderboard is non-critical */
-  }
-}
-
-function isSpectating() {
-  const params = new URLSearchParams(window.location.search || '');
-  return params.get('spectate') === '1';
 }
 
 function renderActions(state) {
-  if (isSpectating() || (me.roomId && !meInState(state))) {
-    actionsView.innerHTML = '<p class="text-sm text-muted"><span class="player-pill pill-bot" style="margin-right:6px;">Spectating</span> Watching this game live. No actions available.</p>';
-    return;
-  }
-
   if (!me.roomId || !me.playerId) {
     actionsView.innerHTML = '<p class="text-sm text-muted">Join a room to unlock actions.</p>';
     return;
@@ -748,7 +652,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'night') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No valid targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No valid targets</p>';
       return;
     }
 
@@ -761,7 +665,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'voting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
@@ -775,14 +679,14 @@ function renderActions(state) {
     if (state.phase === 'tasks') {
       actionsView.innerHTML = `
         <button class="btn btn-primary action-task" data-action="task" type="button">Do task</button>
-        ${aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${p.name}</button>`).join('')}
+        ${aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${escapeHtml(p.name)}</button>`).join('')}
         <button class="btn btn-soft action-vote" data-action="callMeeting" type="button">Call meeting</button>
       `;
       return;
     }
 
     if (state.phase === 'meeting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote eject ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote eject ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
@@ -797,7 +701,7 @@ function renderActions(state) {
     const vulnerableId = state.roundState?.twist?.vulnerablePlayerId || null;
     const targetButtons = (type, label) => aliveOthers
       .filter((p) => !(immunityId && (state.phase === 'twist' || state.phase === 'elimination') && p.id === immunityId))
-      .map((p) => `<button class=\"btn btn-primary\" data-action=\"${type}\" data-target=\"${p.id}\" type=\"button\">${label} ${p.name}</button>`)
+      .map((p) => `<button class=\"btn btn-primary\" data-action=\"${type}\" data-target=\"${p.id}\" type=\"button\">${label} ${escapeHtml(p.name)}</button>`)
       .join('');
 
     if (state.phase === 'pairing') {
@@ -811,7 +715,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'twist') {
-      const immunityNote = immunityId ? `<p class=\"text-sm text-muted\">Immunity: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}</p>` : '';
+      const immunityNote = immunityId ? `<p class=\"text-sm text-muted\">Immunity: ${escapeHtml(state.players.find((p) => p.id === immunityId)?.name || immunityId)}</p>` : '';
       actionsView.innerHTML = `${immunityNote}${targetButtons('twistVote', 'Expose') || '<p class=\"text-sm text-muted\">No eligible twist targets</p>'}`;
       return;
     }
@@ -823,8 +727,8 @@ function renderActions(state) {
 
     if (state.phase === 'elimination') {
       const context = [
-        immunityId ? `Immune: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}` : '',
-        vulnerableId ? `At risk: ${state.players.find((p) => p.id === vulnerableId)?.name || vulnerableId}` : '',
+        immunityId ? `Immune: ${escapeHtml(state.players.find((p) => p.id === immunityId)?.name || immunityId)}` : '',
+        vulnerableId ? `At risk: ${escapeHtml(state.players.find((p) => p.id === vulnerableId)?.name || vulnerableId)}` : '',
       ].filter(Boolean).join(' · ');
       const contextLine = context ? `<p class=\"text-sm text-muted\">${context}</p>` : '';
       actionsView.innerHTML = `${contextLine}${targetButtons('eliminateVote', 'Vote out') || '<p class=\"text-sm text-muted\">No elimination targets</p>'}`;
@@ -914,7 +818,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
   me.playerId = res.playerId;
   suggestedReclaim = null;
   setStatus(`Reconnected as ${claimName}${res.playerId === res.state?.hostPlayerId ? ' (host)' : ''}`);
-  showRecoveryHint(`Recovered seat <strong>${claimName}</strong>. If you disconnect again, reclaim from this panel.`);
+  showRecoveryHint(`Recovered seat <strong>${escapeHtml(claimName)}</strong>. If you disconnect again, reclaim from this panel.`);
   renderState(res.state);
   void loadClaimableSeats();
 });
@@ -959,7 +863,6 @@ startBtn?.addEventListener('click', async () => {
 });
 
 rematchBtn?.addEventListener('click', async () => {
-  clearRematchCountdown();
   if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
   await withPendingUiAction(async () => {
     const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
@@ -1129,18 +1032,6 @@ async function autoJoinFromQuery() {
   showRecoveryHint('Connected. If you drop, reopen this room and use Find Reconnect Seats to reclaim identity fast.');
   renderState(res.state);
   void loadClaimableSeats();
-
-  // Instant play: auto-start after joining
-  const params = new URLSearchParams(window.location.search || '');
-  if (params.get('instant') === '1' && me.roomId) {
-    setTimeout(async () => {
-      if (!me.roomId || !me.playerId) return;
-      try {
-        const startRes = await emitAck(activeEvent('start-ready'), { roomId: me.roomId, playerId: me.playerId });
-        if (startRes?.ok && startRes.state) renderState(startRes.state);
-      } catch (_err) { /* host flow will handle */ }
-    }, 1500);
-  }
 }
 
 setInterval(() => {
@@ -1167,24 +1058,88 @@ function shareResult() {
 
   if (navigator.share) {
     navigator.share({ title: 'Agent Arena Match', text, url: shareUrl }).catch(() => {});
-  } else {
-    // Open share on X
-    const tweetText = encodeURIComponent(`${text}\n\n${shareUrl}`);
-    window.open(`https://x.com/intent/tweet?text=${tweetText}`, '_blank');
-  }
-}
-
-function copyMatchLink() {
-  const modeKey = me.game || 'mafia';
-  const url = `${window.location.origin}/?mode=${encodeURIComponent(modeKey)}&autojoin=1`;
-  fetch('/api/track/share', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: modeKey }) }).catch(() => {});
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(url).then(() => {
-      const btn = document.getElementById('copyLinkBtn');
-      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy Link'; }, 2000); }
+  } else if (navigator.clipboard) {
+    const shareText = `${text}\n${shareUrl}`;
+    navigator.clipboard.writeText(shareText).then(() => {
+      const btn = document.getElementById('shareResultBtn');
+      if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Share Result'; }, 2000); }
     }).catch(() => {});
   }
 }
+
+// Game picker: instant play via POST /api/play/instant
+async function instantPlay(mode) {
+  if (playStatus) { playStatus.style.display = 'block'; }
+  setStatus(`Starting ${modeLabel(mode)}...`);
+  try {
+    const res = await fetch('/api/play/instant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.playUrl) {
+      setStatus(formatError(data, 'Instant play failed'), 'error');
+      return;
+    }
+    window.location.href = data.playUrl;
+  } catch (_err) {
+    setStatus('Instant play failed — try again', 'error');
+  }
+}
+
+// Game picker card click handlers
+gamePicker?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-instant-play]');
+  if (!btn) return;
+  const mode = btn.getAttribute('data-instant-play');
+  if (mode) instantPlay(mode);
+});
+
+// Watch a random live game
+watchRandomBtn?.addEventListener('click', async () => {
+  setStatus('Finding a live game...');
+  if (playStatus) { playStatus.style.display = 'block'; }
+  try {
+    const res = await fetch('/api/play/watch');
+    const data = await res.json();
+    if (!data?.ok || !data?.watchUrl) {
+      setStatus('No live games right now — start one!', 'warn');
+      return;
+    }
+    window.location.href = data.watchUrl;
+  } catch (_err) {
+    setStatus('Could not find a live game', 'error');
+  }
+});
+
+// Show/hide game picker based on query params
+function initGamePickerVisibility() {
+  const params = new URLSearchParams(window.location.search || '');
+  const hasRoom = params.get('room') || params.get('autojoin');
+  if (hasRoom && gamePicker) {
+    gamePicker.style.display = 'none';
+  }
+}
+
+initGamePickerVisibility();
+
+// Handle instant play auto-start
+(function handleInstantPlay() {
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('instant') === '1' && params.get('room')) {
+    // Auto-join and start after short delay
+    setTimeout(async () => {
+      if (!me.roomId) return;
+      const mode = selectedMode();
+      try {
+        // Auto-start the game
+        const res = await emit(`${mode}:startGame`, { roomId: me.roomId });
+        if (res?.ok) renderState(res.state || res);
+      } catch (_err) { /* will be started by host flow */ }
+    }, 2000);
+  }
+})();
 
 // ── Recent Games widget ──
 
@@ -1196,7 +1151,7 @@ function getStoredUserId() {
 
 async function loadRecentMatches() {
   const userId = getStoredUserId();
-  if (!userId) return; // no session — skip for first-time visitors
+  if (!userId) return;
 
   const section = document.getElementById('recentGamesSection');
   const list = document.getElementById('recentGamesList');
@@ -1208,7 +1163,6 @@ async function loadRecentMatches() {
     const data = await res.json();
     if (!data.ok || !data.matches || data.matches.length === 0) return;
 
-    // Calculate win streak (consecutive survived matches from most recent)
     let winStreak = 0;
     for (const m of data.matches) {
       if (m.survived) winStreak++;
@@ -1236,9 +1190,7 @@ async function loadRecentMatches() {
         <span class="recent-game-meta">${[rounds, ago].filter(Boolean).join(' · ')}</span>
       </div>`;
     }).join('');
-  } catch (_) {
-    // silently fail — widget is non-critical
-  }
+  } catch (_) {}
 }
 
 function timeAgo(isoStr) {
