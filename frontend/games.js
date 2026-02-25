@@ -398,8 +398,8 @@ function updateControlState(state) {
   }
 
   if (rematchBtn) {
-    rematchBtn.disabled = pendingUiAction || !isHost || !finished;
-    rematchBtn.title = !isHost ? 'Host only' : !finished ? 'Available after game ends' : '';
+    rematchBtn.disabled = pendingUiAction || !mePlayer || !finished;
+    rematchBtn.title = !mePlayer ? 'Players only' : !finished ? 'Available after game ends' : '';
   }
 
   if (advanceBtn) {

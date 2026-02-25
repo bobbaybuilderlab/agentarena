@@ -1,3 +1,13 @@
+const Sentry = require('@sentry/node');
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.1,
+  });
+}
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
@@ -19,6 +29,10 @@ const { shortId, correlationId, logStructured } = require('./server/state/helper
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
+const { initDb, recordMatch, closeDb } = require('./server/db');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
+const { track: trackEvent } = require('./server/services/analytics');
 
 const app = express();
 const server = http.createServer(app);
@@ -207,9 +221,27 @@ function emitRoom(room) {
   io.to(room.id).emit('room:update', getPublicRoom(room));
 }
 
+// Map room event types to Amplitude event names
+const AMPLITUDE_EVENT_MAP = {
+  ROOM_CREATED: 'room_created',
+  PLAYER_JOINED: 'room_joined',
+  MATCH_STARTED: 'match_started',
+  BATTLE_FINISHED: 'match_completed',
+  MATCH_FINISHED: 'match_completed',
+  REMATCH_STARTED: 'rematch_started',
+  QUICK_JOIN_CONVERTED: 'quick_join_used',
+};
+
 function logRoomEvent(mode, room, type, payload = {}) {
   if (!room?.id) return;
   roomEvents.append(mode, room.id, type, payload);
+
+  // Track to Amplitude
+  const amplitudeEvent = AMPLITUDE_EVENT_MAP[type];
+  if (amplitudeEvent) {
+    const userId = payload.userId || payload.socketId || room.id;
+    trackEvent(amplitudeEvent, userId, { mode, roomId: room.id, ...payload });
+  }
 }
 
 function ensurePlayer(room, socket, payload) {
@@ -597,6 +629,28 @@ function runVillaBotAutoplay(room) {
     if (room.status !== 'in_progress' || room.phase !== startingPhase) break;
   }
 
+  // If room is bot-filled with a single human and they're idle, submit a deterministic
+  // fallback action so the autoplay loop can complete without stalling on one missing vote.
+  if (room.status === 'in_progress' && room.phase === startingPhase) {
+    const aliveHumans = room.players.filter((p) => p.alive && !p.isBot);
+    if (aliveHumans.length === 1) {
+      const human = aliveHumans[0];
+      const currentBucket = room.actions?.[startingPhase] || {};
+      if (!currentBucket[human.id]) {
+        const target = pickVillaTarget(room, human.id);
+        if (target) {
+          const fallback = villaGame.submitAction(villaRooms, {
+            roomId: room.id,
+            playerId: human.id,
+            type: phaseType,
+            targetId: target.id,
+          });
+          if (fallback.ok) acted += 1;
+        }
+      }
+    }
+  }
+
   if (acted > 0) {
     logRoomEvent('villa', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, round: room.round, status: room.status });
   }
@@ -663,10 +717,16 @@ function scheduleVillaPhase(room) {
     return;
   }
 
+  const phaseBeforeAutoplay = room.phase;
   const auto = runVillaBotAutoplay(room);
   if (auto.acted > 0) emitVillaRoom(room);
   if (room.status !== 'in_progress') {
     roomScheduler.clear({ namespace: 'villa', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  if (auto.acted > 0 && room.phase !== phaseBeforeAutoplay) {
+    scheduleVillaPhase(room);
     return;
   }
 
@@ -785,7 +845,7 @@ io.on('connection', (socket) => {
   socket.on('mafia:rematch', ({ roomId, playerId }, cb) => {
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'mafia');
     const reset = mafiaGame.prepareRematch(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!reset.ok) return cb?.(reset);
@@ -887,7 +947,7 @@ io.on('connection', (socket) => {
   socket.on('amongus:rematch', ({ roomId, playerId }, cb) => {
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'amongus');
     const reset = amongUsGame.prepareRematch(amongUsRooms, { roomId, hostPlayerId: playerId });
     if (!reset.ok) return cb?.(reset);
@@ -994,7 +1054,7 @@ io.on('connection', (socket) => {
   socket.on('villa:rematch', ({ roomId, playerId }, cb) => {
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     roomScheduler.clearRoom(String(roomId || '').toUpperCase(), 'villa');
     const reset = villaGame.prepareRematch(villaRooms, { roomId, hostPlayerId: playerId });
     if (!reset.ok) return cb?.(reset);
@@ -1305,6 +1365,30 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// ── Rate Limiting ──
+const rateLimitKey = (req) => ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || 'unknown');
+const apiLimiter = rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+const authLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+const opsLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+app.use('/api/', apiLimiter);
+app.use('/api/auth/', authLimiter);
+app.use('/api/openclaw/', authLimiter);
+app.use('/api/ops/', opsLimiter);
+app.use('/api/evals/', opsLimiter);
+
+// ── Ops Auth Gate ──
+function opsAuthGate(req, res, next) {
+  const token = process.env.OPS_ADMIN_TOKEN;
+  if (!token) return next(); // no token configured = open (dev mode)
+  const auth = req.headers.authorization;
+  if (!auth || auth !== `Bearer ${token}`) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  next();
+}
+app.use('/api/ops/', opsAuthGate);
+app.use('/api/evals/', opsAuthGate);
+
 app.use((req, _res, next) => {
   if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html'].includes(req.path)) {
     incrementGrowthMetric('funnel.visits', 1);
@@ -1353,6 +1437,33 @@ function recordFirstMatchCompletion(mode, roomId) {
   if (completedMatchRooms.has(key)) return;
   completedMatchRooms.add(key);
   incrementGrowthMetric('funnel.firstMatchesCompleted', 1);
+
+  // Persist match result to SQLite
+  try {
+    const store = getLobbyStore(mode);
+    const room = store?.get(roomId);
+    if (room) {
+      recordMatch({
+        id: shortId(12),
+        roomId,
+        mode,
+        winner: room.winner || room.lastWinner?.name || null,
+        rounds: room.round || 0,
+        durationMs: room.startedAt ? Date.now() - room.startedAt : null,
+        startedAt: room.startedAt ? new Date(room.startedAt).toISOString() : null,
+        players: (room.players || []).map((p, i) => ({
+          userId: p.userId || null,
+          name: p.name,
+          role: p.role || null,
+          isBot: !!p.isBot,
+          survived: p.alive !== false,
+          placement: i + 1,
+        })),
+      });
+    }
+  } catch (err) {
+    console.error('recordMatch failed:', err.message);
+  }
 }
 
 function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
@@ -1532,12 +1643,38 @@ function runAutoBattle() {
 }
 
 app.post('/api/auth/session', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) return res.status(400).json({ ok: false, error: 'valid email required' });
-  const token = shortId(20);
-  const session = { token, email, createdAt: Date.now() };
-  sessions.set(token, session);
-  res.json({ ok: true, session });
+  const { createAnonymousUser, createSession, getSessionByToken } = require('./server/db');
+
+  // Check for existing session token
+  const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
+  if (existingToken) {
+    const existing = getSessionByToken(existingToken);
+    if (existing) {
+      return res.json({ ok: true, session: { token: existingToken, userId: existing.user_id }, renewed: true });
+    }
+  }
+
+  // Create anonymous user + session
+  const userId = shortId(12);
+  const token = shortId(24);
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
+
+  try {
+    createAnonymousUser(userId);
+    createSession(shortId(8), userId, token, expiresAt);
+
+    // Also keep in-memory sessions for backward compat
+    const session = { token, userId, email: null, createdAt: Date.now() };
+    sessions.set(token, session);
+
+    res.json({ ok: true, session: { token, userId } });
+  } catch (err) {
+    // Fallback to in-memory only if DB isn't initialized
+    const token2 = shortId(20);
+    const session = { token: token2, userId, createdAt: Date.now() };
+    sessions.set(token2, session);
+    res.json({ ok: true, session: { token: token2, userId } });
+  }
 });
 
 app.post('/api/openclaw/connect-session', (req, res) => {
@@ -2439,6 +2576,140 @@ if (typeof loadGrowthMetrics === 'function') {
   };
 }
 
+// ── Instant Play: one-click to join a game ──
+app.post('/api/play/instant', (req, res) => {
+  const modeInput = String(req.body?.mode || 'mafia').toLowerCase();
+  const mode = ['mafia', 'amongus', 'villa'].includes(modeInput) ? modeInput : 'mafia';
+  const playerName = String(req.body?.name || `Player_${shortId(4)}`).trim().slice(0, 24);
+
+  // Create a new room
+  const created = createQuickJoinRoom(mode, playerName);
+  if (!created.ok) return res.status(500).json(created);
+
+  const room = created.room;
+
+  // Auto-fill with bots
+  const filled = autoFillLobbyBots(mode, room.id, 4);
+
+  trackEvent('instant_play_created', playerName, { mode, roomId: room.id });
+
+  res.json({
+    ok: true,
+    mode,
+    roomId: room.id,
+    playUrl: `/play.html?mode=${mode}&room=${room.id}&name=${encodeURIComponent(playerName)}&autojoin=1&instant=1`,
+    players: room.players.length,
+  });
+});
+
+// ── Watch: spectate the most active game ──
+app.get('/api/play/watch', (_req, res) => {
+  const allRooms = listPlayableRooms('all', 'all');
+  const active = allRooms
+    .filter((r) => r.status === 'in_progress')
+    .sort((a, b) => (b.players || 0) - (a.players || 0));
+
+  if (active.length > 0) {
+    const best = active[0];
+    return res.json({
+      ok: true,
+      found: true,
+      roomId: best.roomId,
+      mode: best.mode,
+      watchUrl: `/play.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
+      players: best.players,
+    });
+  }
+
+  // No active games -- create one with all bots for spectating
+  const mode = 'mafia';
+  const created = createQuickJoinRoom(mode, 'Spectator');
+  if (!created.ok) return res.json({ ok: true, found: false, message: 'No active games. Try Play Now!' });
+
+  autoFillLobbyBots(mode, created.room.id, 4);
+
+  res.json({
+    ok: true,
+    found: true,
+    roomId: created.room.id,
+    mode,
+    watchUrl: `/play.html?mode=${mode}&room=${created.room.id}&spectate=1`,
+    players: created.room.players.length,
+    autoCreated: true,
+  });
+});
+
+// ── Match page for sharing ──
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+app.get('/match/:matchId', (req, res) => {
+  const { getMatch } = require('./server/db');
+  try {
+    const match = getMatch(req.params.matchId);
+    if (!match) return res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+
+    const playerListRaw = (match.players || [])
+      .map((p) => `${p.player_name}${p.survived ? ' (survived)' : ''}`)
+      .join(', ');
+
+    const safeMode = escapeHtml(match.mode || 'unknown');
+    const safeModeUpper = safeMode.toUpperCase();
+    const safeWinner = escapeHtml(match.winner || 'Unknown');
+    const safeRounds = escapeHtml(String(match.rounds || 0));
+    const safePlayerList = escapeHtml(playerListRaw);
+
+    res.send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta property="og:title" content="Agent Arena - ${safeMode} Match" />
+  <meta property="og:description" content="Winner: ${safeWinner} | ${safeRounds} rounds | Players: ${safePlayerList}" />
+  <meta property="og:image" content="/og-image.svg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Match Result - Agent Arena</title>
+</head>
+<body class="page-home">
+<div class="wrap">
+  <nav class="topnav">
+    <a class="brand" href="/">Agent Arena</a>
+    <div class="nav-links">
+      <a href="/play.html">Play</a>
+      <a href="/browse.html">Feed</a>
+    </div>
+  </nav>
+  <section class="hero-simple mb-16" style="min-height:auto; padding: 3rem 0;">
+    <div class="hero-content">
+      <h1>${safeModeUpper} Match</h1>
+      <div class="card mt-12" style="padding: 2rem; max-width: 500px; margin: 0 auto;">
+        <p style="font-size: 1.2rem; color: var(--accent);">Winner: ${safeWinner}</p>
+        <p style="color: var(--text-dim);">${safeRounds} rounds | ${safeMode}</p>
+        <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
+        <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
+        <div class="row mt-12" style="justify-content: center; gap: 1rem;">
+          <a class="btn btn-primary" href="/play.html">Play Now</a>
+          <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>`);
+  } catch (_err) {
+    res.redirect('/');
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 registerRoomEventRoutes(app, { roomEvents });
@@ -2576,11 +2847,6 @@ app.get('/api/evals/ci', (_req, res) => {
   });
 });
 
-app.get('/api/ops/kpis', (_req, res) => {
-  const report = snapshotKpis();
-  res.json({ ok: true, report });
-});
-
 app.post('/api/ops/kpis/snapshot', (_req, res) => {
   const metrics = persistGrowthMetricsSnapshot();
   growthMetrics = metrics;
@@ -2616,7 +2882,27 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// ── Sentry error handler (must be after all routes) ──
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
+
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ ok: false, error: 'internal server error' });
+});
+
 if (require.main === module) {
+  // Initialize SQLite database
+  try {
+    initDb();
+    console.log('SQLite database initialized');
+  } catch (err) {
+    console.error('SQLite init failed:', err.message);
+  }
+
+  loadState();
+
   if (process.env.DISABLE_AUTOBATTLE !== '1') {
     runAutoBattle();
     setInterval(() => {
@@ -2626,6 +2912,11 @@ if (require.main === module) {
 
   server.listen(PORT, () => {
     console.log(`Agent Arena running on http://localhost:${PORT}`);
+  });
+
+  process.on('SIGTERM', () => {
+    closeDb();
+    process.exit(0);
   });
 }
 

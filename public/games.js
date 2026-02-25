@@ -120,6 +120,15 @@ function withPendingUiAction(run) {
     });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function showRecoveryHint(html) {
   if (!recoveryHint) return;
   recoveryHint.innerHTML = html;
@@ -149,7 +158,7 @@ function renderClaimSeats(data) {
   const seats = data?.claimable || [];
 
   const suggestedButton = suggestedReclaim?.name
-    ? `<button class="btn btn-primary" type="button" data-claim-name="${suggestedReclaim.name}" data-claim-suggested="1">Reclaim suggested seat: ${suggestedReclaim.name}${suggestedReclaim.hostSeat ? ' (host)' : ''}</button>`
+    ? `<button class="btn btn-primary" type="button" data-claim-name="${escapeHtml(suggestedReclaim.name)}" data-claim-suggested="1">Reclaim suggested seat: ${escapeHtml(suggestedReclaim.name)}${suggestedReclaim.hostSeat ? ' (host)' : ''}</button>`
     : '';
 
   if (!seats.length) {
@@ -165,8 +174,8 @@ function renderClaimSeats(data) {
     '<strong>Reconnect seats found — claim your old identity:</strong>',
     suggestedButton,
     ...seats.map((seat) => `
-      <button class="btn btn-soft" type="button" data-claim-name="${seat.name}">
-        Claim ${seat.name}${seat.hostSeat ? ' (host)' : ''}
+      <button class="btn btn-soft" type="button" data-claim-name="${escapeHtml(seat.name)}">
+        Claim ${escapeHtml(seat.name)}${seat.hostSeat ? ' (host)' : ''}
       </button>
     `),
   ].filter(Boolean).join(' ');
@@ -441,7 +450,7 @@ function renderState(state) {
     return `
     <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
-        <h3>${p.name}${p.id === me.playerId ? ' (you)' : ''}</h3>
+        <h3>${escapeHtml(p.name)}${p.id === me.playerId ? ' (you)' : ''}</h3>
         <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
       </div>
       <div class="player-meta-row">
@@ -643,7 +652,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'night') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No valid targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="nightKill" data-target="${p.id}" type="button">Night kill ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No valid targets</p>';
       return;
     }
 
@@ -656,7 +665,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'voting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
@@ -670,14 +679,14 @@ function renderActions(state) {
     if (state.phase === 'tasks') {
       actionsView.innerHTML = `
         <button class="btn btn-primary action-task" data-action="task" type="button">Do task</button>
-        ${aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${p.name}</button>`).join('')}
+        ${aliveOthers.map((p) => `<button class="btn btn-soft action-danger" data-action="kill" data-target="${p.id}" type="button">Imposter kill ${escapeHtml(p.name)}</button>`).join('')}
         <button class="btn btn-soft action-vote" data-action="callMeeting" type="button">Call meeting</button>
       `;
       return;
     }
 
     if (state.phase === 'meeting') {
-      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote eject ${p.name}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
+      actionsView.innerHTML = aliveOthers.map((p) => `<button class="btn btn-primary action-vote" data-action="vote" data-target="${p.id}" type="button">Vote eject ${escapeHtml(p.name)}</button>`).join('') || '<p class="text-sm text-muted">No vote targets</p>';
       return;
     }
   }
@@ -692,7 +701,7 @@ function renderActions(state) {
     const vulnerableId = state.roundState?.twist?.vulnerablePlayerId || null;
     const targetButtons = (type, label) => aliveOthers
       .filter((p) => !(immunityId && (state.phase === 'twist' || state.phase === 'elimination') && p.id === immunityId))
-      .map((p) => `<button class=\"btn btn-primary\" data-action=\"${type}\" data-target=\"${p.id}\" type=\"button\">${label} ${p.name}</button>`)
+      .map((p) => `<button class=\"btn btn-primary\" data-action=\"${type}\" data-target=\"${p.id}\" type=\"button\">${label} ${escapeHtml(p.name)}</button>`)
       .join('');
 
     if (state.phase === 'pairing') {
@@ -706,7 +715,7 @@ function renderActions(state) {
     }
 
     if (state.phase === 'twist') {
-      const immunityNote = immunityId ? `<p class=\"text-sm text-muted\">Immunity: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}</p>` : '';
+      const immunityNote = immunityId ? `<p class=\"text-sm text-muted\">Immunity: ${escapeHtml(state.players.find((p) => p.id === immunityId)?.name || immunityId)}</p>` : '';
       actionsView.innerHTML = `${immunityNote}${targetButtons('twistVote', 'Expose') || '<p class=\"text-sm text-muted\">No eligible twist targets</p>'}`;
       return;
     }
@@ -718,8 +727,8 @@ function renderActions(state) {
 
     if (state.phase === 'elimination') {
       const context = [
-        immunityId ? `Immune: ${state.players.find((p) => p.id === immunityId)?.name || immunityId}` : '',
-        vulnerableId ? `At risk: ${state.players.find((p) => p.id === vulnerableId)?.name || vulnerableId}` : '',
+        immunityId ? `Immune: ${escapeHtml(state.players.find((p) => p.id === immunityId)?.name || immunityId)}` : '',
+        vulnerableId ? `At risk: ${escapeHtml(state.players.find((p) => p.id === vulnerableId)?.name || vulnerableId)}` : '',
       ].filter(Boolean).join(' · ');
       const contextLine = context ? `<p class=\"text-sm text-muted\">${context}</p>` : '';
       actionsView.innerHTML = `${contextLine}${targetButtons('eliminateVote', 'Vote out') || '<p class=\"text-sm text-muted\">No elimination targets</p>'}`;
@@ -809,7 +818,7 @@ claimSeatsView?.addEventListener('click', async (e) => {
   me.playerId = res.playerId;
   suggestedReclaim = null;
   setStatus(`Reconnected as ${claimName}${res.playerId === res.state?.hostPlayerId ? ' (host)' : ''}`);
-  showRecoveryHint(`Recovered seat <strong>${claimName}</strong>. If you disconnect again, reclaim from this panel.`);
+  showRecoveryHint(`Recovered seat <strong>${escapeHtml(claimName)}</strong>. If you disconnect again, reclaim from this panel.`);
   renderState(res.state);
   void loadClaimableSeats();
 });
