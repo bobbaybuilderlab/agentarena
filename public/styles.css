@@ -1495,3 +1495,150 @@ article p {
   color: #bbf9df;
   font-weight: 600;
 }
+
+/* ── Reconnect Banner ── */
+.reconnect-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  padding: 10px 16px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: #b8860b;
+  color: #fff;
+  animation: reconnect-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes reconnect-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ── Auth Section ── */
+.auth-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.profile-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #bbf9df;
+  background: rgba(187, 249, 223, 0.1);
+  border-radius: var(--radius-md);
+  padding: 4px 10px;
+  cursor: default;
+}
+
+.auth-modal {
+  background: var(--bg-card, #0e1b2d);
+  color: var(--ink, #e8edf4);
+  border: 1px solid rgba(69, 114, 154, 0.52);
+  border-radius: var(--radius-lg, 12px);
+  padding: 24px;
+  max-width: 380px;
+  width: 90vw;
+}
+
+.auth-modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.auth-modal input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ── Player Profile Card ── */
+.profile-card-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9998;
+}
+
+.profile-card {
+  background: var(--bg-card, #0e1b2d);
+  border: 1px solid rgba(69, 114, 154, 0.52);
+  border-radius: var(--radius-lg, 12px);
+  padding: 20px 24px;
+  min-width: 260px;
+  max-width: 340px;
+}
+
+.profile-card h3 {
+  margin: 0 0 12px;
+}
+
+.profile-card-stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 0.85rem;
+}
+
+.profile-card-stat .label {
+  color: #8ca4be;
+}
+
+.profile-card-stat .value {
+  font-weight: 600;
+}
+
+/* ── Tutorial Overlay ── */
+.tutorial-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.tutorial-card {
+  background: var(--bg-card, #0e1b2d);
+  border: 1px solid rgba(69, 114, 154, 0.52);
+  border-radius: var(--radius-lg, 12px);
+  padding: 28px 32px;
+  max-width: 400px;
+  width: 90vw;
+  text-align: center;
+}
+
+.tutorial-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+}
+
+.tutorial-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.tutorial-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.tutorial-dot.active {
+  background: #abdbff;
+}

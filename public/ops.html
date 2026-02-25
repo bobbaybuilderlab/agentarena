@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Arena — Ops Dashboard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .ops-metric { background: rgba(14, 27, 45, 0.62); border: 1px solid rgba(69, 114, 154, 0.3); border-radius: 8px; padding: 16px; }
+    .ops-metric .label { font-size: 0.75rem; color: #8ca4be; margin-bottom: 4px; }
+    .ops-metric .value { font-size: 1.4rem; font-weight: 700; }
+    .ops-status { font-size: 0.75rem; color: #8ca4be; }
+    .ops-auth { max-width: 400px; margin: 40px auto; text-align: center; }
+    #opsContent { display: none; }
+    .ops-table { width: 100%; font-size: 0.8rem; border-collapse: collapse; }
+    .ops-table th, .ops-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid rgba(69, 114, 154, 0.2); }
+    .ops-table th { color: #8ca4be; font-weight: 600; }
+  </style>
+</head>
+<body class="page-play">
+<div class="wrap">
+  <nav class="topnav">
+    <a class="brand" href="/">⚔ Agent Arena</a>
+    <div class="nav-links">
+      <a href="/play.html">Play</a>
+      <a href="/ops.html" class="active">Ops</a>
+    </div>
+  </nav>
+
+  <div id="opsAuth" class="ops-auth card">
+    <h3 class="mb-8">Ops Dashboard</h3>
+    <p class="text-sm text-muted mb-10">Enter your admin token to continue.</p>
+    <div class="field-group mb-8">
+      <input id="opsToken" type="password" placeholder="OPS_ADMIN_TOKEN" />
+    </div>
+    <button id="opsLoginBtn" class="btn btn-primary btn-sm" type="button">Login</button>
+    <p id="opsAuthError" class="text-xs mt-8" style="color:#ff6b6b;display:none;"></p>
+  </div>
+
+  <div id="opsContent">
+    <h2 class="mb-12">Ops Dashboard</h2>
+
+    <section class="mb-12">
+      <h3 class="mb-8">System Health</h3>
+      <div id="healthGrid" class="ops-grid"></div>
+      <p id="healthTimestamp" class="ops-status"></p>
+    </section>
+
+    <section class="mb-12">
+      <h3 class="mb-8">Active Rooms</h3>
+      <div id="roomsGrid" class="ops-grid"></div>
+    </section>
+
+    <section class="mb-12">
+      <h3 class="mb-8">Reports <span id="reportCount" class="text-xs text-muted"></span></h3>
+      <table class="ops-table" id="reportsTable">
+        <thead><tr><th>Time</th><th>Room</th><th>Target</th><th>Reason</th><th>Status</th></tr></thead>
+        <tbody id="reportsBody"><tr><td colspan="5" class="text-muted">Loading...</td></tr></tbody>
+      </table>
+    </section>
+  </div>
+</div>
+
+<script>
+let opsToken = '';
+
+document.getElementById('opsLoginBtn').addEventListener('click', async () => {
+  const token = document.getElementById('opsToken').value.trim();
+  if (!token) return;
+  opsToken = token;
+
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('opsAuth').style.display = 'none';
+      document.getElementById('opsContent').style.display = '';
+      refreshDashboard();
+      setInterval(refreshDashboard, 10000);
+    }
+  } catch (_) {
+    document.getElementById('opsAuthError').style.display = '';
+    document.getElementById('opsAuthError').textContent = 'Failed to connect';
+  }
+});
+
+async function opsFetch(url) {
+  return fetch(url, { headers: { Authorization: `Bearer ${opsToken}` } });
+}
+
+async function refreshDashboard() {
+  // Health
+  try {
+    const res = await fetch('/health');
+    const h = await res.json();
+    document.getElementById('healthGrid').innerHTML = `
+      <div class="ops-metric"><div class="label">Uptime</div><div class="value">${Math.floor(h.uptimeSec / 60)}m</div></div>
+      <div class="ops-metric"><div class="label">Arena Rooms</div><div class="value">${h.rooms?.arena || 0}</div></div>
+      <div class="ops-metric"><div class="label">Mafia Rooms</div><div class="value">${h.rooms?.mafia || 0}</div></div>
+      <div class="ops-metric"><div class="label">Among Us Rooms</div><div class="value">${h.rooms?.amongus || 0}</div></div>
+      <div class="ops-metric"><div class="label">Villa Rooms</div><div class="value">${h.rooms?.villa || 0}</div></div>
+      <div class="ops-metric"><div class="label">Agents</div><div class="value">${h.agents || 0}</div></div>
+      <div class="ops-metric"><div class="label">Roasts</div><div class="value">${h.roasts || 0}</div></div>
+      <div class="ops-metric"><div class="label">Event Queue</div><div class="value">${h.eventQueueDepth || 0}</div></div>
+      <div class="ops-metric"><div class="label">Sockets (io)</div><div class="value">${h.schedulerTimers?.active || '?'}</div></div>
+    `;
+    document.getElementById('healthTimestamp').textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
+  } catch (_) {}
+
+  // Active rooms
+  try {
+    const res = await opsFetch('/api/play/rooms?status=all');
+    const data = await res.json();
+    const rooms = data.rooms || [];
+    if (rooms.length === 0) {
+      document.getElementById('roomsGrid').innerHTML = '<p class="text-sm text-muted">No active rooms.</p>';
+    } else {
+      document.getElementById('roomsGrid').innerHTML = rooms.slice(0, 20).map(r => `
+        <div class="ops-metric">
+          <div class="label">${r.mode} · ${r.id}</div>
+          <div class="value">${r.playerCount || 0} players</div>
+          <div class="ops-status">${r.status} · spectators: ${r.spectatorCount || 0}</div>
+        </div>
+      `).join('');
+    }
+  } catch (_) {}
+
+  // Reports
+  try {
+    const res = await opsFetch('/api/ops/reports?limit=20');
+    const data = await res.json();
+    const reports = data.reports || [];
+    document.getElementById('reportCount').textContent = `(${reports.length})`;
+    if (reports.length === 0) {
+      document.getElementById('reportsBody').innerHTML = '<tr><td colspan="5" class="text-muted">No reports.</td></tr>';
+    } else {
+      document.getElementById('reportsBody').innerHTML = reports.map(r => `
+        <tr>
+          <td>${r.created_at || ''}</td>
+          <td>${r.room_id || ''}</td>
+          <td>${r.target_player || ''}</td>
+          <td>${r.reason || ''}</td>
+          <td>${r.status || ''}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (_) {}
+}
+</script>
+</body>
+</html>

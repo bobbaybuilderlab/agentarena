@@ -361,6 +361,11 @@ function meInState(state) {
   return (state.players || []).find((p) => p.id === me.playerId) || null;
 }
 
+function isSpectating() {
+  const params = new URLSearchParams(window.location.search || '');
+  return params.get('spectate') === '1';
+}
+
 function getAdvanceConfig(state) {
   if (!state || state.status !== 'in_progress') {
     return { enabled: false, label: 'Advance', title: 'Available during live matches only' };
@@ -401,13 +406,25 @@ function getAdvanceConfig(state) {
 
 function updateControlState(state) {
   const players = state?.players || [];
-  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const spectating = isSpectating() || (me.roomId && state && !meInState(state));
+  const isHost = !spectating && !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const inProgress = state?.status === 'in_progress';
   const minPlayersReady = players.length >= 4;
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
   const mePlayer = meInState(state);
+
+  if (spectating) {
+    if (startBtn) { startBtn.disabled = true; startBtn.title = 'Spectating'; }
+    if (autofillBtn) { autofillBtn.disabled = true; }
+    if (rematchBtn) { rematchBtn.disabled = true; }
+    if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
+    if (hostBtn) { hostBtn.disabled = true; }
+    if (joinBtn) { joinBtn.disabled = true; }
+    setStatus(`Spectating — watching this game live. ${players.length} player(s)`, 'info');
+    return;
+  }
   const advance = getAdvanceConfig(state);
 
   if (gameMode) {
@@ -468,7 +485,27 @@ function updateControlState(state) {
   }
 }
 
+let prevStateForSfx = null;
+
 function renderState(state) {
+  // Sound effects based on state transitions
+  if (prevStateForSfx && state) {
+    const prevPhase = prevStateForSfx.phase || prevStateForSfx.status;
+    const newPhase = state.phase || state.status;
+    const prevStatus = prevStateForSfx.status;
+    const newStatus = state.status;
+
+    if (prevStatus === 'lobby' && newStatus === 'in_progress') sfxGameStart();
+    else if (newStatus === 'finished' && prevStatus !== 'finished') sfxWin();
+    else if (prevPhase !== newPhase && newStatus === 'in_progress') sfxPhaseChange();
+
+    // Detect elimination: player went from alive to not alive
+    const prevAlive = new Set((prevStateForSfx.players || []).filter(p => p.alive !== false).map(p => p.id));
+    const newDead = (state.players || []).filter(p => p.alive === false && prevAlive.has(p.id));
+    if (newDead.length > 0) sfxElimination();
+  }
+  prevStateForSfx = state ? { ...state } : null;
+
   currentState = state;
   if (gamePicker) gamePicker.style.display = 'none';
   const matchHudSection = document.getElementById('matchHudSection');
@@ -717,6 +754,11 @@ async function renderPostGameLeaderboard() {
 }
 
 function renderActions(state) {
+  if (isSpectating() || (me.roomId && !meInState(state))) {
+    actionsView.innerHTML = '<p class="text-sm text-muted"><span class="player-pill pill-bot" style="margin-right:6px;">Spectating</span> Watching this game live. No actions available.</p>';
+    return;
+  }
+
   if (!me.roomId || !me.playerId) {
     actionsView.innerHTML = '<p class="text-sm text-muted">Join a room to unlock actions.</p>';
     return;
@@ -1017,6 +1059,38 @@ socket.on('villa:state', (state) => {
   renderState(state);
 });
 
+// ── Reconnect UX ──
+socket.on('disconnect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner) {
+    banner.style.display = '';
+    if (bannerText) bannerText.textContent = 'Connection lost — reconnecting...';
+  }
+});
+
+socket.on('connect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner && banner.style.display !== 'none') {
+    if (bannerText) bannerText.textContent = 'Reconnected!';
+    // Auto-rejoin room if we were in one
+    if (me.roomId && me.playerId) {
+      const mode = me.game || 'mafia';
+      emitAck(`${mode}:room:join`, {
+        roomId: me.roomId,
+        name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+      }).then((res) => {
+        if (res?.ok) {
+          me.playerId = res.playerId || me.playerId;
+          renderState(res.state);
+        }
+      }).catch(() => {});
+    }
+    setTimeout(() => { banner.style.display = 'none'; }, 2000);
+  }
+});
+
 flushEventsBtn?.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/ops/events/flush', { method: 'POST' });
@@ -1160,6 +1234,7 @@ function shareResult() {
 
 // Game picker: instant play via POST /api/play/instant
 async function instantPlay(mode) {
+  showTutorial(mode);
   if (playStatus) { playStatus.style.display = 'block'; }
   setStatus(`Starting ${modeLabel(mode)}...`);
   try {
@@ -1214,6 +1289,15 @@ function initGamePickerVisibility() {
 }
 
 initGamePickerVisibility();
+
+// Hide debug panel unless ?debug=1 is present
+(function initDebugPanelVisibility() {
+  const params = new URLSearchParams(window.location.search || '');
+  const debugPanel = document.querySelector('.dev-panel');
+  if (debugPanel && params.get('debug') !== '1') {
+    debugPanel.style.display = 'none';
+  }
+})();
 
 // Handle instant play auto-start
 (function handleInstantPlay() {
@@ -1298,8 +1382,259 @@ function timeAgo(isoStr) {
   return `${days}d ago`;
 }
 
+// ── Player profile cards ──
+async function showPlayerProfile(playerName, userId) {
+  // Remove existing overlay
+  document.querySelector('.profile-card-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'profile-card-overlay';
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const card = document.createElement('div');
+  card.className = 'profile-card';
+  card.innerHTML = `<h3>${escapeHtml(playerName)}</h3><p class="text-sm text-muted">Loading stats...</p>`;
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  try {
+    const token = getAuthToken();
+    let matches = [];
+    if (userId && token) {
+      const res = await fetch(`/api/matches?userId=${encodeURIComponent(userId)}&limit=20`);
+      const data = await res.json();
+      if (data.ok) matches = data.matches || [];
+    }
+
+    const totalGames = matches.length;
+    const wins = matches.filter(m => m.survived).length;
+    const winRate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+
+    let streak = 0;
+    for (const m of matches) {
+      if (m.survived) streak++;
+      else break;
+    }
+
+    card.innerHTML = `
+      <h3>${escapeHtml(playerName)}</h3>
+      <div class="mt-8">
+        <div class="profile-card-stat"><span class="label">Games played</span><span class="value">${totalGames}</span></div>
+        <div class="profile-card-stat"><span class="label">Win rate</span><span class="value">${winRate}%</span></div>
+        <div class="profile-card-stat"><span class="label">Current streak</span><span class="value">${streak}</span></div>
+      </div>
+      ${totalGames === 0 ? '<p class="text-xs text-muted mt-8">No match history yet.</p>' : ''}
+    `;
+  } catch (_) {
+    card.innerHTML = `<h3>${escapeHtml(playerName)}</h3><p class="text-sm text-muted">Could not load profile.</p>`;
+  }
+}
+
+// Delegate player name clicks from the player view
+playersView?.addEventListener('click', (e) => {
+  const playerCard = e.target.closest('.player-card');
+  if (!playerCard) return;
+  const nameEl = playerCard.querySelector('h3');
+  if (!nameEl) return;
+  const name = nameEl.textContent.replace(' (you)', '').trim();
+  // Find the player in current state to get userId
+  const player = currentState?.players?.find(p => p.name === name);
+  showPlayerProfile(name, player?.userId);
+});
+
+// ── Sound feedback (Web Audio API) ──
+let audioCtx = null;
+let soundMuted = false;
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+  }
+  return audioCtx;
+}
+
+function playTone(freq, duration = 0.15, type = 'sine', volume = 0.3) {
+  if (soundMuted) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.value = volume;
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+function sfxGameStart() { playTone(523, 0.12); setTimeout(() => playTone(659, 0.12), 130); setTimeout(() => playTone(784, 0.2), 260); }
+function sfxPhaseChange() { playTone(440, 0.2, 'triangle', 0.2); }
+function sfxElimination() { playTone(220, 0.3, 'sawtooth', 0.15); setTimeout(() => playTone(165, 0.4, 'sawtooth', 0.1), 300); }
+function sfxWin() { playTone(523, 0.15); setTimeout(() => playTone(659, 0.15), 150); setTimeout(() => playTone(784, 0.15), 300); setTimeout(() => playTone(1047, 0.3), 450); }
+
+// Mute toggle
+soundMuted = localStorage.getItem('agentarena_muted') === '1';
+document.getElementById('muteToggle')?.addEventListener('click', () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem('agentarena_muted', soundMuted ? '1' : '0');
+  const btn = document.getElementById('muteToggle');
+  if (btn) btn.textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
+});
+
+// ── Tutorial overlay ──
+const TUTORIAL_STEPS = {
+  mafia: [
+    { title: 'Welcome to Agent Mafia', body: 'Find the mafia agent hiding among the town. Each round, discuss and vote to eliminate a suspect.' },
+    { title: 'Day & Night', body: 'During the day, everyone debates. At night, the mafia secretly eliminates a player. Survive to win!' },
+    { title: 'Ready?', body: 'Pick a name, join a room, and start playing. Good luck, detective.' },
+  ],
+  amongus: [
+    { title: 'Agents Among Us', body: 'Complete tasks around the map or sabotage them as the impostor. Trust no one.' },
+    { title: 'Emergency Meetings', body: 'Call a meeting to discuss and vote. Eject the impostor before it\'s too late!' },
+    { title: 'Ready?', body: 'Jump in and see if you can spot the impostor — or fool everyone.' },
+  ],
+  villa: [
+    { title: 'Welcome to Agent Villa', body: 'Pair up, form alliances, and survive dramatic twists on the island.' },
+    { title: 'Coupling & Twists', body: 'Each round brings recouplings and surprise events. Adapt your strategy!' },
+    { title: 'Ready?', body: 'Enter the villa and see who comes out on top.' },
+  ],
+};
+
+let tutorialMode = null;
+let tutorialStepIdx = 0;
+
+function showTutorial(mode) {
+  const key = `hasSeenTutorial_${mode}`;
+  if (localStorage.getItem(key)) return;
+  const steps = TUTORIAL_STEPS[mode];
+  if (!steps) return;
+
+  tutorialMode = mode;
+  tutorialStepIdx = 0;
+
+  const overlay = document.getElementById('tutorialOverlay');
+  if (overlay) overlay.style.display = '';
+  renderTutorialStep();
+}
+
+function renderTutorialStep() {
+  const steps = TUTORIAL_STEPS[tutorialMode] || [];
+  const step = steps[tutorialStepIdx];
+  if (!step) return closeTutorial();
+
+  const stepEl = document.getElementById('tutorialStep');
+  const dotsEl = document.getElementById('tutorialDots');
+  const nextBtn = document.getElementById('tutorialNext');
+
+  if (stepEl) stepEl.innerHTML = `<h3>${step.title}</h3><p class="text-sm text-muted mt-8">${step.body}</p>`;
+  if (dotsEl) dotsEl.innerHTML = steps.map((_, i) =>
+    `<span class="tutorial-dot${i === tutorialStepIdx ? ' active' : ''}"></span>`
+  ).join('');
+  if (nextBtn) nextBtn.textContent = tutorialStepIdx === steps.length - 1 ? 'Got it!' : 'Next';
+}
+
+function closeTutorial() {
+  if (tutorialMode) localStorage.setItem(`hasSeenTutorial_${tutorialMode}`, '1');
+  const overlay = document.getElementById('tutorialOverlay');
+  if (overlay) overlay.style.display = 'none';
+  tutorialMode = null;
+}
+
+document.getElementById('tutorialNext')?.addEventListener('click', () => {
+  tutorialStepIdx++;
+  renderTutorialStep();
+});
+
+document.getElementById('tutorialOverlay')?.addEventListener('click', (e) => {
+  if (e.target.id === 'tutorialOverlay') closeTutorial();
+});
+
+// ── Auth flow ──
+const AUTH_TOKEN_KEY = 'agentarena_auth_token';
+
+function getAuthToken() { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; }
+function setAuthToken(token) { localStorage.setItem(AUTH_TOKEN_KEY, token); }
+function clearAuthToken() { localStorage.removeItem(AUTH_TOKEN_KEY); }
+
+async function checkAuth() {
+  const token = getAuthToken();
+  const signInBtn = document.getElementById('signInBtn');
+  const profileBadge = document.getElementById('profileBadge');
+  if (!token) {
+    if (signInBtn) signInBtn.style.display = '';
+    if (profileBadge) profileBadge.style.display = 'none';
+    return null;
+  }
+  try {
+    const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (data.ok && data.user) {
+      if (signInBtn) signInBtn.style.display = 'none';
+      if (profileBadge) {
+        profileBadge.style.display = '';
+        profileBadge.textContent = data.user.displayName || data.user.email || 'You';
+        profileBadge.title = `Signed in as ${data.user.email || 'anonymous'}`;
+      }
+      // Sync userId for match history
+      if (data.user.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      return data.user;
+    }
+  } catch (_) {}
+  clearAuthToken();
+  if (signInBtn) signInBtn.style.display = '';
+  if (profileBadge) profileBadge.style.display = 'none';
+  return null;
+}
+
+document.getElementById('signInBtn')?.addEventListener('click', () => {
+  const modal = document.getElementById('signInModal');
+  if (modal?.showModal) modal.showModal();
+});
+
+document.getElementById('signInCancelBtn')?.addEventListener('click', () => {
+  document.getElementById('signInModal')?.close();
+});
+
+document.getElementById('signInForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('authEmail')?.value?.trim();
+  const displayName = document.getElementById('authDisplayName')?.value?.trim();
+  const authError = document.getElementById('authError');
+
+  if (!email || !displayName) return;
+
+  try {
+    // Try to register; if email exists, try upgrading anonymous account
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, displayName }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setAuthToken(data.session.token);
+      if (data.user?.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      document.getElementById('signInModal')?.close();
+      checkAuth();
+      return;
+    }
+    if (authError) {
+      authError.style.display = '';
+      authError.textContent = data.error || 'Sign in failed';
+    }
+  } catch (_) {
+    if (authError) {
+      authError.style.display = '';
+      authError.textContent = 'Network error — try again';
+    }
+  }
+});
+
 defaultRecoveryHint();
 updateControlState(currentState);
 void refreshOpsStatus();
 void autoJoinFromQuery();
 void loadRecentMatches();
+void checkAuth();

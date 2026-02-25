@@ -36,14 +36,21 @@ const { track: trackEvent } = require('./server/services/analytics');
 
 const app = express();
 const server = http.createServer(app);
+const PRODUCTION_ORIGINS = ['https://agent-arena-vert.vercel.app'];
+const DEV_ORIGINS = ['http://localhost:3000'];
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const effectiveOrigins = allowedOrigins.length
+  ? allowedOrigins
+  : process.env.NODE_ENV === 'production'
+    ? PRODUCTION_ORIGINS
+    : [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins.length ? allowedOrigins : true,
+    origin: effectiveOrigins,
     credentials: true,
   },
 });
@@ -214,6 +221,7 @@ function getPublicRoom(room) {
     roundEndsAt: room.roundEndsAt,
     voteEndsAt: room.voteEndsAt,
     lastWinner: room.lastWinner,
+    spectatorCount: room.spectators ? room.spectators.size : 0,
   };
 }
 
@@ -774,8 +782,44 @@ io.use((socket, next) => {
   next();
 });
 
+// ── Socket rate limiting ──
+const SOCKET_RATE_LIMIT = 30; // max events per window
+const SOCKET_RATE_WINDOW_MS = 5000;
+const socketEventCounts = new Map();
+
+function checkSocketRateLimit(socketId) {
+  const now = Date.now();
+  let entry = socketEventCounts.get(socketId);
+  if (!entry || now - entry.windowStart > SOCKET_RATE_WINDOW_MS) {
+    entry = { windowStart: now, count: 0 };
+    socketEventCounts.set(socketId, entry);
+  }
+  entry.count++;
+  return entry.count <= SOCKET_RATE_LIMIT;
+}
+
+// Cleanup stale entries periodically
+setInterval(() => {
+  const cutoff = Date.now() - SOCKET_RATE_WINDOW_MS * 2;
+  for (const [id, entry] of socketEventCounts) {
+    if (entry.windowStart < cutoff) socketEventCounts.delete(id);
+  }
+}, 30000);
+
 io.on('connection', (socket) => {
   socket.onAny((event, payload) => {
+    // Rate limit check
+    if (!checkSocketRateLimit(socket.id)) {
+      logStructured('socket.rate_limited', { socketId: socket.id, event });
+      // If sustained abuse (3x limit), disconnect
+      const entry = socketEventCounts.get(socket.id);
+      if (entry && entry.count > SOCKET_RATE_LIMIT * 3) {
+        logStructured('socket.rate_limit_disconnect', { socketId: socket.id });
+        socket.disconnect(true);
+      }
+      return;
+    }
+
     if (!event.includes(':')) return;
     const roomId = String(payload?.roomId || '').toUpperCase() || null;
     logStructured('socket.event', {
@@ -1379,7 +1423,13 @@ app.use('/api/evals/', opsLimiter);
 // ── Ops Auth Gate ──
 function opsAuthGate(req, res, next) {
   const token = process.env.OPS_ADMIN_TOKEN;
-  if (!token) return next(); // no token configured = open (dev mode)
+  if (!token) {
+    // No token configured: block in production, allow in dev
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(401).json({ ok: false, error: 'unauthorized — OPS_ADMIN_TOKEN not configured' });
+    }
+    return next();
+  }
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${token}`) {
     return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -1462,7 +1512,7 @@ function recordFirstMatchCompletion(mode, roomId) {
       });
     }
   } catch (err) {
-    console.error('recordMatch failed:', err.message);
+    logStructured('error.recordMatch', { error: err.message });
   }
 }
 
@@ -1513,7 +1563,7 @@ function persistState() {
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(serializable, null, 2));
   } catch (err) {
-    console.error('persistState failed', err.message);
+    logStructured('error.persistState', { error: err.message });
   }
 }
 
@@ -1525,7 +1575,7 @@ function loadState() {
     (parsed.roastFeed || []).forEach((r) => roastFeed.push(r));
     (parsed.votes || []).forEach((v) => votes.add(v));
   } catch (err) {
-    console.error('loadState failed', err.message);
+    logStructured('error.loadState', { error: err.message });
   }
 }
 
@@ -1679,6 +1729,113 @@ app.post('/api/auth/session', (req, res) => {
     const session = { token: token2, userId, createdAt: Date.now() };
     sessions.set(token2, session);
     res.json({ ok: true, session: { token: token2, userId } });
+  }
+});
+
+// ── Auth: register (email + display name → token) ──
+app.post('/api/auth/register', (req, res) => {
+  const { createAnonymousUser, upgradeUser, createSession } = require('./server/db');
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+  if (!displayName) {
+    return res.status(400).json({ ok: false, error: 'Display name is required' });
+  }
+
+  try {
+    const userId = shortId(12);
+    const token = shortId(24);
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+
+    createAnonymousUser(userId);
+    upgradeUser(userId, { email, displayName });
+    createSession(shortId(8), userId, token, expiresAt);
+    sessions.set(token, { token, userId, email, displayName, createdAt: Date.now() });
+
+    res.json({ ok: true, user: { id: userId, email, displayName }, session: { token, userId } });
+  } catch (err) {
+    if (err.message?.includes('UNIQUE constraint')) {
+      return res.status(409).json({ ok: false, error: 'Email already registered' });
+    }
+    res.status(500).json({ ok: false, error: 'Registration failed' });
+  }
+});
+
+// ── Auth: get current user profile ──
+app.get('/api/auth/me', (req, res) => {
+  const { getUserByToken } = require('./server/db');
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  try {
+    const user = getUserByToken(token);
+    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        isAnonymous: !!user.is_anonymous,
+        createdAt: user.created_at,
+      },
+    });
+  } catch (_err) {
+    res.status(500).json({ ok: false, error: 'Failed to fetch profile' });
+  }
+});
+
+// ── Auth: upgrade anonymous → email-based ──
+app.post('/api/auth/upgrade', (req, res) => {
+  const { getUserByToken, upgradeUser } = require('./server/db');
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+
+  try {
+    const user = getUserByToken(token);
+    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+
+    const updated = upgradeUser(user.id, { email, displayName: displayName || undefined });
+    res.json({
+      ok: true,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        displayName: updated.display_name,
+        isAnonymous: !!updated.is_anonymous,
+      },
+    });
+  } catch (err) {
+    if (err.message?.includes('UNIQUE constraint')) {
+      return res.status(409).json({ ok: false, error: 'Email already in use' });
+    }
+    res.status(500).json({ ok: false, error: 'Upgrade failed' });
+  }
+});
+
+// ── Match history for authenticated user ──
+app.get('/api/matches/mine', (req, res) => {
+  const { getUserByToken, getPlayerMatches } = require('./server/db');
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  try {
+    const user = getUserByToken(token);
+    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const matches = getPlayerMatches(user.id, limit);
+    res.json({ ok: true, matches });
+  } catch (_err) {
+    res.status(500).json({ ok: false, error: 'Failed to fetch matches' });
   }
 });
 
@@ -1965,8 +2122,69 @@ app.get('/api/matches', (req, res) => {
     const matches = getPlayerMatches(userId, limit);
     res.json({ ok: true, matches });
   } catch (err) {
-    console.error('getPlayerMatches failed:', err.message);
+    logStructured('error.getPlayerMatches', { error: err.message });
     res.status(500).json({ ok: false, error: 'failed to fetch matches' });
+  }
+});
+
+// ── Report a player/message ──
+app.post('/api/report', (req, res) => {
+  const { createReport } = require('./server/db');
+  const roomId = String(req.body?.roomId || '').trim();
+  const targetPlayer = String(req.body?.targetPlayer || '').trim().slice(0, 40);
+  const messageText = String(req.body?.messageText || '').trim().slice(0, 500);
+  const reason = String(req.body?.reason || 'inappropriate').trim().slice(0, 60);
+
+  if (!roomId || !targetPlayer) {
+    return res.status(400).json({ ok: false, error: 'roomId and targetPlayer are required' });
+  }
+
+  try {
+    // Get reporter ID from auth token if available
+    const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+    let reporterId = null;
+    if (token) {
+      const { getUserByToken } = require('./server/db');
+      const user = getUserByToken(token);
+      if (user) reporterId = user.id;
+    }
+
+    createReport({ reporterId, roomId, targetPlayer, messageText, reason });
+    logStructured('report.created', { roomId, targetPlayer, reason, reporterId });
+    res.json({ ok: true });
+  } catch (err) {
+    logStructured('error.createReport', { error: err.message });
+    res.status(500).json({ ok: false, error: 'failed to submit report' });
+  }
+});
+
+// ── Ops: list reports ──
+app.get('/api/ops/reports', (req, res) => {
+  const { getReports } = require('./server/db');
+  const status = String(req.query.status || '').trim() || undefined;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  try {
+    const reports = getReports({ status, limit });
+    res.json({ ok: true, reports });
+  } catch (err) {
+    logStructured('error.getReports', { error: err.message });
+    res.status(500).json({ ok: false, error: 'failed to fetch reports' });
+  }
+});
+
+// ── Ops: update report status ──
+app.patch('/api/ops/reports/:id', (req, res) => {
+  const { updateReportStatus } = require('./server/db');
+  const id = Number(req.params.id);
+  const status = String(req.body?.status || '').trim();
+  if (!status || !['pending', 'reviewed', 'actioned', 'dismissed'].includes(status)) {
+    return res.status(400).json({ ok: false, error: 'valid status required: pending, reviewed, actioned, dismissed' });
+  }
+  try {
+    updateReportStatus(id, status);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'failed to update report' });
   }
 });
 
@@ -2906,15 +3124,52 @@ if (process.env.SENTRY_DSN) {
 }
 
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err);
+  logStructured('error.unhandled', { error: err.message, stack: err.stack });
   res.status(500).json({ ok: false, error: 'internal server error' });
 });
 
+// ── Stale room cleanup ──
+const STALE_FINISHED_ROOM_MS = 30 * 60 * 1000; // 30 min after finish
+const STALE_EMPTY_LOBBY_MS = 15 * 60 * 1000; // 15 min empty lobby
+
+function cleanupStaleRooms() {
+  const now = Date.now();
+  let cleaned = 0;
+
+  function sweep(store, label) {
+    for (const [id, room] of store) {
+      const age = now - (room.createdAt || now);
+      const isFinished = room.status === 'finished';
+      const isEmpty = !room.players || room.players.length === 0;
+      const isEmptyLobby = room.status === 'lobby' && isEmpty;
+
+      if (isFinished && age > STALE_FINISHED_ROOM_MS) {
+        store.delete(id);
+        cleaned++;
+      } else if (isEmptyLobby && age > STALE_EMPTY_LOBBY_MS) {
+        store.delete(id);
+        cleaned++;
+      }
+    }
+  }
+
+  sweep(rooms, 'arena');
+  sweep(mafiaRooms, 'mafia');
+  sweep(amongUsRooms, 'amongus');
+  sweep(villaRooms, 'villa');
+
+  if (cleaned > 0) {
+    logStructured('rooms.cleanup', { cleaned, remaining: rooms.size + mafiaRooms.size + amongUsRooms.size + villaRooms.size });
+  }
+}
+
 if (require.main === module) {
-  // Initialize SQLite database
+  // Initialize SQLite database + run migrations
   try {
-    initDb();
+    const database = initDb();
     console.log('SQLite database initialized');
+    const { runMigrations } = require('./server/db/migrate');
+    runMigrations(database);
   } catch (err) {
     console.error('SQLite init failed:', err.message);
   }
@@ -2927,6 +3182,9 @@ if (require.main === module) {
       runAutoBattle();
     }, 20_000);
   }
+
+  // Stale room cleanup — every 5 minutes
+  setInterval(cleanupStaleRooms, 5 * 60 * 1000);
 
   server.listen(PORT, () => {
     console.log(`Agent Arena running on http://localhost:${PORT}`);

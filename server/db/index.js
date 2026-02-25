@@ -153,6 +153,28 @@ function getMatch(matchId) {
   return match;
 }
 
+// ── Report operations ──
+
+function createReport({ reporterId, roomId, targetPlayer, messageText, reason }) {
+  const database = getDb();
+  database.prepare(`
+    INSERT INTO reports (reporter_id, room_id, target_player, message_text, reason)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(reporterId || null, roomId, targetPlayer, messageText || null, reason || 'inappropriate');
+}
+
+function getReports({ status, limit } = {}) {
+  const database = getDb();
+  const where = status ? 'WHERE status = ?' : '';
+  const params = status ? [status, limit || 50] : [limit || 50];
+  return database.prepare(`SELECT * FROM reports ${where} ORDER BY created_at DESC LIMIT ?`).all(...params);
+}
+
+function updateReportStatus(id, status) {
+  const database = getDb();
+  database.prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id);
+}
+
 module.exports = {
   getDb,
   initDb,
@@ -166,4 +188,7 @@ module.exports = {
   getMatchesByUser,
   getPlayerMatches,
   getMatch,
+  createReport,
+  getReports,
+  updateReportStatus,
 };

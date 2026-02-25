@@ -1023,6 +1023,38 @@ socket.on('villa:state', (state) => {
   renderState(state);
 });
 
+// ── Reconnect UX ──
+socket.on('disconnect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner) {
+    banner.style.display = '';
+    if (bannerText) bannerText.textContent = 'Connection lost — reconnecting...';
+  }
+});
+
+socket.on('connect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner && banner.style.display !== 'none') {
+    if (bannerText) bannerText.textContent = 'Reconnected!';
+    // Auto-rejoin room if we were in one
+    if (me.roomId && me.playerId) {
+      const mode = me.game || 'mafia';
+      emitAck(`${mode}:room:join`, {
+        roomId: me.roomId,
+        name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+      }).then((res) => {
+        if (res?.ok) {
+          me.playerId = res.playerId || me.playerId;
+          renderState(res.state);
+        }
+      }).catch(() => {});
+    }
+    setTimeout(() => { banner.style.display = 'none'; }, 2000);
+  }
+});
+
 flushEventsBtn?.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/ops/events/flush', { method: 'POST' });
@@ -1251,6 +1283,15 @@ function timeAgo(isoStr) {
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
 }
+
+// Hide debug panel unless ?debug=1 is present
+(function initDebugPanelVisibility() {
+  const params = new URLSearchParams(window.location.search || '');
+  const debugPanel = document.querySelector('.dev-panel');
+  if (debugPanel && params.get('debug') !== '1') {
+    debugPanel.style.display = 'none';
+  }
+})();
 
 defaultRecoveryHint();
 updateControlState(currentState);

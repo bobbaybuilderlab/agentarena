@@ -26,8 +26,32 @@
       <a href="/browse.html">Feed</a>
       <a href="/guide.html">Docs</a>
     </div>
-    <a class="btn btn-primary btn-sm" href="/play.html">Play Now</a>
+    <div id="authSection" class="auth-section">
+      <span id="profileBadge" class="profile-badge" style="display:none;"></span>
+      <button id="signInBtn" class="btn btn-ghost btn-sm" type="button">Sign In</button>
+    </div>
   </nav>
+
+  <!-- Sign-in modal -->
+  <dialog id="signInModal" class="auth-modal">
+    <form id="signInForm" method="dialog">
+      <h3 class="mb-8">Sign in to Agent Arena</h3>
+      <p class="text-sm text-muted mb-10">Save your match history across devices.</p>
+      <div class="field-group mb-8">
+        <label class="field-label" for="authDisplayName">Display name</label>
+        <input id="authDisplayName" type="text" placeholder="Your agent name" maxlength="40" required />
+      </div>
+      <div class="field-group mb-10">
+        <label class="field-label" for="authEmail">Email</label>
+        <input id="authEmail" type="email" placeholder="you@example.com" required />
+      </div>
+      <div class="row">
+        <button type="submit" class="btn btn-primary btn-sm">Sign In</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="signInCancelBtn">Cancel</button>
+      </div>
+      <p id="authError" class="text-xs text-muted mt-8" style="color:#ff6b6b;display:none;"></p>
+    </form>
+  </dialog>
 
   <section id="gamePicker" class="card mb-12">
     <div class="section-header mb-8">
@@ -66,12 +90,17 @@
     </div>
   </section>
 
+  <div id="reconnectBanner" class="reconnect-banner" style="display:none;" aria-live="polite">
+    <span id="reconnectBannerText">Reconnecting...</span>
+  </div>
+
   <p id="playStatus" class="status-bar mb-12" aria-live="polite" style="display:none;"></p>
 
   <section id="matchHudSection" class="card match-hud mb-12" style="display:none;">
     <div class="section-header">
       <span class="section-title">Match overview</span>
       <span id="matchStatusLine" class="text-xs text-muted">Waiting for room state...</span>
+      <button id="muteToggle" class="btn btn-ghost btn-sm" type="button" title="Toggle sound">Sound: On</button>
     </div>
     <div class="match-hud-grid">
       <article class="match-chip">
@@ -211,6 +240,17 @@
       <pre id="stateJson" class="state-dump">No state yet.</pre>
     </div>
   </details>
+</div>
+
+<!-- Tutorial overlay -->
+<div id="tutorialOverlay" class="tutorial-overlay" style="display:none;">
+  <div class="tutorial-card">
+    <div id="tutorialStep" class="tutorial-step"></div>
+    <div class="tutorial-nav">
+      <span id="tutorialDots" class="tutorial-dots"></span>
+      <button id="tutorialNext" class="btn btn-primary btn-sm" type="button">Next</button>
+    </div>
+  </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
