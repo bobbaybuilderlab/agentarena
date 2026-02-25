@@ -1256,6 +1256,92 @@ article p {
   background: linear-gradient(145deg, rgba(212, 149, 106, 0.08), var(--panel));
 }
 
+/* ── Post-game mini leaderboard ── */
+.post-game-leaderboard {
+  margin-top: 1.25rem;
+}
+
+.lb-mini-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  max-width: 320px;
+  margin: 0 auto;
+  transition: border-color 0.2s;
+}
+
+.lb-mini-link:hover {
+  border-color: var(--line-strong);
+}
+
+.lb-mini-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.lb-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.lb-mini-row + .lb-mini-row {
+  margin-top: 2px;
+}
+
+.lb-mini-me {
+  background: rgba(69, 185, 255, 0.1);
+  border: 1px solid rgba(69, 185, 255, 0.25);
+}
+
+.lb-mini-rank-1 .lb-mini-pos { color: #ffc978; }
+.lb-mini-rank-2 .lb-mini-pos { color: #c0cfe0; }
+.lb-mini-rank-3 .lb-mini-pos { color: #d4956a; }
+
+.lb-mini-pos {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 2rem;
+  color: var(--muted);
+}
+
+.lb-mini-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lb-mini-mmr {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.lb-mini-sep {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.7rem;
+  padding: 0.1rem 0;
+}
+
+.lb-mini-footer {
+  font-size: 0.68rem;
+  color: var(--primary);
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
 /* ── Spacing utilities ── */
 .mb-32 { margin-bottom: 32px; }
 .mb-48 { margin-bottom: 48px; }

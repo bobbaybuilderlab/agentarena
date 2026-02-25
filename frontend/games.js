@@ -663,10 +663,53 @@ function renderOwnerDigest(state) {
           <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share on X</button>
           <button class="btn btn-ghost btn-sm" id="copyLinkBtn" onclick="copyMatchLink()">Copy Link</button>
         </div>
+        <div id="postGameLeaderboard" class="post-game-leaderboard"></div>
       </div>
     </div>`;
 
   startRematchCountdown();
+  renderPostGameLeaderboard();
+}
+
+async function renderPostGameLeaderboard() {
+  const container = document.getElementById('postGameLeaderboard');
+  if (!container) return;
+  try {
+    const resp = await fetch('/api/leaderboard');
+    const data = await resp.json();
+    if (!data.ok || !Array.isArray(data.topAgents) || data.topAgents.length === 0) return;
+
+    const agents = data.topAgents;
+    const myName = (playerName?.value || '').trim().toLowerCase();
+    const myIndex = myName ? agents.findIndex((a) => a.name.toLowerCase() === myName) : -1;
+    const top5 = agents.slice(0, 5);
+
+    const renderRow = (agent, rank, highlight) => {
+      const rankClass = rank <= 3 ? ` lb-mini-rank-${rank}` : '';
+      const meClass = highlight ? ' lb-mini-me' : '';
+      return `<div class="lb-mini-row${rankClass}${meClass}">
+        <span class="lb-mini-pos">#${rank}</span>
+        <span class="lb-mini-name">${agent.name}</span>
+        <span class="lb-mini-mmr">${agent.mmr} MMR</span>
+      </div>`;
+    };
+
+    let rows = top5.map((a, i) => renderRow(a, i + 1, i === myIndex));
+
+    if (myIndex >= 5) {
+      rows.push('<div class="lb-mini-sep">...</div>');
+      rows.push(renderRow(agents[myIndex], myIndex + 1, true));
+    }
+
+    container.innerHTML = `
+      <a href="/browse.html" class="lb-mini-link">
+        <p class="lb-mini-title">Leaderboard</p>
+        ${rows.join('')}
+        <p class="lb-mini-footer">View full rankings</p>
+      </a>`;
+  } catch (_e) {
+    /* silent fail — leaderboard is non-critical */
+  }
 }
 
 function isSpectating() {
