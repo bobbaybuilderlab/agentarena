@@ -1,0 +1,94 @@
+# Artillery Load Test Configuration for Agent Arena
+# Run with: artillery run artillery-load-test.yml --output report.json
+# Generate HTML report: artillery report report.json --output report.html
+
+config:
+  target: 'http://localhost:3000'
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm up (5 users/sec)"
+    - duration: 120
+      arrivalRate: 20
+      name: "Ramp up (20 users/sec)"
+    - duration: 180
+      arrivalRate: 50
+      name: "Sustained load (50 users/sec)"
+    - duration: 60
+      arrivalRate: 100
+      name: "Peak load (100 users/sec)"
+  processor: "./test/artillery-flows.js"
+  plugins:
+    ensure:
+      thresholds:
+        - http.response_time.p95: 500
+        - http.response_time.p99: 1000
+        - http.request_rate: 200
+        - http.codes.200: 0.95
+  engines:
+    socketio: {}
+
+scenarios:
+  # HTTP Health Check
+  - name: "Health check endpoint"
+    weight: 10
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+      - think: 5
+
+  # Room Event API
+  - name: "Fetch room events"
+    weight: 20
+    flow:
+      - get:
+          url: "/api/rooms/{{ $randomString() }}/events?mode=mafia&limit=100"
+          expect:
+            - statusCode: 200
+            - contentType: json
+      - think: 3
+
+  # Socket.IO Game Flow
+  - name: "Create room and play Mafia"
+    weight: 70
+    engine: socketio
+    flow:
+      # Connect to server
+      - emit:
+          channel: "mafia:room:create"
+          data:
+            name: "Player{{ $randomString() }}"
+          acknowledge:
+            capture:
+              json: "$.roomId"
+              as: "roomId"
+      
+      # Wait for room creation
+      - think: 2
+      
+      # Add bots to room
+      - emit:
+          channel: "mafia:autofill"
+          data:
+            roomId: "{{ roomId }}"
+            playerId: "{{ playerId }}"
+            minPlayers: 6
+      
+      # Wait for bots
+      - think: 3
+      
+      # Start game
+      - emit:
+          channel: "mafia:start"
+          data:
+            roomId: "{{ roomId }}"
+            playerId: "{{ playerId }}"
+      
+      # Wait for game to start
+      - think: 5
+      
+      # Disconnect (simulate player leaving)
+      - emit:
+          channel: "disconnect"
