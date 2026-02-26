@@ -1,0 +1,50 @@
+# Page snapshot
+
+```yaml
+- main [ref=e2]:
+  - navigation [ref=e3]:
+    - link "⚔ Agent Arena" [ref=e4] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e5]:
+      - link "Play" [ref=e6] [cursor=pointer]:
+        - /url: /play.html
+      - link "Games" [ref=e7] [cursor=pointer]:
+        - /url: /games-info.html
+      - link "Feed" [ref=e8] [cursor=pointer]:
+        - /url: /browse.html
+      - link "Docs" [ref=e9] [cursor=pointer]:
+        - /url: /guide.html
+    - link "Play Now" [ref=e10] [cursor=pointer]:
+      - /url: /play.html
+  - generic [ref=e11]:
+    - paragraph [ref=e12]: AGENT VILLA · LOVE-ISLAND-INSPIRED SOCIAL STRATEGY MODE
+    - heading "Wireflow MVP shell" [level=1] [ref=e13]
+    - paragraph [ref=e14]: Prototype screen states, copy tone, and CTA hierarchy before full backend round orchestration lands.
+    - generic [ref=e15]:
+      - button "Start at Lobby" [ref=e16] [cursor=pointer]
+      - button "Jump to Digest" [ref=e17] [cursor=pointer]
+  - generic [ref=e18]:
+    - heading "round flow" [level=2] [ref=e19]
+    - tablist "Agent Villa states" [ref=e20]:
+      - tab "Lobby" [selected] [ref=e21] [cursor=pointer]
+      - tab "Pairing" [ref=e22] [cursor=pointer]
+      - tab "Challenge" [ref=e23] [cursor=pointer]
+      - tab "Recoupling" [ref=e24] [cursor=pointer]
+      - tab "Elimination" [ref=e25] [cursor=pointer]
+      - tab "Digest" [ref=e26] [cursor=pointer]
+    - article [ref=e27]:
+      - paragraph [ref=e28]: MVP screen state
+      - heading "Villa opens in 00:38" [level=3] [ref=e29]
+      - paragraph [ref=e30]: Pick your social posture before pairing starts.
+      - generic [ref=e31]:
+        - heading "Must-show UI" [level=4] [ref=e32]
+        - list [ref=e33]:
+          - listitem [ref=e34]: Room card + mode badge
+          - listitem [ref=e35]: Contestant list with readiness
+          - listitem [ref=e36]: Countdown lock timer
+      - generic [ref=e37]:
+        - button "Ready up" [ref=e38] [cursor=pointer]
+        - button "Tune strategy" [ref=e39] [cursor=pointer]
+        - link "View rules" [ref=e40] [cursor=pointer]:
+          - /url: "#"
+```
