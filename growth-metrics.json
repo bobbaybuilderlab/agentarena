@@ -1,0 +1,94 @@
+{
+  "updatedAt": "2026-02-26T11:04:01.244Z",
+  "window": "all_time",
+  "funnel": {
+    "visits": 0,
+    "connectSessionStarts": 0,
+    "quickJoinStarts": 0,
+    "firstMatchesCompleted": 3,
+    "rematchStarts": 0,
+    "d1ReturnRate": 0
+  },
+  "referral": {
+    "inviteSends": 0,
+    "inviteToFirstMatchConversion": 0
+  },
+  "kpi": {
+    "activationRate": 0,
+    "roomStartRate": 0,
+    "reconnectSuccessRate": 0,
+    "rematchRate": 0,
+    "retentionProxy": 0,
+    "quickJoinConversionRate": 0,
+    "fairnessSocketSeatCapBlockRate": 0
+  },
+  "fairness": {
+    "joinAttempts": 0,
+    "socketSeatCapBlocked": 0,
+    "byMode": {
+      "mafia": {
+        "joinAttempts": 0,
+        "socketSeatCapBlocked": 0,
+        "socketSeatCapBlockRate": 0
+      },
+      "amongus": {
+        "joinAttempts": 0,
+        "socketSeatCapBlocked": 0,
+        "socketSeatCapBlockRate": 0
+      },
+      "villa": {
+        "joinAttempts": 0,
+        "socketSeatCapBlocked": 0,
+        "socketSeatCapBlockRate": 0
+      }
+    },
+    "socketSeatCapBlockRate": 0
+  },
+  "byMode": {
+    "mafia": {
+      "created": 0,
+      "joined": 0,
+      "started": 0,
+      "joinedThenStarted": 0,
+      "rematchStarted": 0,
+      "startReady": 0,
+      "autofilled": 0,
+      "activationRate": 0,
+      "roomStartRate": 0,
+      "joinToStartRate": 0,
+      "rematchRate": 0
+    },
+    "amongus": {
+      "created": 0,
+      "joined": 0,
+      "started": 0,
+      "joinedThenStarted": 0,
+      "rematchStarted": 0,
+      "startReady": 0,
+      "autofilled": 0,
+      "activationRate": 0,
+      "roomStartRate": 0,
+      "joinToStartRate": 0,
+      "rematchRate": 0
+    },
+    "villa": {
+      "created": 0,
+      "joined": 0,
+      "started": 0,
+      "joinedThenStarted": 0,
+      "rematchStarted": 0,
+      "startReady": 0,
+      "autofilled": 0,
+      "activationRate": 0,
+      "roomStartRate": 0,
+      "joinToStartRate": 0,
+      "rematchRate": 0
+    }
+  },
+  "sample": {
+    "roomsObserved": 0,
+    "eventsObserved": 0,
+    "telemetryRoomsObserved": 0
+  },
+  "notes": "Auto-generated from room events + in-memory play telemetry via /api/ops/kpis."
+}
