@@ -1,7 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
 :root {
-  --font-display: 'Plus Jakarta Sans', 'Sora', sans-serif;
+  --font-display: 'Inter', 'Plus Jakarta Sans', sans-serif;
   --bg-0: #070b14;
   --bg-1: #0c1424;
   --bg-2: #13233b;
@@ -23,6 +23,12 @@
   --radius-lg: 20px;
   --radius-md: 14px;
   --radius-sm: 10px;
+  /* Alias tokens — referenced in components, defined here for theming */
+  --accent: #45b9ff;
+  --green: #27d5ad;
+  --bg-card: #0e1b2d;
+  --border-subtle: #1e2a3a;
+  --text-dim: #6b7a90;
 }
 
 * {
@@ -39,7 +45,7 @@ body {
 body {
   position: relative;
   overflow-x: hidden;
-  font: 15px/1.6 'Sora', sans-serif;
+  font: 15px/1.6 'Inter', 'Plus Jakarta Sans', sans-serif;
   color: var(--text);
   background:
     radial-gradient(980px 460px at 8% -16%, rgba(69, 185, 255, 0.16), transparent 64%),
@@ -337,18 +343,32 @@ a:focus-visible {
   border-color: transparent;
   background: linear-gradient(140deg, var(--primary), var(--primary-strong));
   color: #f5fbff;
-  box-shadow: 0 8px 20px rgba(28, 154, 235, 0.33);
+  box-shadow: 0 4px 14px rgba(69,185,255,0.3), 0 1px 3px rgba(0,0,0,0.4);
 }
 
 .btn-primary:hover {
   background: linear-gradient(140deg, #57c1ff, #27a8f0);
+  transform: translateY(-1px) scale(1.01);
 }
 
-.btn-soft,
-.btn-ghost {
+/* btn-soft: subtle contained secondary button */
+.btn-soft {
   color: #d8e8ff;
   border-color: #345c84;
   background: rgba(21, 40, 67, 0.68);
+}
+
+/* btn-ghost: text-style button, minimal presence */
+.btn-ghost {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: rgba(21, 40, 67, 0.38);
 }
 
 .btn-win {
@@ -752,10 +772,11 @@ article p {
   line-height: 1.0;
   letter-spacing: -0.03em;
   margin-top: 12px;
+  text-shadow: 0 2px 40px rgba(69, 185, 255, 0.15);
 }
 
 .text-gradient {
-  background: linear-gradient(120deg, var(--primary) 0%, var(--secondary) 100%);
+  background: linear-gradient(135deg, #45b9ff 0%, #27d5ad 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -792,9 +813,11 @@ article p {
 
 /* Battle ticker */
 .battle-ticker {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
+  overflow: hidden;
+  max-width: 100%;
   font-family: 'Space Mono', monospace;
   font-size: 0.68rem;
   letter-spacing: 0.14em;
@@ -887,29 +910,40 @@ article p {
   position: relative;
 }
 
-.btn-primary::after {
+.btn-hero::after {
   content: '';
   position: absolute;
   inset: -3px;
-  border-radius: 999px;
-  border: 2px solid rgba(69, 185, 255, 0.5);
+  border-radius: inherit;
+  background: linear-gradient(140deg, rgba(69,185,255,0.4), rgba(39,213,173,0.3));
+  filter: blur(8px);
   opacity: 0;
   animation: glow-ring 2.4s ease-in-out infinite;
-  pointer-events: none;
+  z-index: -1;
 }
 
 .btn-primary:hover {
   box-shadow: 0 0 40px rgba(69, 185, 255, 0.4), 0 8px 20px rgba(28, 154, 235, 0.33);
 }
 
-/* Card hover lift */
+/* Card base — transition for border/shadow, no universal lift */
 .card,
 .panel {
+  transition: box-shadow 200ms ease, border-color 200ms ease;
+  backdrop-filter: blur(8px);
+  background: rgba(13, 24, 42, 0.82);
+}
+
+/* Lift only on explicitly interactive cards */
+.card--interactive,
+.card[href],
+.card[role="button"] {
   transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
 }
 
-.card:hover,
-.panel:hover {
+.card--interactive:hover,
+.card[href]:hover,
+.card[role="button"]:hover {
   transform: translateY(-3px);
   box-shadow: 0 16px 40px rgba(2, 8, 19, 0.4), 0 0 24px rgba(69, 185, 255, 0.08);
   border-color: var(--line-strong);
@@ -1355,7 +1389,7 @@ article p {
 /* ── Game Picker (play.html) ── */
 .game-picker-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 14px;
 }
 
@@ -1642,3 +1676,226 @@ article p {
 .tutorial-dot.active {
   background: #abdbff;
 }
+
+/* ── Step 11: Game detail articles ── */
+.game-detail-article {
+  margin-top: 16px;
+  padding: 20px;
+  background: rgba(255,255,255,0.03);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.game-detail-article + .game-detail-article { margin-top: 16px; }
+.game-detail-h4 {
+  font-size: 13px;
+  color: var(--primary);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+/* ── Step 12: Coming Soon Badge ── */
+.coming-soon-badge {
+  font-size: 0.62rem;
+  background: rgba(167,139,250,0.15);
+  border: 1px solid rgba(167,139,250,0.4);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #c4b5fd;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+/* ── Step 13: Game picker selected state ── */
+.game-picker-card.is-selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(69,185,255,0.2);
+}
+
+/* ── Step 21: Roast card (index) ── */
+.game-card-roast { border-left: 3px solid #a78bfa; }
+
+/* ── Step 22: Roast card (play picker) ── */
+.game-picker-roast {
+  border-top: 3px solid #a78bfa;
+  opacity: 0.85; /* slightly muted to signal unavailable, but still readable */
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Step 14: Mobile Nav Hamburger ── */
+.nav-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: 8px;
+  transition: background 120ms ease;
+}
+.nav-hamburger:hover { background: rgba(69,185,255,0.08); }
+
+@media (max-width: 760px) {
+  .nav-links { display: none !important; }
+  .nav-hamburger { display: flex; align-items: center; }
+}
+
+.nav-drawer {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(7,11,20,0.96);
+  backdrop-filter: blur(12px);
+  flex-direction: column;
+  gap: 24px;
+  padding: 32px;
+  padding-top: 80px;
+}
+.nav-drawer a {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(104,148,194,0.1);
+}
+.nav-drawer a:hover { color: var(--primary); }
+.nav-drawer-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.6rem;
+  cursor: pointer;
+}
+
+body.nav-mobile-open .nav-drawer { display: flex; }
+body.nav-mobile-open { overflow: hidden; }
+
+/* ── Step 15: Stat Skeleton Loading ── */
+.stat-skeleton {
+  display: inline-block;
+  min-width: 32px;
+  height: 1em;
+  background: linear-gradient(90deg,
+    rgba(69,185,255,0.08) 25%,
+    rgba(69,185,255,0.16) 50%,
+    rgba(69,185,255,0.08) 75%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  vertical-align: middle;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── arena-review-ui-002 fixes ────────────────────────────── */
+
+/* Fix: inline <code> elements — styled for documentation readability */
+:not(.code-block) > code,
+p code,
+li code,
+td code,
+h3 code,
+h4 code {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.82em;
+  background: rgba(69, 185, 255, 0.08);
+  border: 1px solid rgba(69, 185, 255, 0.18);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #b8e7ff;
+  white-space: nowrap;
+}
+
+/* Fix: minimum label sizes — raise floor to 0.72rem (~11.5px) */
+.kicker,
+.section-title,
+.field-label,
+.mission-kicker {
+  font-size: 0.72rem;
+}
+
+.live-badge {
+  font-size: 0.72rem;
+}
+
+.battle-ticker {
+  font-size: 0.72rem;
+}
+
+.coming-soon-badge {
+  font-size: 0.68rem; /* badge-only context, slightly smaller is ok */
+}
+
+.player-pill {
+  font-size: 0.68rem;
+}
+
+.player-state {
+  font-size: 0.69rem;
+}
+
+/* Fix: reconnect banner — use design tokens, match site theme */
+.reconnect-banner {
+  background: rgba(255, 201, 120, 0.1);
+  border-bottom: 1px solid rgba(255, 201, 120, 0.35);
+  color: var(--warning);
+  backdrop-filter: blur(8px);
+  animation: none; /* remove jarring pulse on a persistent banner */
+}
+
+/* Fix: battle ticker overflow — was an inline style on index.html */
+.battle-ticker-wrap {
+  overflow: hidden;
+  max-width: 100%;
+}
+
+/* Fix: h2/h3 vertical rhythm inside .panel — replaces inline styles */
+.panel h2,
+.panel h3 {
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+
+.panel h2:first-child,
+.panel h3:first-child,
+.panel h1:first-child {
+  margin-top: 0;
+}
+
+/* Fix: guide.html table — remove need for inline styles */
+.event-table {
+  width: 100%;
+  font-size: 0.82rem;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.event-table thead tr {
+  text-align: left;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.event-table td,
+.event-table th {
+  padding: 7px 10px;
+  vertical-align: top;
+}
+
+.event-table tbody tr:hover {
+  background: rgba(69, 185, 255, 0.03);
+}
+
+/* Fix: theme-color meta fallback (applied via JS) */
+/* Note: add <meta name="theme-color" content="#070b14"> to all pages */

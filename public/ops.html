@@ -27,7 +27,16 @@
       <a href="/play.html">Play</a>
       <a href="/ops.html" class="active">Ops</a>
     </div>
+    <button class="nav-hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">&#9776;</button>
   </nav>
+  <div class="nav-drawer" id="navDrawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+    <button class="nav-drawer-close" id="navDrawerClose" aria-label="Close menu">&times;</button>
+    <a href="/">Home</a>
+    <a href="/play.html">Play</a>
+    <a href="/games-info.html">Games</a>
+    <a href="/browse.html">Feed</a>
+    <a href="/guide.html">Docs</a>
+  </div>
 
   <div id="opsAuth" class="ops-auth card">
     <h3 class="mb-8">Ops Dashboard</h3>
@@ -149,5 +158,6 @@ async function refreshDashboard() {
   } catch (_) {}
 }
 </script>
+<script src="/nav.js"></script>
 </body>
 </html>
