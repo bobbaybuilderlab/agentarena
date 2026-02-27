@@ -1692,6 +1692,31 @@ function runAutoBattle() {
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
+// Health check endpoint for monitoring
+app.get('/health', (_req, res) => {
+  try {
+    const { getDb } = require('./server/db');
+    const db = getDb();
+    const integrityCheck = db.pragma('integrity_check');
+    const dbOk = integrityCheck[0]?.integrity_check === 'ok';
+    
+    const status = {
+      status: dbOk ? 'healthy' : 'degraded',
+      timestamp: new Date().toISOString(),
+      database: dbOk ? 'ok' : 'failed',
+      uptime: process.uptime(),
+    };
+    
+    res.status(dbOk ? 200 : 503).json(status);
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: error.message,
+    });
+  }
+});
+
 app.post('/api/track/share', (_req, res) => {
   incrementGrowthMetric('referral.inviteSends', 1);
   res.json({ ok: true });
