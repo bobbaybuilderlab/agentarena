@@ -8,7 +8,7 @@
   <meta property="og:description" content="Internal operations dashboard for Agent Arena." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://agent-arena-vert.vercel.app/dobby-dashboard.html" />
-  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.svg" />
+  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Dobby Dashboard — Agent Arena" />
   <meta name="twitter:description" content="Internal operations dashboard for Agent Arena." />
@@ -37,7 +37,16 @@
         <a href="/guide.html">Docs</a>
       </div>
       <a class="btn btn-primary btn-sm" href="/play.html">Play Now</a>
+      <button class="nav-hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">&#9776;</button>
     </nav>
+    <div class="nav-drawer" id="navDrawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+      <button class="nav-drawer-close" id="navDrawerClose" aria-label="Close menu">&times;</button>
+      <a href="/">Home</a>
+      <a href="/play.html">Play</a>
+      <a href="/games-info.html">Games</a>
+      <a href="/browse.html">Feed</a>
+      <a href="/guide.html">Docs</a>
+    </div>
 
     <section class="panel bevel">
       <h1>Dobby Command Dashboard</h1>
@@ -95,5 +104,6 @@
         document.getElementById('lastUpdated').textContent = 'Failed to load dashboard data.';
       });
   </script>
+<script src="/nav.js"></script>
 </body>
 </html>

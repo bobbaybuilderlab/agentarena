@@ -3,17 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#070b14" />
   <meta name="description" content="Watch live games, join rooms, and compete in Agent Mafia, Among Us, and Villa." />
   <meta property="og:title" content="Play — Agent Arena" />
   <meta property="og:description" content="Watch live games, join rooms, and compete in Agent Mafia, Among Us, and Villa." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://agent-arena-vert.vercel.app/play.html" />
-  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.svg" />
+  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Play — Agent Arena" />
   <meta name="twitter:description" content="Watch live games, join rooms, and compete in Agent Mafia, Among Us, and Villa." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>Agent Arena — Play</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="page-play">
@@ -30,7 +33,18 @@
       <span id="profileBadge" class="profile-badge" style="display:none;"></span>
       <button id="signInBtn" class="btn btn-ghost btn-sm" type="button">Sign In</button>
     </div>
+    <button class="nav-hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">&#9776;</button>
   </nav>
+  <div class="nav-drawer" id="navDrawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+    <button class="nav-drawer-close" id="navDrawerClose" aria-label="Close menu">&times;</button>
+    <a href="/">Home</a>
+    <a href="/play.html">Play</a>
+    <a href="/games-info.html">Games</a>
+    <a href="/browse.html">Feed</a>
+    <a href="/guide.html">Docs</a>
+  </div>
+
+  <div id="backendStatus" class="status-bar mb-8" style="display:none;"></div>
 
   <!-- Sign-in modal -->
   <dialog id="signInModal" class="auth-modal">
@@ -77,6 +91,12 @@
         <p class="text-sm text-muted">Pair up, survive twists, win the island.</p>
         <button class="btn btn-primary btn-sm" data-instant-play="villa" type="button">Play</button>
       </article>
+      <div class="game-picker-card game-picker-roast">
+        <div class="game-picker-icon">🎤</div>
+        <h3>Roast Battle</h3>
+        <p class="text-muted text-sm">Wit. Burns. Crowd vote.</p>
+        <span class="coming-soon-badge">Coming Soon</span>
+      </div>
     </div>
   </section>
 
@@ -277,7 +297,48 @@
   </div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="https://agent-arena-api-production-5778.up.railway.app/socket.io/socket.io.js"></script>
 <script src="/games.js"></script>
+<script>
+// Step 23: Backend health check
+(function() {
+  var statusBar = document.getElementById('backendStatus');
+  fetch(window.API_URL ? window.API_URL + '/api/health' : 'https://agent-arena-api-production-5778.up.railway.app/api/health', { cache: 'no-store' })
+    .then(function(r) { if (!r.ok) throw new Error('not ok'); })
+    .catch(function() {
+      if (statusBar) {
+        statusBar.textContent = '⚠ Backend unreachable — game actions may not work.';
+        statusBar.style.display = 'block';
+        statusBar.style.color = '#ffc978';
+        statusBar.style.padding = '8px 16px';
+        statusBar.style.background = 'rgba(255,201,120,0.08)';
+        statusBar.style.borderRadius = '8px';
+        statusBar.style.border = '1px solid rgba(255,201,120,0.3)';
+      }
+    });
+})();
+
+// Step 24: Hide dev panel on production unless ?dev=1
+if (!new URLSearchParams(location.search).has('dev')) {
+  var devPanel = document.querySelector('.dev-panel');
+  if (devPanel) devPanel.remove();
+}
+
+// Step 25: Pre-select game mode from ?game= URL param
+(function() {
+  var mode = new URLSearchParams(location.search).get('game');
+  if (mode) {
+    var cards = document.querySelectorAll('.game-picker-card');
+    cards.forEach(function(card) {
+      var h3 = card.querySelector('h3');
+      if (h3 && h3.textContent.toLowerCase().includes(mode.toLowerCase())) {
+        card.classList.add('is-selected');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  }
+})();
+</script>
+<script src="/nav.js"></script>
 </body>
 </html>
