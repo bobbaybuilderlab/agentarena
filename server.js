@@ -829,7 +829,8 @@ io.on('connection', (socket) => {
       roomId,
     });
   });
-  socket.on('mafia:room:create', ({ name }, cb) => {
+  socket.on('mafia:room:create', (payload, cb) => {
+    const { name } = payload || {};
     const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`mafia:${created.room.id}`);
@@ -838,7 +839,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: mafiaGame.toPublic(created.room) });
   });
 
-  socket.on('mafia:room:join', ({ roomId, name, claimToken }, cb) => {
+  socket.on('mafia:room:join', (payload, cb) => {
+    const { roomId, name, claimToken } = payload || {};
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     if (normalizedRoomId && mafiaRooms.has(normalizedRoomId)) recordJoinAttempt('mafia', normalizedRoomId);
     const reconnect = resolveReconnectJoinName('mafia', roomId, name, claimToken);
@@ -857,7 +859,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
   });
 
-  socket.on('mafia:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+  socket.on('mafia:autofill', (payload, cb) => {
+    const { roomId, playerId, minPlayers } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -866,7 +869,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, addedBots: result.addedBots, state: mafiaGame.toPublic(result.room) });
   });
 
-  socket.on('mafia:start', ({ roomId, playerId }, cb) => {
+  socket.on('mafia:start', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -878,7 +882,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
-  socket.on('mafia:start-ready', ({ roomId, playerId }, cb) => {
+  socket.on('mafia:start-ready', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -886,7 +891,8 @@ io.on('connection', (socket) => {
     cb?.(started);
   });
 
-  socket.on('mafia:rematch', ({ roomId, playerId }, cb) => {
+  socket.on('mafia:rematch', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -909,7 +915,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
-  socket.on('mafia:action', ({ roomId, playerId, type, targetId }, cb) => {
+  socket.on('mafia:action', (payload, cb) => {
+    const { roomId, playerId, type, targetId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -931,7 +938,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: mafiaGame.toPublic(result.room) });
   });
 
-  socket.on('amongus:room:create', ({ name }, cb) => {
+  socket.on('amongus:room:create', (payload, cb) => {
+    const { name } = payload || {};
     const created = amongUsGame.createRoom(amongUsRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`amongus:${created.room.id}`);
@@ -940,7 +948,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: amongUsGame.toPublic(created.room) });
   });
 
-  socket.on('amongus:room:join', ({ roomId, name, claimToken }, cb) => {
+  socket.on('amongus:room:join', (payload, cb) => {
+    const { roomId, name, claimToken } = payload || {};
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     if (normalizedRoomId && amongUsRooms.has(normalizedRoomId)) recordJoinAttempt('amongus', normalizedRoomId);
     const reconnect = resolveReconnectJoinName('amongus', roomId, name, claimToken);
@@ -959,7 +968,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: amongUsGame.toPublic(joined.room) });
   });
 
-  socket.on('amongus:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+  socket.on('amongus:autofill', (payload, cb) => {
+    const { roomId, playerId, minPlayers } = payload || {};
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -968,7 +978,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, addedBots: result.addedBots, state: amongUsGame.toPublic(result.room) });
   });
 
-  socket.on('amongus:start', ({ roomId, playerId }, cb) => {
+  socket.on('amongus:start', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -980,7 +991,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
   });
 
-  socket.on('amongus:start-ready', ({ roomId, playerId }, cb) => {
+  socket.on('amongus:start-ready', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -988,7 +1000,8 @@ io.on('connection', (socket) => {
     cb?.(started);
   });
 
-  socket.on('amongus:rematch', ({ roomId, playerId }, cb) => {
+  socket.on('amongus:rematch', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -1011,7 +1024,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: amongUsGame.toPublic(started.room) });
   });
 
-  socket.on('amongus:action', ({ roomId, playerId, type, targetId }, cb) => {
+  socket.on('amongus:action', (payload, cb) => {
+    const { roomId, playerId, type, targetId } = payload || {};
     const room = amongUsRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -1033,7 +1047,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: amongUsGame.toPublic(result.room) });
   });
 
-  socket.on('villa:room:create', ({ name }, cb) => {
+  socket.on('villa:room:create', (payload, cb) => {
+    const { name } = payload || {};
     const created = villaGame.createRoom(villaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`villa:${created.room.id}`);
@@ -1042,7 +1057,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, state: villaGame.toPublic(created.room) });
   });
 
-  socket.on('villa:room:join', ({ roomId, name, claimToken }, cb) => {
+  socket.on('villa:room:join', (payload, cb) => {
+    const { roomId, name, claimToken } = payload || {};
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     if (normalizedRoomId && villaRooms.has(normalizedRoomId)) recordJoinAttempt('villa', normalizedRoomId);
     const reconnect = resolveReconnectJoinName('villa', roomId, name, claimToken);
@@ -1066,7 +1082,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: villaGame.toPublic(joined.room) });
   });
 
-  socket.on('villa:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+  socket.on('villa:autofill', (payload, cb) => {
+    const { roomId, playerId, minPlayers } = payload || {};
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -1075,7 +1092,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, addedBots: result.addedBots, state: villaGame.toPublic(result.room) });
   });
 
-  socket.on('villa:start', ({ roomId, playerId }, cb) => {
+  socket.on('villa:start', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -1087,7 +1105,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: villaGame.toPublic(started.room) });
   });
 
-  socket.on('villa:start-ready', ({ roomId, playerId }, cb) => {
+  socket.on('villa:start-ready', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } });
@@ -1095,7 +1114,8 @@ io.on('connection', (socket) => {
     cb?.(started);
   });
 
-  socket.on('villa:rematch', ({ roomId, playerId }, cb) => {
+  socket.on('villa:rematch', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -1118,7 +1138,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: villaGame.toPublic(started.room) });
   });
 
-  socket.on('villa:action', ({ roomId, playerId, type, targetId }, cb) => {
+  socket.on('villa:action', (payload, cb) => {
+    const { roomId, playerId, type, targetId } = payload || {};
     const room = villaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
@@ -1152,7 +1173,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: room.id, playerId: result.player.id, themes: THEMES });
   });
 
-  socket.on('room:join', ({ roomId, name, type, owner }, cb) => {
+  socket.on('room:join', (payload, cb) => {
+    const { roomId, name, type, owner } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     socket.join(room.id);
@@ -1165,7 +1187,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: room.id, playerId: result.player.id, themes: THEMES });
   });
 
-  socket.on('room:watch', ({ roomId }, cb) => {
+  socket.on('room:watch', (payload, cb) => {
+    const { roomId } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     socket.join(room.id);
@@ -1175,7 +1198,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: room.id });
   });
 
-  socket.on('bot:add', ({ roomId, name, persona }, cb) => {
+  socket.on('bot:add', (payload, cb) => {
+    const { roomId, name, persona } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.hostSocketId !== socket.id) return cb?.({ ok: false, error: 'Host only' });
@@ -1187,7 +1211,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, botId: bot.id });
   });
 
-  socket.on('battle:start', ({ roomId }, cb) => {
+  socket.on('battle:start', (payload, cb) => {
+    const { roomId } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.hostSocketId !== socket.id) return cb?.({ ok: false, error: 'Host only' });
@@ -1206,7 +1231,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on('theme:random', ({ roomId }, cb) => {
+  socket.on('theme:random', (payload, cb) => {
+    const { roomId } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.hostSocketId !== socket.id) return cb?.({ ok: false, error: 'Host only' });
@@ -1217,7 +1243,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, theme: room.theme });
   });
 
-  socket.on('roast:submit', ({ roomId, text }, cb) => {
+  socket.on('roast:submit', (payload, cb) => {
+    const { roomId, text } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.status !== 'round') return cb?.({ ok: false, error: 'Round not active' });
@@ -1282,7 +1309,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on('vote:cast', ({ roomId, playerId }, cb) => {
+  socket.on('vote:cast', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.status !== 'voting') return cb?.({ ok: false, error: 'Voting closed' });
@@ -1315,7 +1343,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on('battle:reset', ({ roomId }, cb) => {
+  socket.on('battle:reset', (payload, cb) => {
+    const { roomId } = payload || {};
     const room = rooms.get((roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: 'Room not found' });
     if (room.hostSocketId !== socket.id) return cb?.({ ok: false, error: 'Host only' });
@@ -2852,12 +2881,25 @@ app.post('/api/play/instant', (req, res) => {
   // Auto-fill with bots
   const filled = autoFillLobbyBots(mode, room.id, 4);
 
-  trackEvent('instant_play_created', playerName, { mode, roomId: room.id });
+  // Auto-start the game server-side so users land in an active game, not a stuck lobby.
+  // startReadyLobby requires a socket ownership check, so we call game.startGame() directly.
+  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
+  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mafiaGame;
+  const started = game.startGame(store, { roomId: room.id, hostPlayerId: room.hostPlayerId });
+  if (started.ok) {
+    if (mode === 'mafia')    scheduleMafiaPhase(started.room);
+    else if (mode === 'amongus') scheduleAmongUsPhase(started.room);
+    else                        scheduleVillaPhase(started.room);
+    logRoomEvent(mode, started.room, 'INSTANT_PLAY_STARTED', { players: started.room.players.length, phase: started.room.phase });
+  }
+
+  trackEvent('instant_play_created', playerName, { mode, roomId: room.id, autoStarted: started.ok });
 
   res.json({
     ok: true,
     mode,
     roomId: room.id,
+    gameStarted: started.ok,
     playUrl: `/play.html?mode=${mode}&room=${room.id}&name=${encodeURIComponent(playerName)}&autojoin=1&instant=1`,
     players: room.players.length,
   });
@@ -2882,12 +2924,19 @@ app.get('/api/play/watch', (_req, res) => {
     });
   }
 
-  // No active games -- create one with all bots for spectating
+  // No active games -- create one with all bots for spectating and start it immediately.
   const mode = 'mafia';
   const created = createQuickJoinRoom(mode, 'Spectator');
   if (!created.ok) return res.json({ ok: true, found: false, message: 'No active games. Try Play Now!' });
 
   autoFillLobbyBots(mode, created.room.id, 4);
+
+  // Start the bot game so spectators see a live game, not a stuck lobby.
+  const watchStarted = mafiaGame.startGame(mafiaRooms, { roomId: created.room.id, hostPlayerId: created.room.hostPlayerId });
+  if (watchStarted.ok) {
+    scheduleMafiaPhase(watchStarted.room);
+    logRoomEvent(mode, watchStarted.room, 'WATCH_BOT_GAME_STARTED', { players: watchStarted.room.players.length });
+  }
 
   res.json({
     ok: true,
@@ -2897,6 +2946,7 @@ app.get('/api/play/watch', (_req, res) => {
     watchUrl: `/play.html?mode=${mode}&room=${created.room.id}&spectate=1`,
     players: created.room.players.length,
     autoCreated: true,
+    gameStarted: watchStarted.ok,
   });
 });
 

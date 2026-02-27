@@ -1,15 +1,20 @@
 const { randomUUID } = require('crypto');
 
-function shortId(len = 6) {
-  return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
+function shortId(len = 8) {
+  return randomUUID().replace(/-/g, '').slice(0, len);
 }
 
-function correlationId() {
-  return randomUUID();
+function correlationId(input) {
+  if (input === null || input === undefined) return shortId(12);
+  const str = typeof input === 'string' ? input : String(input);
+  const trimmed = str.trim();
+  if (!trimmed) return shortId(12);
+  if (trimmed.length > 64) return trimmed.slice(0, 64);
+  return trimmed;
 }
 
-function logStructured(data) {
-  console.log(JSON.stringify({ ...data, timestamp: new Date().toISOString() }));
+function logStructured(event, fields = {}) {
+  console.log(JSON.stringify({ event, ...fields, at: new Date().toISOString() }));
 }
 
 module.exports = {
