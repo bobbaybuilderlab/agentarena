@@ -770,6 +770,33 @@ function renderActions(state) {
     return;
   }
 
+  // Lobby phase: show a clear Start Game CTA so users are never stuck in a lobby
+  // with no visible way to proceed (start button is hidden in dev panel on production).
+  if (state.status === 'lobby') {
+    const isHost = state.hostPlayerId === me.playerId;
+    const playerCount = (state.players || []).length;
+    if (isHost) {
+      actionsView.innerHTML = `
+        <p class="text-sm text-muted mb-8">All ${playerCount} players ready. You're the host — start when ready.</p>
+        <button class="btn btn-primary" id="lobbyStartCtaBtn" type="button" style="width:100%;justify-content:center;">Start Game</button>
+      `;
+      document.getElementById('lobbyStartCtaBtn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('lobbyStartCtaBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+        const res = await emitAck(activeEvent('start-ready'), { roomId: me.roomId, playerId: me.playerId });
+        if (!res?.ok) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Start Game'; }
+          setStatus(formatError(res, 'Start failed'), 'error');
+          return;
+        }
+        renderState(res.state);
+      });
+    } else {
+      actionsView.innerHTML = `<p class="text-sm text-muted">Waiting for the host to start · ${playerCount}/4 players</p>`;
+    }
+    return;
+  }
+
   if (mePlayer.alive === false && state.status === 'in_progress') {
     actionsView.innerHTML = '<p class="text-sm text-muted">You are eliminated. No further actions this round.</p>';
     return;
@@ -1300,20 +1327,31 @@ initGamePickerVisibility();
 })();
 
 // Handle instant play auto-start
+// Server now starts the game before the client arrives, so this is belt-and-suspenders.
+// If the game is already in_progress, the state will reflect that. If still in lobby
+// (e.g. race condition), retry start-ready until me.playerId is available.
 (function handleInstantPlay() {
   const params = new URLSearchParams(window.location.search || '');
-  if (params.get('instant') === '1' && params.get('room')) {
-    // Auto-join and start after short delay
-    setTimeout(async () => {
-      if (!me.roomId) return;
-      const mode = selectedMode();
-      try {
-        // Auto-start the game
-        const res = await emit(`${mode}:startGame`, { roomId: me.roomId });
-        if (res?.ok) renderState(res.state || res);
-      } catch (_err) { /* will be started by host flow */ }
-    }, 2000);
+  if (params.get('instant') !== '1' || !params.get('room')) return;
+
+  let attempts = 0;
+  const MAX_ATTEMPTS = 12; // up to 6s of retries (every 500ms)
+
+  function tryAutoStart() {
+    attempts++;
+    // Only act if we're still in the lobby — server may have already started the game.
+    if (currentState && currentState.status !== 'lobby') return;
+    if (!me.roomId || !me.playerId) {
+      if (attempts < MAX_ATTEMPTS) setTimeout(tryAutoStart, 500);
+      return;
+    }
+    const mode = me.game || selectedMode();
+    emitAck(`${mode}:start-ready`, { roomId: me.roomId, playerId: me.playerId })
+      .then((res) => { if (res?.ok) renderState(res.state); })
+      .catch(() => {});
   }
+
+  setTimeout(tryAutoStart, 1500);
 })();
 
 // ── Recent Games widget ──
