@@ -1642,3 +1642,264 @@ article p {
 .tutorial-dot.active {
   background: #abdbff;
 }
+
+/* ── Waiting / Matchmaking Overlay ── */
+.waiting-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(7, 11, 20, 0.88);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9997;
+  animation: waiting-fade-in 0.4s ease forwards;
+}
+
+.waiting-overlay.waiting-exit {
+  animation: waiting-fade-out 0.5s ease forwards;
+}
+
+.waiting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  padding: 40px 36px 32px;
+  max-width: 400px;
+  width: 90vw;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-lg), 0 0 80px rgba(69, 185, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+.waiting-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 18%);
+}
+
+/* Orbiting player indicators */
+.waiting-orb-ring {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.waiting-orb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  top: 50%;
+  left: 50%;
+  margin: -7px 0 0 -7px;
+  animation: waiting-orbit 3.6s linear infinite;
+}
+
+.waiting-orb-1 {
+  background: var(--primary);
+  box-shadow: 0 0 12px rgba(69, 185, 255, 0.7);
+  animation-delay: 0s;
+}
+
+.waiting-orb-2 {
+  background: var(--secondary);
+  box-shadow: 0 0 12px rgba(39, 213, 173, 0.7);
+  animation-delay: -0.9s;
+}
+
+.waiting-orb-3 {
+  background: var(--warning);
+  box-shadow: 0 0 12px rgba(255, 201, 120, 0.7);
+  animation-delay: -1.8s;
+}
+
+.waiting-orb-4 {
+  background: var(--danger);
+  box-shadow: 0 0 12px rgba(255, 135, 153, 0.6);
+  animation-delay: -2.7s;
+  opacity: 0.4;
+}
+
+.waiting-orb.orb-found {
+  opacity: 1 !important;
+  animation: waiting-orbit 3.6s linear infinite, waiting-orb-glow 1s ease forwards;
+}
+
+.waiting-center-pulse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border-radius: 999px;
+  border: 2px solid rgba(69, 185, 255, 0.3);
+  animation: waiting-center-breathe 2.4s ease-in-out infinite;
+}
+
+.waiting-title {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.waiting-player-count {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 0.04em;
+  min-height: 1.4em;
+}
+
+.waiting-player-count.count-updated {
+  animation: waiting-count-pop 0.4s ease;
+}
+
+/* Progress track */
+.waiting-progress-track {
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(69, 185, 255, 0.12);
+  overflow: hidden;
+}
+
+.waiting-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  width: 0%;
+  animation: waiting-progress-sweep 8s ease-in-out infinite;
+}
+
+.waiting-eta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* Tip container */
+.waiting-tip-container {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(7, 15, 27, 0.6);
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waiting-tip-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--secondary);
+}
+
+.waiting-tip-text {
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+  transition: opacity 0.3s ease;
+}
+
+.waiting-tip-text.tip-fading {
+  opacity: 0;
+}
+
+.waiting-cancel-btn {
+  margin-top: 4px;
+  color: var(--muted);
+  border-color: rgba(104, 148, 194, 0.2);
+}
+
+/* Keyframes — waiting overlay */
+@keyframes waiting-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes waiting-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes waiting-orbit {
+  from {
+    transform: rotate(0deg) translateX(46px) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(46px) rotate(-360deg);
+  }
+}
+
+@keyframes waiting-center-breathe {
+  0%, 100% {
+    transform: scale(1);
+    border-color: rgba(69, 185, 255, 0.2);
+    box-shadow: 0 0 0 0 rgba(69, 185, 255, 0);
+  }
+  50% {
+    transform: scale(1.15);
+    border-color: rgba(69, 185, 255, 0.45);
+    box-shadow: 0 0 20px rgba(69, 185, 255, 0.15);
+  }
+}
+
+@keyframes waiting-count-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes waiting-progress-sweep {
+  0% { width: 5%; }
+  50% { width: 70%; }
+  100% { width: 5%; }
+}
+
+@keyframes waiting-orb-glow {
+  from {
+    box-shadow: 0 0 12px currentColor;
+    transform: scale(1);
+  }
+  to {
+    box-shadow: 0 0 20px currentColor;
+    transform: scale(1.2);
+  }
+}
+
+@media (max-width: 760px) {
+  .waiting-card {
+    padding: 32px 20px 24px;
+    gap: 12px;
+  }
+
+  .waiting-orb-ring {
+    width: 100px;
+    height: 100px;
+  }
+
+  .waiting-title {
+    font-size: 1.1rem;
+  }
+}

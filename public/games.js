@@ -55,6 +55,126 @@ let pendingUiAction = false;
 let rematchCountdownTimer = null;
 let rematchCountdownSeconds = 0;
 
+// ── Waiting overlay controller ──
+const waitingTips = {
+  mafia: [
+    'The mafia knows each other — town must figure out who to trust.',
+    'Pay attention to voting patterns. Consistent allies may be covering for each other.',
+    'As mafia, blend in. Accuse others early to deflect suspicion.',
+    'The doctor can save one player per night. Protect the most vocal town member.',
+    'A quiet player isn\'t always innocent — silence can be a strategy.',
+    'Discussion phase is your best weapon. Use it wisely.',
+    'Watch who defends eliminated players — they may share allegiance.',
+  ],
+  amongus: [
+    'Complete your tasks to win as crew — but watch your back.',
+    'Impostors can sabotage. Fix critical systems before time runs out.',
+    'Report suspicious behavior in meetings. Details matter.',
+    'Stick with a buddy to create alibis, but trust no one completely.',
+    'If you see someone vent, call a meeting immediately.',
+    'Task completion progress is visible to everyone — fake-tasking is risky.',
+    'Emergency meetings are limited. Save them for when you have real evidence.',
+  ],
+  villa: [
+    'Pair strategically — your partner affects your survival chances.',
+    'Twists can change everything. Stay adaptable.',
+    'Public opinion matters. Build alliances before elimination rounds.',
+    'Challenge performance can save you from the bottom.',
+    'Recoupling is your chance to shift power dynamics.',
+    'Don\'t reveal your full strategy too early — others are watching.',
+    'The island rewards social players. Stay connected with everyone.',
+  ],
+};
+let waitingTipTimer = null;
+let waitingTipIndex = 0;
+let waitingStartTime = 0;
+let waitingPrevPlayerCount = 0;
+
+function showWaitingOverlay(mode, playerCount, maxPlayers) {
+  const overlay = document.getElementById('waitingOverlay');
+  if (!overlay) return;
+  overlay.style.display = '';
+  overlay.classList.remove('waiting-exit');
+  waitingStartTime = waitingStartTime || Date.now();
+  updateWaitingPlayerCount(playerCount || 0, maxPlayers || 4);
+  startWaitingTips(mode || me.game || 'mafia');
+}
+
+function hideWaitingOverlay() {
+  const overlay = document.getElementById('waitingOverlay');
+  if (!overlay || overlay.style.display === 'none') return;
+  overlay.classList.add('waiting-exit');
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    overlay.classList.remove('waiting-exit');
+  }, 500);
+  stopWaitingTips();
+  waitingStartTime = 0;
+  waitingPrevPlayerCount = 0;
+}
+
+function updateWaitingPlayerCount(count, max) {
+  const el = document.getElementById('waitingPlayerCount');
+  if (!el) return;
+  const text = count > 0 ? `${count} / ${max} players found` : 'Searching for players...';
+  el.textContent = text;
+
+  // Animate orbs based on found players
+  for (let i = 1; i <= 4; i++) {
+    const orb = document.querySelector(`.waiting-orb-${i}`);
+    if (orb) {
+      if (i <= count) orb.classList.add('orb-found');
+      else orb.classList.remove('orb-found');
+    }
+  }
+
+  if (count > waitingPrevPlayerCount && waitingPrevPlayerCount > 0) {
+    el.classList.remove('count-updated');
+    void el.offsetWidth; // force reflow
+    el.classList.add('count-updated');
+  }
+  waitingPrevPlayerCount = count;
+
+  // Update ETA
+  const eta = document.getElementById('waitingEta');
+  if (eta) {
+    const elapsed = Math.floor((Date.now() - waitingStartTime) / 1000);
+    if (count >= max) {
+      eta.textContent = 'Match found — starting game...';
+    } else if (elapsed < 10) {
+      eta.textContent = 'Usually under 30 seconds';
+    } else {
+      const remaining = Math.max(5, 30 - elapsed);
+      eta.textContent = `Estimated ~${remaining}s remaining`;
+    }
+  }
+}
+
+function startWaitingTips(mode) {
+  stopWaitingTips();
+  const tips = waitingTips[mode] || waitingTips.mafia;
+  waitingTipIndex = Math.floor(Math.random() * tips.length);
+  const tipEl = document.getElementById('waitingTipText');
+  if (tipEl) tipEl.textContent = tips[waitingTipIndex];
+
+  waitingTipTimer = setInterval(() => {
+    if (!tipEl) return;
+    tipEl.classList.add('tip-fading');
+    setTimeout(() => {
+      waitingTipIndex = (waitingTipIndex + 1) % tips.length;
+      tipEl.textContent = tips[waitingTipIndex];
+      tipEl.classList.remove('tip-fading');
+    }, 300);
+  }, 6000);
+}
+
+function stopWaitingTips() {
+  if (waitingTipTimer) {
+    clearInterval(waitingTipTimer);
+    waitingTipTimer = null;
+  }
+}
+
 function clearRematchCountdown() {
   if (rematchCountdownTimer) {
     clearInterval(rematchCountdownTimer);
@@ -512,6 +632,15 @@ function renderState(state) {
   const gameContentSection = document.getElementById('gameContentSection');
   if (matchHudSection) matchHudSection.style.display = '';
   if (gameContentSection) gameContentSection.style.display = '';
+
+  // Waiting overlay: show during lobby, hide on game start/finish
+  const playerCount = (state.players || []).length;
+  const maxPlayers = 4;
+  if (state.status === 'lobby') {
+    showWaitingOverlay(me.game, playerCount, maxPlayers);
+  } else {
+    hideWaitingOverlay();
+  }
   stateJson.textContent = JSON.stringify(state, null, 2);
   if (state.botAutoplay) {
     const pending = Number(state.autoplay?.pendingActions || 0);
@@ -1262,6 +1391,7 @@ function shareResult() {
 // Game picker: instant play via POST /api/play/instant
 async function instantPlay(mode) {
   showTutorial(mode);
+  showWaitingOverlay(mode, 0, 4);
   if (playStatus) { playStatus.style.display = 'block'; }
   setStatus(`Starting ${modeLabel(mode)}...`);
   try {
@@ -1272,11 +1402,13 @@ async function instantPlay(mode) {
     });
     const data = await res.json();
     if (!data?.ok || !data?.playUrl) {
+      hideWaitingOverlay();
       setStatus(formatError(data, 'Instant play failed'), 'error');
       return;
     }
     window.location.href = data.playUrl;
   } catch (_err) {
+    hideWaitingOverlay();
     setStatus('Instant play failed — try again', 'error');
   }
 }
@@ -1352,6 +1484,23 @@ initGamePickerVisibility();
   }
 
   setTimeout(tryAutoStart, 1500);
+})();
+
+// Show waiting overlay on instant-play page load (before state arrives)
+(function initWaitingOverlay() {
+  const params = new URLSearchParams(window.location.search || '');
+  if ((params.get('instant') === '1' || params.get('autojoin') === '1') && params.get('room')) {
+    const mode = params.get('game') || params.get('mode') || me.game || 'mafia';
+    showWaitingOverlay(mode, 0, 4);
+  }
+
+  const cancelBtn = document.getElementById('waitingCancelBtn');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      hideWaitingOverlay();
+      setStatus('Matchmaking cancelled', 'warn');
+    });
+  }
 })();
 
 // ── Recent Games widget ──

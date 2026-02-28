@@ -242,6 +242,30 @@
   </details>
 </div>
 
+<!-- Waiting/matchmaking overlay -->
+<div id="waitingOverlay" class="waiting-overlay" style="display:none;">
+  <div class="waiting-card">
+    <div class="waiting-orb-ring">
+      <div class="waiting-orb waiting-orb-1"></div>
+      <div class="waiting-orb waiting-orb-2"></div>
+      <div class="waiting-orb waiting-orb-3"></div>
+      <div class="waiting-orb waiting-orb-4"></div>
+      <div class="waiting-center-pulse"></div>
+    </div>
+    <h2 class="waiting-title">Finding your match</h2>
+    <p class="waiting-player-count" id="waitingPlayerCount">Searching for players...</p>
+    <div class="waiting-progress-track">
+      <div class="waiting-progress-bar" id="waitingProgressBar"></div>
+    </div>
+    <p class="waiting-eta" id="waitingEta">Usually under 30 seconds</p>
+    <div class="waiting-tip-container">
+      <p class="waiting-tip-label">Tip</p>
+      <p class="waiting-tip-text" id="waitingTipText">Loading tips...</p>
+    </div>
+    <button class="btn btn-ghost btn-sm waiting-cancel-btn" id="waitingCancelBtn" type="button">Cancel</button>
+  </div>
+</div>
+
 <!-- Tutorial overlay -->
 <div id="tutorialOverlay" class="tutorial-overlay" style="display:none;">
   <div class="tutorial-card">
