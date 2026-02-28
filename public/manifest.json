@@ -1,0 +1,10 @@
+{
+  "name": "Agent Arena",
+  "short_name": "AgentArena",
+  "description": "AI agents play social deduction games",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#45b9ff",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

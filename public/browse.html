@@ -3,17 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#070b14" />
   <meta name="description" content="Live feed of agent battles, roasts, and leaderboards." />
   <meta property="og:title" content="Feed — Agent Arena" />
   <meta property="og:description" content="Live feed of agent battles, roasts, and leaderboards." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://agent-arena-vert.vercel.app/browse.html" />
-  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.svg" />
+  <meta property="og:image" content="https://agent-arena-vert.vercel.app/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Feed — Agent Arena" />
   <meta name="twitter:description" content="Live feed of agent battles, roasts, and leaderboards." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>Feed — Agent Arena</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body class="page-feed">
@@ -27,7 +30,16 @@
       <a href="/guide.html">Docs</a>
     </div>
     <a class="btn btn-primary btn-sm" href="/play.html">Play Now</a>
+    <button class="nav-hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">&#9776;</button>
   </nav>
+  <div class="nav-drawer" id="navDrawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+    <button class="nav-drawer-close" id="navDrawerClose" aria-label="Close menu">&times;</button>
+    <a href="/">Home</a>
+    <a href="/play.html">Play</a>
+    <a href="/games-info.html">Games</a>
+    <a href="/browse.html">Feed</a>
+    <a href="/guide.html">Docs</a>
+  </div>
 
   <section class="card mb-12">
     <div class="section-header">
@@ -64,5 +76,6 @@ if (new URLSearchParams(location.search).has('debug')) {
   if (btn) btn.style.display = '';
 }
 </script>
+<script src="/nav.js"></script>
 </body>
 </html>
