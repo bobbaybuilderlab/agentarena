@@ -16,6 +16,7 @@ const { Server } = require('socket.io');
 const mafiaGame = require('./games/agent-mafia');
 const amongUsGame = require('./games/agents-among-us');
 const villaGame = require('./games/agent-villa');
+const gtaGame = require('./games/guess-the-agent');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { runBotTurn } = require('./bots/turn-loop');
@@ -79,6 +80,14 @@ const rooms = new Map();
 const mafiaRooms = mafiaGame.createStore();
 const amongUsRooms = amongUsGame.createStore();
 const villaRooms = villaGame.createStore();
+const gtaRooms = gtaGame.createStore();
+
+const GTA_PROMPT_MS = Number(process.env.GTA_PROMPT_MS || 45_000);
+const GTA_REVEAL_MS = Number(process.env.GTA_REVEAL_MS || 15_000);
+const GTA_VOTE_MS   = Number(process.env.GTA_VOTE_MS   || 20_000);
+const GTA_RESULT_MS = Number(process.env.GTA_RESULT_MS || 8_000);
+const GTA_RECONNECT_MS = Number(process.env.GTA_RECONNECT_MS || 30_000);
+
 const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
 const playRoomTelemetry = new Map();
@@ -500,6 +509,20 @@ function emitVillaRoom(room) {
   io.to(`villa:${room.id}`).emit('villa:state', villaGame.toPublic(room));
 }
 
+function emitGtaRoom(room) {
+  // Broadcast to whole room — no role info
+  io.to(`gta:${room.id}`).emit('gta:state', gtaGame.toPublic(room));
+
+  // Send role-aware state ONLY to the human player's socket
+  const humanPlayer = room.players.find(p => p.role === 'human' && p.socketId && !p.isBot);
+  if (humanPlayer) {
+    const sock = io.sockets.sockets.get(humanPlayer.socketId);
+    if (sock) {
+      sock.emit('gta:state:self', gtaGame.toPublic(room, { forPlayerId: humanPlayer.id }));
+    }
+  }
+}
+
 function pickDeterministicTarget(players, actorId) {
   return players
     .filter((p) => p.alive && p.id !== actorId)
@@ -760,6 +783,138 @@ function scheduleVillaPhase(room) {
       scheduleVillaPhase(room);
     }
   });
+}
+
+function pickHumanSuspect(room, botId) {
+  const alive = room.players.filter(p => p.alive && p.id !== botId);
+  if (!alive.length) return null;
+  // 40% chance to pick randomly, 60% chance to use mild heuristic
+  if (Math.random() < 0.4) {
+    return alive[Math.floor(Math.random() * alive.length)].id;
+  }
+  // Mild heuristic: pick player whose response has most human-like markers
+  const round = room.round;
+  const responses = room.responsesByRound[round] || {};
+  const scored = alive.map(p => {
+    const text = responses[p.id] || '';
+    let score = 0;
+    if (/\b(i|me|my)\b/i.test(text)) score += 2;
+    if (/\b(honestly|actually|tbh)\b/i.test(text)) score += 3;
+    if (/lol|haha|omg/i.test(text)) score += 4;
+    if (/\.\.\.|!!/.test(text)) score += 2;
+    score += Math.random(); // tie-breaker
+    return { id: p.id, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.id || alive[0].id;
+}
+
+function scheduleGtaPhase(room) {
+  if (room.status !== 'in_progress') {
+    roomScheduler.clear({ namespace: 'gta', roomId: room.id, slot: 'phase' });
+    return;
+  }
+
+  roomScheduler.clear({ namespace: 'gta', roomId: room.id, slot: 'phase' });
+
+  const token = `${room.round}:${room.phase}`;
+
+  if (room.phase === 'prompt') {
+    // Update roundEndsAt on room
+    room.roundEndsAt = Date.now() + GTA_PROMPT_MS;
+    emitGtaRoom(room); // re-emit with updated roundEndsAt
+
+    // Schedule bot responses
+    const bots = room.players.filter(p => p.isBot && p.alive);
+    for (const bot of bots) {
+      if (room.responsesByRound[room.round]?.[bot.id]) continue;
+      const delay = 2000 + Math.random() * 8000;
+      roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: `respond:${room.round}:${bot.id}`, delayMs: delay, token }, () => {
+        const r = gtaRooms.get(room.id);
+        if (!r || r.phase !== 'prompt' || r.round !== room.round) return;
+        if (r.responsesByRound[r.round]?.[bot.id]) return;
+        const text = generateBotRoast(r.currentPrompt, bot, 6, 'thoughtful');
+        const result = gtaGame.submitResponse(gtaRooms, { roomId: r.id, playerId: bot.id, text });
+        if (result.ok) {
+          logRoomEvent('gta', r, 'BOT_RESPONDED', { botId: bot.id, round: r.round });
+          emitGtaRoom(r);
+          if (result.advanced) scheduleGtaPhase(r);
+        }
+      });
+    }
+
+    // Phase deadline
+    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_PROMPT_MS, token }, () => {
+      const r = gtaRooms.get(room.id);
+      if (!r || r.phase !== 'prompt' || r.round !== room.round) return;
+      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
+      if (adv.ok) { emitGtaRoom(r); scheduleGtaPhase(r); }
+    });
+  }
+
+  if (room.phase === 'reveal') {
+    room.roundEndsAt = Date.now() + GTA_REVEAL_MS;
+    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_REVEAL_MS, token }, () => {
+      const r = gtaRooms.get(room.id);
+      if (!r || r.phase !== 'reveal' || r.round !== room.round) return;
+      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
+      if (adv.ok) { emitGtaRoom(r); scheduleGtaPhase(r); }
+    });
+  }
+
+  if (room.phase === 'vote') {
+    room.roundEndsAt = Date.now() + GTA_VOTE_MS;
+    // Schedule bot votes
+    const aliveBots = room.players.filter(p => p.isBot && p.alive && p.role === 'agent');
+    for (const bot of aliveBots) {
+      if (room.votesByRound[room.round]?.[bot.id]) continue;
+      const delay = 5000 + Math.random() * 10000;
+      roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: `vote:${room.round}:${bot.id}`, delayMs: delay, token }, () => {
+        const r = gtaRooms.get(room.id);
+        if (!r || r.phase !== 'vote' || r.round !== room.round) return;
+        if (r.votesByRound[r.round]?.[bot.id]) return;
+        const targetId = pickHumanSuspect(r, bot.id);
+        if (!targetId) return;
+        const result = gtaGame.castVote(gtaRooms, { roomId: r.id, voterId: bot.id, targetId });
+        if (result.ok) {
+          logRoomEvent('gta', r, 'BOT_VOTED', { botId: bot.id, targetId, round: r.round });
+          if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
+          emitGtaRoom(r);
+          scheduleGtaPhase(r);
+        }
+      });
+    }
+    // Phase deadline
+    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_VOTE_MS, token }, () => {
+      const r = gtaRooms.get(room.id);
+      if (!r || r.phase !== 'vote' || r.round !== room.round) return;
+      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
+      if (adv.ok) {
+        if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
+        emitGtaRoom(r);
+        scheduleGtaPhase(r);
+      }
+    });
+  }
+
+  if (room.phase === 'result') {
+    if (room.status === 'finished') {
+      recordFirstMatchCompletion('gta', room.id);
+      emitGtaRoom(room);
+      return;
+    }
+    room.roundEndsAt = Date.now() + GTA_RESULT_MS;
+    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_RESULT_MS, token }, () => {
+      const r = gtaRooms.get(room.id);
+      if (!r || r.phase !== 'result') return;
+      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id }); // → next prompt
+      if (adv.ok) {
+        if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
+        emitGtaRoom(r);
+        scheduleGtaPhase(r);
+      }
+    });
+  }
 }
 
 function recordJoinHardeningEvent(mode, roomId, socketId, attemptedName) {
@@ -1161,6 +1316,95 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, state: villaGame.toPublic(result.room) });
   });
 
+  // ── Guess the Agent socket handlers ──
+  socket.on('gta:room:create', ({ name }, cb) => {
+    const created = gtaGame.createRoom(gtaRooms, { hostName: name, hostSocketId: socket.id });
+    if (!created.ok) return cb?.(created);
+    socket.join(`gta:${created.room.id}`);
+    logRoomEvent('gta', created.room, 'ROOM_CREATED', { status: created.room.status });
+    emitGtaRoom(created.room);
+    cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, role: 'human', state: gtaGame.toPublic(created.room, { forPlayerId: created.player.id }) });
+  });
+
+  socket.on('gta:room:join', ({ roomId, name, claimToken }, cb) => {
+    const normalizedId = String(roomId || '').trim().toUpperCase();
+    if (normalizedId && gtaRooms.has(normalizedId)) recordJoinAttempt('gta', normalizedId);
+    const reconnect = resolveReconnectJoinName('gta', roomId, name, claimToken);
+    const joined = gtaGame.joinRoom(gtaRooms, { roomId: normalizedId, name: reconnect.name, socketId: socket.id });
+    if (!joined.ok) {
+      if (joined.error?.code === 'SOCKET_ALREADY_JOINED') recordJoinHardeningEvent('gta', normalizedId, socket.id, reconnect.name);
+      return cb?.(joined);
+    }
+    if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('gta', joined.room.id, reconnect.consumedClaimToken);
+    socket.join(`gta:${joined.room.id}`);
+    recordQuickJoinConversion('gta', joined.room.id, joined.player.name);
+    logRoomEvent('gta', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, role: joined.player.role });
+    emitGtaRoom(joined.room);
+    cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, role: joined.player.role });
+  });
+
+  socket.on('gta:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
+    const result = autoFillLobbyBots('gta', room.id, minPlayers || 6);
+    if (!result.ok) return cb?.(result);
+    cb?.({ ok: true, addedBots: result.addedBots });
+  });
+
+  socket.on('gta:start', ({ roomId, playerId }, cb) => {
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
+    if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
+    const started = gtaGame.startGame(gtaRooms, { roomId, hostPlayerId: playerId });
+    if (!started.ok) return cb?.(started);
+    logRoomEvent('gta', started.room, 'GAME_STARTED', { round: started.room.round });
+    emitGtaRoom(started.room);
+    scheduleGtaPhase(started.room);
+    cb?.({ ok: true });
+  });
+
+  socket.on('gta:action', ({ roomId, playerId, type, text, targetId }, cb) => {
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
+
+    if (type === 'respond') {
+      const moderated = moderateRoast(String(text || ''), { maxLength: 280 });
+      if (!moderated.ok) return cb?.({ ok: false, error: { code: 'CONTENT_REJECTED', message: moderated.code } });
+      const result = gtaGame.submitResponse(gtaRooms, { roomId, playerId, text: moderated.text });
+      if (!result.ok) return cb?.(result);
+      logRoomEvent('gta', result.room, 'RESPONSE_SUBMITTED', { actorId: playerId, round: result.room.round });
+      emitGtaRoom(result.room);
+      if (result.advanced) scheduleGtaPhase(result.room);
+      return cb?.({ ok: true });
+    }
+
+    if (type === 'vote') {
+      const result = gtaGame.castVote(gtaRooms, { roomId, voterId: playerId, targetId });
+      if (!result.ok) return cb?.(result);
+      logRoomEvent('gta', result.room, 'VOTE_CAST', { actorId: playerId, targetId, round: result.room.round });
+      if (result.room.status === 'finished') recordFirstMatchCompletion('gta', result.room.id);
+      emitGtaRoom(result.room);
+      scheduleGtaPhase(result.room);
+      return cb?.({ ok: true });
+    }
+
+    return cb?.({ ok: false, error: { code: 'UNKNOWN_ACTION' } });
+  });
+
+  socket.on('gta:rematch', ({ roomId, playerId }, cb) => {
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
+    roomScheduler.clearRoom(String(roomId).toUpperCase(), 'gta');
+    const reset = gtaGame.prepareRematch(gtaRooms, { roomId, hostPlayerId: playerId });
+    if (!reset.ok) return cb?.(reset);
+    logRoomEvent('gta', reset.room, 'REMATCH_STARTED', {});
+    emitGtaRoom(reset.room);
+    cb?.({ ok: true });
+  });
+
   socket.on('room:create', (payload, cb) => {
     const room = createRoom({ socketId: socket.id });
     socket.join(room.id);
@@ -1404,6 +1648,36 @@ io.on('connection', (socket) => {
       const changed = villaGame.disconnectPlayer(villaRooms, { roomId: room.id, socketId: socket.id });
       if (changed) emitVillaRoom(room);
     }
+
+    for (const room of gtaRooms.values()) {
+      const changed = gtaGame.disconnectPlayer(gtaRooms, { roomId: room.id, socketId: socket.id });
+      if (changed) {
+        const player = room.players.find(p => p.socketId === socket.id);
+        // If human disconnects during in_progress → start abandon timer
+        if (player && player.role === 'human' && room.status === 'in_progress') {
+          roomScheduler.schedule({
+            namespace: 'gta',
+            roomId: room.id,
+            slot: 'human-reconnect',
+            delayMs: GTA_RECONNECT_MS,
+            token: `reconnect:${socket.id}`,
+          }, () => {
+            const r = gtaRooms.get(room.id);
+            if (!r || r.status !== 'in_progress') return;
+            const hp = r.players.find(px => px.role === 'human');
+            if (hp && !hp.isConnected) {
+              const won = gtaGame.forceAgentsWin(gtaRooms, { roomId: r.id, reason: 'human_disconnect_timeout' });
+              if (won.ok) {
+                logRoomEvent('gta', r, 'HUMAN_ABANDONED', { humanId: hp.id });
+                recordFirstMatchCompletion('gta', r.id);
+                emitGtaRoom(r);
+              }
+            }
+          });
+        }
+        emitGtaRoom(room);
+      }
+    }
   });
 });
 
@@ -1469,7 +1743,7 @@ app.use('/api/ops/', opsAuthGate);
 app.use('/api/evals/', opsAuthGate);
 
 app.use((req, _res, next) => {
-  if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html'].includes(req.path)) {
+  if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html', '/guess-the-agent.html'].includes(req.path)) {
     incrementGrowthMetric('funnel.visits', 1);
   }
   next();
@@ -2375,7 +2649,10 @@ function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
     ? [...villaRooms.values()].map((room) => summarizePlayableRoom('villa', room))
     : [];
 
-  let roomsList = [...mafia, ...amongus, ...villa];
+  const gta = modeFilter === 'all' || modeFilter === 'gta'
+    ? [...gtaRooms.values()].map(room => summarizePlayableRoom('gta', room))
+    : [];
+  let roomsList = [...mafia, ...amongus, ...villa, ...gta];
 
   if (includeStatuses) {
     roomsList = roomsList.filter((room) => includeStatuses.has(room.status));
@@ -2391,7 +2668,7 @@ function listPlayableRooms(modeFilter = 'all', statusFilter = 'all') {
 }
 
 function getLobbyStore(mode) {
-  return mode === 'amongus' ? amongUsRooms : mode === 'mafia' ? mafiaRooms : mode === 'villa' ? villaRooms : null;
+  return mode === 'amongus' ? amongUsRooms : mode === 'mafia' ? mafiaRooms : mode === 'villa' ? villaRooms : mode === 'gta' ? gtaRooms : null;
 }
 
 function getClaimableLobbySeats(mode, roomId) {
@@ -2521,6 +2798,18 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
     return { ok: true, mode, room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
   }
 
+  if (mode === 'gta') {
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+    if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
+    const needed = Math.max(0, safeMinPlayers - room.players.length);
+    const added = gtaGame.addLobbyBots(gtaRooms, { roomId: room.id, count: needed, namePrefix: 'Agent Bot' });
+    if (!added.ok) return added;
+    logRoomEvent('gta', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length });
+    emitGtaRoom(room);
+    return { ok: true, mode, room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
+  }
+
   const room = mafiaRooms.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
@@ -2629,7 +2918,7 @@ app.get('/api/play/rooms', (req, res) => {
   const modeFilter = String(req.query.mode || 'all').toLowerCase();
   const statusFilter = String(req.query.status || 'all').toLowerCase();
 
-  if (!['all', 'mafia', 'amongus', 'villa'].includes(modeFilter)) {
+  if (!['all', 'mafia', 'amongus', 'villa', 'gta'].includes(modeFilter)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
   }
 
@@ -2640,6 +2929,7 @@ app.get('/api/play/rooms', (req, res) => {
     if (room.mode === 'mafia') totals.byMode.mafia += 1;
     if (room.mode === 'amongus') totals.byMode.amongus += 1;
     if (room.mode === 'villa') totals.byMode.villa += 1;
+    if (room.mode === 'gta') totals.byMode.gta += 1;
 
     totals.reconnectAuto.attempts += Number(room.reconnectAuto?.attempts || 0);
     totals.reconnectAuto.successes += Number(room.reconnectAuto?.successes || 0);
@@ -2657,7 +2947,7 @@ app.get('/api/play/rooms', (req, res) => {
   }, {
     playersOnline: 0,
     openRooms: 0,
-    byMode: { mafia: 0, amongus: 0, villa: 0 },
+    byMode: { mafia: 0, amongus: 0, villa: 0, gta: 0 },
     reconnectAuto: { attempts: 0, successes: 0, failures: 0 },
     reconnectRecoveryClicks: { reclaim_clicked: 0, quick_recover_clicked: 0 },
     telemetryEvents: { rematch_clicked: 0, party_streak_extended: 0 },
@@ -2710,7 +3000,7 @@ app.post('/api/play/reconnect-telemetry', (req, res) => {
   const outcome = String(req.body?.outcome || '').toLowerCase();
   const event = String(req.body?.event || '').toLowerCase();
 
-  if (!['mafia', 'amongus', 'villa'].includes(mode)) {
+  if (!['mafia', 'amongus', 'villa', 'gta'].includes(mode)) {
     return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } });
   }
   if (!roomId) {
@@ -2759,7 +3049,7 @@ app.post('/api/play/quick-join', (req, res) => {
   const modeInput = String(req.body?.mode || 'all').toLowerCase();
   const playerName = String(req.body?.name || '').trim().slice(0, 24) || `Player-${Math.floor(Math.random() * 900) + 100}`;
 
-  if (!['all', 'mafia', 'amongus', 'villa'].includes(modeInput)) {
+  if (!['all', 'mafia', 'amongus', 'villa', 'gta'].includes(modeInput)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode' });
   }
 
@@ -2825,7 +3115,7 @@ app.post('/api/play/lobby/autofill', (req, res) => {
   const roomId = String(req.body?.roomId || '').trim().toUpperCase();
   const minPlayers = Number(req.body?.minPlayers || QUICK_JOIN_MIN_PLAYERS);
 
-  if (!['mafia', 'amongus', 'villa'].includes(mode)) {
+  if (!['mafia', 'amongus', 'villa', 'gta'].includes(mode)) {
     return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } });
   }
 
@@ -2869,7 +3159,7 @@ if (typeof loadGrowthMetrics === 'function') {
 // ── Instant Play: one-click to join a game ──
 app.post('/api/play/instant', (req, res) => {
   const modeInput = String(req.body?.mode || 'mafia').toLowerCase();
-  const mode = ['mafia', 'amongus', 'villa'].includes(modeInput) ? modeInput : 'mafia';
+  const mode = ['mafia', 'amongus', 'villa', 'gta'].includes(modeInput) ? modeInput : 'mafia';
   const playerName = String(req.body?.name || `Player_${shortId(4)}`).trim().slice(0, 24);
 
   // Create a new room
@@ -3232,9 +3522,10 @@ function cleanupStaleRooms() {
   sweep(mafiaRooms, 'mafia');
   sweep(amongUsRooms, 'amongus');
   sweep(villaRooms, 'villa');
+  sweep(gtaRooms, 'gta');
 
   if (cleaned > 0) {
-    logStructured('rooms.cleanup', { cleaned, remaining: rooms.size + mafiaRooms.size + amongUsRooms.size + villaRooms.size });
+    logStructured('rooms.cleanup', { cleaned, remaining: rooms.size + mafiaRooms.size + amongUsRooms.size + villaRooms.size + gtaRooms.size });
   }
 }
 
@@ -3291,6 +3582,7 @@ module.exports = {
   mafiaRooms,
   amongUsRooms,
   villaRooms,
+  gtaRooms,
   roomEvents,
   arenaCanary,
   clearAllGameTimers,

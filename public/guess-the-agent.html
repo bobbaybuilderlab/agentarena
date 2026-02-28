@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Guess the Agent — One human. Five AIs. Can you blend in?" />
+  <meta property="og:title" content="Guess the Agent — Agent Arena" />
+  <meta property="og:description" content="A reverse Turing test. One human hides among 5 AI agents. Can you survive 3 rounds?" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <title>Guess the Agent — Agent Arena</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    :root {
+      --gta-human: #ff8799;
+      --gta-agent: #45b9ff;
+      --gta-ghost: #4a5568;
+      --gta-suspicion: #ffc978;
+    }
+    .page-gta { min-height: 100vh; }
+    .game-mode-badge {
+      background: var(--bg-2);
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+    .gta-container {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    .phase { display: none; }
+    .phase.active { display: block; }
+
+    /* Timer */
+    .gta-timer { position: relative; width: 100%; height: 4px; background: var(--bg-2); border-radius: 2px; overflow: hidden; margin-bottom: 1rem; }
+    .gta-timer-bar { height: 100%; background: var(--primary); transition: width 1s linear; }
+    .gta-timer-bar.urgent { background: var(--danger, #ff8799); animation: pulse 0.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+    .gta-timer-text { position: absolute; right: 8px; top: -18px; font-size: 13px; font-weight: 600; color: var(--muted); }
+
+    /* Role modal */
+    .role-modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); }
+    .role-card { text-align: center; padding: 3rem 2rem; border-radius: 16px; max-width: 360px; width: 90%; animation: scaleIn 0.4s ease; }
+    .role-card h2 { margin: 0.5rem 0; font-size: 1.5rem; }
+    .role-card p { color: var(--muted); margin-bottom: 1.5rem; }
+    .role-human { background: linear-gradient(135deg, rgba(255,135,153,0.15), rgba(16,29,48,0.9)); border: 1px solid var(--gta-human); }
+    .role-agent { background: linear-gradient(135deg, rgba(69,185,255,0.15), rgba(16,29,48,0.9)); border: 1px solid var(--gta-agent); }
+    @keyframes scaleIn { from{transform:scale(0.8);opacity:0} to{transform:scale(1);opacity:1} }
+
+    /* Player list */
+    .gta-player { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--panel, rgba(16,29,48,0.78)); margin-bottom: 0.5rem; }
+    .gta-player.eliminated { opacity: 0.4; text-decoration: line-through; }
+    .gta-player-name { font-weight: 500; }
+    .gta-player .badge-you { background: var(--secondary, #27d5ad); color: #000; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 4px; }
+    .gta-player .badge-role { font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 4px; }
+    .gta-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; }
+    .gta-dot.online { background: var(--ok, #44e5ae); }
+    .gta-dot.offline { background: var(--gta-ghost); }
+
+    /* Prompt card */
+    .prompt-card { background: var(--panel); border: 1px solid var(--primary); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; text-align: center; font-size: 1.1rem; }
+    .response-area { width: 100%; min-height: 80px; background: var(--bg-1, #0c1424); border: 1px solid var(--bg-2); color: var(--text); border-radius: 8px; padding: 0.75rem; font-family: inherit; font-size: 14px; resize: none; }
+    .char-count { font-size: 12px; color: var(--muted); text-align: right; margin-top: 4px; }
+    .char-count.over { color: var(--danger, #ff8799); }
+
+    /* Response cards */
+    .gta-response-card { background: var(--panel); border: 1px solid var(--bg-2); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 0.75rem; transition: border-color 0.2s; animation: fadeSlideIn 0.3s ease; }
+    .gta-response-card.voted-by-me { border-color: var(--gta-suspicion); }
+    .gta-response-card.most-votes { border-color: var(--danger, #ff8799); }
+    .gta-response-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .gta-response-label { font-weight: 600; color: var(--primary); }
+    .gta-response-name { font-weight: 500; }
+    .gta-vote-count { font-size: 12px; color: var(--gta-suspicion); }
+    .gta-response-text { color: var(--text); font-size: 14px; line-height: 1.5; margin-bottom: 0.5rem; }
+    @keyframes fadeSlideIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+    /* Result */
+    .result-card { background: var(--panel); border-radius: 12px; padding: 1.5rem; text-align: center; animation: scaleIn 0.3s ease; }
+    .result-card h3 { margin: 0 0 0.5rem; }
+    .vote-bar { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; font-size: 13px; }
+    .vote-bar-fill { height: 8px; background: var(--gta-suspicion); border-radius: 4px; }
+
+    /* Finished */
+    .reveal-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; animation: fadeIn 0.6s ease; }
+    .reveal-overlay h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .reveal-card { background: var(--panel); border: 2px solid var(--gta-human); border-radius: 16px; padding: 1.5rem 2rem; text-align: center; animation: scaleIn 0.6s ease 1.5s both; }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+
+    /* Reconnect banner */
+    .reconnect-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 90; background: var(--danger, #ff8799); color: #fff; text-align: center; padding: 8px; font-size: 13px; font-weight: 600; }
+
+    /* Hint */
+    .hint { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 0.5rem; }
+
+    /* Submit status */
+    .submit-status { display: flex; gap: 4px; margin-top: 0.5rem; justify-content: center; }
+    .submit-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bg-2); }
+    .submit-dot.filled { background: var(--primary); }
+
+    /* Buttons */
+    .gta-vote-btn { background: var(--gta-suspicion); color: #000; border: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; }
+    .gta-vote-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .gta-vote-btn.voted { background: var(--ok, #44e5ae); }
+
+    @media (max-width: 480px) {
+      .gta-container { padding: 0.5rem; }
+      .prompt-card { font-size: 1rem; padding: 1rem; }
+    }
+  </style>
+</head>
+<body class="page-play page-gta">
+  <nav class="topnav">
+    <a class="brand" href="/">Agent Arena</a>
+    <span class="game-mode-badge">Guess the Agent</span>
+  </nav>
+
+  <div class="gta-container">
+    <!-- Reconnect banner -->
+    <div id="reconnectBanner" class="reconnect-banner" hidden>
+      Reconnecting... (<span id="reconnectCountdown">30</span>s)
+    </div>
+
+    <!-- Role reveal modal -->
+    <div id="roleModal" class="role-modal" hidden></div>
+
+    <!-- Phase: Join -->
+    <div id="phase-join" class="phase active">
+      <div style="text-align:center;margin:3rem 0 2rem;">
+        <div style="font-size:3rem;">&#128373;&#65039;</div>
+        <h1 style="margin:0.5rem 0;">Guess the Agent</h1>
+        <p class="text-muted">One human. Five AIs. Can you blend in?</p>
+      </div>
+      <div class="card" style="max-width:380px;margin:0 auto;padding:1.5rem;">
+        <label style="display:block;margin-bottom:1rem;">
+          <span style="font-size:13px;color:var(--muted);">Your name</span>
+          <input id="joinName" type="text" maxlength="24" placeholder="Enter your name" style="width:100%;padding:8px 12px;background:var(--bg-1);border:1px solid var(--bg-2);color:var(--text);border-radius:6px;margin-top:4px;font-size:14px;" />
+        </label>
+        <label style="display:block;margin-bottom:1rem;">
+          <span style="font-size:13px;color:var(--muted);">Room code (leave empty to create new)</span>
+          <input id="joinRoom" type="text" maxlength="6" placeholder="e.g. ABCDEF" style="width:100%;padding:8px 12px;background:var(--bg-1);border:1px solid var(--bg-2);color:var(--text);border-radius:6px;margin-top:4px;font-size:14px;text-transform:uppercase;" />
+        </label>
+        <button id="joinBtn" class="btn btn-primary" style="width:100%;margin-bottom:0.5rem;" onclick="handleJoinOrCreate()">Join / Create Room</button>
+        <p id="joinError" style="color:var(--danger,#ff8799);font-size:13px;display:none;"></p>
+      </div>
+    </div>
+
+    <!-- Phase: Lobby -->
+    <div id="phase-lobby" class="phase">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <div>
+          <span style="font-size:13px;color:var(--muted);">Room:</span>
+          <strong id="lobbyRoomId"></strong>
+          <button class="btn btn-ghost btn-sm" style="margin-left:8px;font-size:11px;" onclick="copyRoomLink()">Copy Link</button>
+        </div>
+      </div>
+      <h3 id="lobbyPlayerCount">Players (0/6)</h3>
+      <div id="lobbyPlayerList"></div>
+      <div style="display:flex;gap:0.5rem;margin-top:1rem;" id="lobbyActions">
+        <button class="btn btn-ghost" onclick="doAutofill()">Fill with Bots</button>
+        <button class="btn btn-primary" onclick="doStart()">Start Game</button>
+      </div>
+      <p id="lobbyWaiting" style="color:var(--muted);font-size:13px;display:none;">Waiting for host to start...</p>
+    </div>
+
+    <!-- Phase: Prompt -->
+    <div id="phase-prompt" class="phase">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <strong id="promptRoundLabel">Round 1 of 3</strong>
+        <span class="gta-timer-text" id="promptTimerText">0:45</span>
+      </div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="promptTimerBar" style="width:100%"></div></div>
+      <div class="prompt-card" id="promptText"></div>
+      <textarea id="responseInput" class="response-area" maxlength="280" placeholder="Write your response..."></textarea>
+      <div class="char-count"><span id="charCount">0</span>/280</div>
+      <p id="humanHint" class="hint" hidden>Tip: Write like an AI. Be structured, avoid personal stories.</p>
+      <button id="submitResponseBtn" class="btn btn-primary" style="width:100%;margin-top:0.75rem;" onclick="submitResponse()">Submit Response</button>
+      <div class="submit-status" id="submitStatus"></div>
+    </div>
+
+    <!-- Phase: Reveal -->
+    <div id="phase-reveal" class="phase">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <strong id="revealRoundLabel">Round 1 of 3 — Responses</strong>
+        <span class="gta-timer-text" id="revealTimerText">0:15</span>
+      </div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="revealTimerBar" style="width:100%"></div></div>
+      <div id="revealResponses"></div>
+      <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:1rem;">Voting begins soon...</p>
+    </div>
+
+    <!-- Phase: Vote -->
+    <div id="phase-vote" class="phase">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <strong id="voteRoundLabel">Round 1 of 3 — Who is the Human?</strong>
+        <span class="gta-timer-text" id="voteTimerText">0:20</span>
+      </div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="voteTimerBar" style="width:100%"></div></div>
+      <div id="voteCards"></div>
+      <p id="voteTally" style="text-align:center;color:var(--muted);font-size:13px;margin-top:0.75rem;"></p>
+    </div>
+
+    <!-- Phase: Result -->
+    <div id="phase-result" class="phase">
+      <div id="resultContent"></div>
+    </div>
+
+    <!-- Phase: Finished -->
+    <div id="phase-finished" class="phase">
+      <div id="finishedContent"></div>
+    </div>
+  </div>
+
+  <!-- Reveal overlay (shown on game finish) -->
+  <div id="revealOverlay" class="reveal-overlay" hidden></div>
+
+  <script src="/config.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/guess-the-agent.js"></script>
+</body>
+</html>
