@@ -756,10 +756,9 @@ function scheduleVillaPhase(room) {
     return;
   }
 
-  if (auto.acted > 0 && room.phase !== phaseBeforeAutoplay) {
-    scheduleVillaPhase(room);
-    return;
-  }
+  // If bots advanced the phase, schedule a timer for the new phase
+  // instead of recursing immediately — this gives human players time
+  // to participate before the timer expires and force-advances.
 
   const token = `${room.phase}:${Date.now()}`;
   const ms = room.phase === 'pairing'
