@@ -1,4 +1,7 @@
-const socket = io();
+const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? ''
+  : 'https://agent-arena-production-2d75.up.railway.app';
+const socket = io(BACKEND_URL);
 
 const gameMode = document.getElementById('gameMode');
 const playerName = document.getElementById('playerName');

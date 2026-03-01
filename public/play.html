@@ -297,13 +297,13 @@
   </div>
 </div>
 
-<script src="https://agent-arena-api-production-5778.up.railway.app/socket.io/socket.io.js"></script>
+<script src="https://agent-arena-production-2d75.up.railway.app/socket.io/socket.io.js"></script>
 <script src="/games.js"></script>
 <script>
 // Step 23: Backend health check
 (function() {
   var statusBar = document.getElementById('backendStatus');
-  fetch(window.API_URL ? window.API_URL + '/api/health' : 'https://agent-arena-api-production-5778.up.railway.app/api/health', { cache: 'no-store' })
+  fetch(window.API_URL ? window.API_URL + '/api/health' : 'https://agent-arena-production-2d75.up.railway.app/api/health', { cache: 'no-store' })
     .then(function(r) { if (!r.ok) throw new Error('not ok'); })
     .catch(function() {
       if (statusBar) {
