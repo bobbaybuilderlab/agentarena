@@ -1316,7 +1316,8 @@ io.on('connection', (socket) => {
   });
 
   // ── Guess the Agent socket handlers ──
-  socket.on('gta:room:create', ({ name }, cb) => {
+  socket.on('gta:room:create', (payload, cb) => {
+    const { name } = payload || {};
     const created = gtaGame.createRoom(gtaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`gta:${created.room.id}`);
@@ -1325,7 +1326,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, role: 'human', state: gtaGame.toPublic(created.room, { forPlayerId: created.player.id }) });
   });
 
-  socket.on('gta:room:join', ({ roomId, name, claimToken }, cb) => {
+  socket.on('gta:room:join', (payload, cb) => {
+    const { roomId, name, claimToken } = payload || {};
     const normalizedId = String(roomId || '').trim().toUpperCase();
     if (normalizedId && gtaRooms.has(normalizedId)) recordJoinAttempt('gta', normalizedId);
     const reconnect = resolveReconnectJoinName('gta', roomId, name, claimToken);
@@ -1342,7 +1344,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, role: joined.player.role });
   });
 
-  socket.on('gta:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+  socket.on('gta:autofill', (payload, cb) => {
+    const { roomId, playerId, minPlayers } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
@@ -1351,7 +1354,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, addedBots: result.addedBots });
   });
 
-  socket.on('gta:start', ({ roomId, playerId }, cb) => {
+  socket.on('gta:start', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
@@ -1363,7 +1367,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on('gta:action', ({ roomId, playerId, type, text, targetId }, cb) => {
+  socket.on('gta:action', (payload, cb) => {
+    const { roomId, playerId, type, text, targetId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
@@ -1392,7 +1397,8 @@ io.on('connection', (socket) => {
     return cb?.({ ok: false, error: { code: 'UNKNOWN_ACTION' } });
   });
 
-  socket.on('gta:rematch', ({ roomId, playerId }, cb) => {
+  socket.on('gta:rematch', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
@@ -3085,7 +3091,9 @@ app.post('/api/play/quick-join', (req, res) => {
     ? mafiaRooms
     : targetRoom.mode === 'amongus'
       ? amongUsRooms
-      : villaRooms;
+      : targetRoom.mode === 'gta'
+        ? gtaRooms
+        : villaRooms;
   res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, targetStore.get(targetRoom.roomId)), quickJoinDecision, joinTicket });
 });
 
@@ -3115,7 +3123,9 @@ app.post('/api/play/lobby/autofill', (req, res) => {
       ? mafiaGame.toPublic(result.room)
       : mode === 'amongus'
         ? amongUsGame.toPublic(result.room)
-        : villaGame.toPublic(result.room),
+        : mode === 'gta'
+          ? gtaGame.toPublic(result.room)
+          : villaGame.toPublic(result.room),
   });
 });
 
@@ -3152,13 +3162,14 @@ app.post('/api/play/instant', (req, res) => {
 
   // Auto-start the game server-side so users land in an active game, not a stuck lobby.
   // startReadyLobby requires a socket ownership check, so we call game.startGame() directly.
-  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
-  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mafiaGame;
+  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mode === 'gta' ? gtaRooms : mafiaRooms;
+  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mode === 'gta' ? gtaGame  : mafiaGame;
   const started = game.startGame(store, { roomId: room.id, hostPlayerId: room.hostPlayerId });
   if (started.ok) {
-    if (mode === 'mafia')    scheduleMafiaPhase(started.room);
-    else if (mode === 'amongus') scheduleAmongUsPhase(started.room);
-    else                        scheduleVillaPhase(started.room);
+    if (mode === 'mafia')         scheduleMafiaPhase(started.room);
+    else if (mode === 'amongus')  scheduleAmongUsPhase(started.room);
+    else if (mode === 'gta')      scheduleGtaPhase(started.room);
+    else                          scheduleVillaPhase(started.room);
     logRoomEvent(mode, started.room, 'INSTANT_PLAY_STARTED', { players: started.room.players.length, phase: started.room.phase });
   }
 
