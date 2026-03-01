@@ -38,8 +38,11 @@ test('agents-among-us meeting resolves back to tasks when no winner yet', () => 
 
   const inMeeting = room.players.filter((p) => p.alive);
   const voteTarget = inMeeting.find((p) => p.role === 'crew');
+  const altTarget = inMeeting.find((p) => p.id !== voteTarget.id);
   inMeeting.forEach((p) => {
-    const vote = amongUs.submitAction(store, { roomId: room.id, playerId: p.id, type: 'vote', targetId: voteTarget.id });
+    // Self-vote is blocked, so voteTarget votes for someone else
+    const target = p.id === voteTarget.id ? altTarget.id : voteTarget.id;
+    const vote = amongUs.submitAction(store, { roomId: room.id, playerId: p.id, type: 'vote', targetId: target });
     assert.equal(vote.ok, true);
   });
 

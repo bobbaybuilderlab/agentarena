@@ -26,7 +26,7 @@ const { runEval } = require('./lib/eval-harness');
 const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
 const { createCanaryMode } = require('./lib/canary-mode');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
-const { shortId, correlationId, logStructured } = require('./server/state/helpers');
+const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('./server/state/helpers');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
@@ -189,7 +189,7 @@ function createRoom(host) {
     canaryBucket,
     hostSocketId: host.socketId,
     theme: THEMES[0],
-    themeRotation: [...THEMES].sort(() => Math.random() - 0.5).slice(0, 5),
+    themeRotation: fisherYatesShuffle(THEMES).slice(0, 5),
     players: [],
     spectators: new Set(),
     status: 'lobby',
@@ -961,27 +961,29 @@ setInterval(() => {
 }, 30000);
 
 io.on('connection', (socket) => {
-  socket.onAny((event, payload) => {
-    // Rate limit check
+  // Rate limiting via socket.use middleware — blocks handler execution
+  socket.use(([event, ...args], next) => {
     if (!checkSocketRateLimit(socket.id)) {
       logStructured('socket.rate_limited', { socketId: socket.id, event });
-      // If sustained abuse (3x limit), disconnect
       const entry = socketEventCounts.get(socket.id);
       if (entry && entry.count > SOCKET_RATE_LIMIT * 3) {
         logStructured('socket.rate_limit_disconnect', { socketId: socket.id });
         socket.disconnect(true);
       }
-      return;
+      return next(new Error('rate limited'));
     }
 
-    if (!event.includes(':')) return;
-    const roomId = String(payload?.roomId || '').toUpperCase() || null;
-    logStructured('socket.event', {
-      correlationId: socket.data.correlationId,
-      socketId: socket.id,
-      event,
-      roomId,
-    });
+    if (event.includes(':')) {
+      const payload = args[0];
+      const roomId = String(payload?.roomId || '').toUpperCase() || null;
+      logStructured('socket.event', {
+        correlationId: socket.data.correlationId,
+        socketId: socket.id,
+        event,
+        roomId,
+      });
+    }
+    next();
   });
   socket.on('mafia:room:create', (payload, cb) => {
     const { name } = payload || {};
@@ -1316,7 +1318,8 @@ io.on('connection', (socket) => {
   });
 
   // ── Guess the Agent socket handlers ──
-  socket.on('gta:room:create', ({ name }, cb) => {
+  socket.on('gta:room:create', (payload, cb) => {
+    const { name } = payload || {};
     const created = gtaGame.createRoom(gtaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
     socket.join(`gta:${created.room.id}`);
@@ -1325,7 +1328,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: created.room.id, playerId: created.player.id, role: 'human', state: gtaGame.toPublic(created.room, { forPlayerId: created.player.id }) });
   });
 
-  socket.on('gta:room:join', ({ roomId, name, claimToken }, cb) => {
+  socket.on('gta:room:join', (payload, cb) => {
+    const { roomId, name, claimToken } = payload || {};
     const normalizedId = String(roomId || '').trim().toUpperCase();
     if (normalizedId && gtaRooms.has(normalizedId)) recordJoinAttempt('gta', normalizedId);
     const reconnect = resolveReconnectJoinName('gta', roomId, name, claimToken);
@@ -1342,7 +1346,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, role: joined.player.role });
   });
 
-  socket.on('gta:autofill', ({ roomId, playerId, minPlayers }, cb) => {
+  socket.on('gta:autofill', (payload, cb) => {
+    const { roomId, playerId, minPlayers } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
@@ -1351,7 +1356,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, addedBots: result.addedBots });
   });
 
-  socket.on('gta:start', ({ roomId, playerId }, cb) => {
+  socket.on('gta:start', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketIsHostPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'HOST_ONLY' } });
@@ -1363,7 +1369,8 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on('gta:action', ({ roomId, playerId, type, text, targetId }, cb) => {
+  socket.on('gta:action', (payload, cb) => {
+    const { roomId, playerId, type, text, targetId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
@@ -1392,7 +1399,8 @@ io.on('connection', (socket) => {
     return cb?.({ ok: false, error: { code: 'UNKNOWN_ACTION' } });
   });
 
-  socket.on('gta:rematch', ({ roomId, playerId }, cb) => {
+  socket.on('gta:rematch', (payload, cb) => {
+    const { roomId, playerId } = payload || {};
     const room = gtaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN' } });
@@ -1467,7 +1475,7 @@ io.on('connection', (socket) => {
     room.roastsByRound = {};
     room.votesByRound = {};
     room.lastWinner = null;
-    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
+    room.themeRotation = fisherYatesShuffle(THEMES).slice(0, room.maxRounds);
     const started = beginRound(room);
     if (started && started.ok === false) return cb?.({ ok: false, error: started.error.message, code: started.error.code });
     logRoomEvent('arena', room, 'BATTLE_STARTED', { status: room.status, round: room.round, theme: room.theme });
@@ -1603,7 +1611,7 @@ io.on('connection', (socket) => {
     room.lastWinner = null;
     room.roundEndsAt = null;
     room.voteEndsAt = null;
-    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
+    room.themeRotation = fisherYatesShuffle(THEMES).slice(0, room.maxRounds);
     room.theme = room.themeRotation[0] || THEMES[0];
     room.players.forEach((p) => { room.totalVotes[p.id] = 0; });
 
@@ -1649,9 +1657,10 @@ io.on('connection', (socket) => {
     }
 
     for (const room of gtaRooms.values()) {
+      // Save player ref BEFORE disconnectPlayer clears isConnected
+      const player = room.players.find(p => p.socketId === socket.id && p.isConnected);
       const changed = gtaGame.disconnectPlayer(gtaRooms, { roomId: room.id, socketId: socket.id });
       if (changed) {
-        const player = room.players.find(p => p.socketId === socket.id);
         // If human disconnects during in_progress → start abandon timer
         if (player && player.role === 'human' && room.status === 'in_progress') {
           roomScheduler.schedule({
@@ -1698,7 +1707,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
-  if (!allowedOrigins.length || allowedOrigins.includes(origin)) {
+  if (effectiveOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -1869,7 +1878,10 @@ function persistState() {
   }
 }
 
+let _stateLoaded = false;
 function loadState() {
+  if (_stateLoaded) return;
+  _stateLoaded = true;
   try {
     if (!fs.existsSync(DATA_FILE)) return;
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -1981,7 +1993,7 @@ function runAutoBattle() {
   const deployed = [...agentProfiles.values()].filter((a) => a.deployed);
   if (deployed.length < 2) return null;
 
-  const shuffled = deployed.sort(() => Math.random() - 0.5).slice(0, Math.min(4, deployed.length));
+  const shuffled = fisherYatesShuffle(deployed).slice(0, Math.min(4, deployed.length));
   const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
   const battleId = shortId(8);
 
@@ -1994,36 +2006,7 @@ function runAutoBattle() {
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
-// Health check endpoint for monitoring
-app.get('/health', (_req, res) => {
-  try {
-    const { getDb } = require('./server/db');
-    const db = getDb();
-    if (!db) {
-      // DB unavailable (better-sqlite3 not installed) — server is healthy, persistence degraded
-      return res.status(200).json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        database: 'unavailable',
-        uptime: process.uptime(),
-      });
-    }
-    const integrityCheck = db.pragma('integrity_check');
-    const dbOk = integrityCheck[0]?.integrity_check === 'ok';
-    res.status(dbOk ? 200 : 503).json({
-      status: dbOk ? 'healthy' : 'degraded',
-      timestamp: new Date().toISOString(),
-      database: dbOk ? 'ok' : 'failed',
-      uptime: process.uptime(),
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: error.message,
-    });
-  }
-});
+// Health check — single handler (see bottom of file)
 
 app.post('/api/track/share', (_req, res) => {
   incrementGrowthMetric('referral.inviteSends', 1);
@@ -3111,7 +3094,9 @@ app.post('/api/play/quick-join', (req, res) => {
     ? mafiaRooms
     : targetRoom.mode === 'amongus'
       ? amongUsRooms
-      : villaRooms;
+      : targetRoom.mode === 'gta'
+        ? gtaRooms
+        : villaRooms;
   res.json({ ok: true, created, room: summarizePlayableRoom(targetRoom.mode, targetStore.get(targetRoom.roomId)), quickJoinDecision, joinTicket });
 });
 
@@ -3141,7 +3126,9 @@ app.post('/api/play/lobby/autofill', (req, res) => {
       ? mafiaGame.toPublic(result.room)
       : mode === 'amongus'
         ? amongUsGame.toPublic(result.room)
-        : villaGame.toPublic(result.room),
+        : mode === 'gta'
+          ? gtaGame.toPublic(result.room)
+          : villaGame.toPublic(result.room),
   });
 });
 
@@ -3178,13 +3165,14 @@ app.post('/api/play/instant', (req, res) => {
 
   // Auto-start the game server-side so users land in an active game, not a stuck lobby.
   // startReadyLobby requires a socket ownership check, so we call game.startGame() directly.
-  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
-  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mafiaGame;
+  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mode === 'gta' ? gtaRooms : mafiaRooms;
+  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mode === 'gta' ? gtaGame  : mafiaGame;
   const started = game.startGame(store, { roomId: room.id, hostPlayerId: room.hostPlayerId });
   if (started.ok) {
-    if (mode === 'mafia')    scheduleMafiaPhase(started.room);
-    else if (mode === 'amongus') scheduleAmongUsPhase(started.room);
-    else                        scheduleVillaPhase(started.room);
+    if (mode === 'mafia')         scheduleMafiaPhase(started.room);
+    else if (mode === 'amongus')  scheduleAmongUsPhase(started.room);
+    else if (mode === 'gta')      scheduleGtaPhase(started.room);
+    else                          scheduleVillaPhase(started.room);
     logRoomEvent(mode, started.room, 'INSTANT_PLAY_STARTED', { players: started.room.players.length, phase: started.room.phase });
   }
 
@@ -3467,14 +3455,31 @@ app.get('/health', (_req, res) => {
   const scheduler = roomScheduler.stats();
   const eventQueueDepth = roomEvents.pending();
   const eventQueueByMode = roomEvents.pendingByMode();
+
+  let dbStatus = 'unavailable';
+  try {
+    const { getDb: getHealthDb } = require('./server/db');
+    const database = getHealthDb();
+    if (database) {
+      const integrityCheck = database.pragma('integrity_check');
+      dbStatus = integrityCheck[0]?.integrity_check === 'ok' ? 'ok' : 'degraded';
+    }
+  } catch (_e) {
+    dbStatus = 'error';
+  }
+
   res.json({
     ok: true,
+    status: dbStatus === 'ok' || dbStatus === 'unavailable' ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    database: dbStatus,
     uptimeSec: Math.floor(process.uptime()),
     rooms: {
       arena: rooms.size,
       mafia: mafiaRooms.size,
       amongus: amongUsRooms.size,
       villa: villaRooms.size,
+      gta: gtaRooms.size,
     },
     agents: agentProfiles.size,
     roasts: roastFeed.length,
@@ -3501,6 +3506,7 @@ app.use((err, _req, res, _next) => {
 // ── Stale room cleanup ──
 const STALE_FINISHED_ROOM_MS = 30 * 60 * 1000; // 30 min after finish
 const STALE_EMPTY_LOBBY_MS = 15 * 60 * 1000; // 15 min empty lobby
+const STALE_INACTIVE_ROOM_MS = 2 * 60 * 60 * 1000; // 2 hours inactive
 
 function cleanupStaleRooms() {
   const now = Date.now();
@@ -3517,6 +3523,9 @@ function cleanupStaleRooms() {
         store.delete(id);
         cleaned++;
       } else if (isEmptyLobby && age > STALE_EMPTY_LOBBY_MS) {
+        store.delete(id);
+        cleaned++;
+      } else if (age > STALE_INACTIVE_ROOM_MS) {
         store.delete(id);
         cleaned++;
       }

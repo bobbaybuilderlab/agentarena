@@ -14,6 +14,7 @@ let currentState = null;
 let timerInterval = null;
 let reconnectInterval = null;
 let hasVoted = false;
+let hasVotedRound = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,14 +30,17 @@ if (urlName) $('joinName').value = urlName;
 socket.on('connect', () => {
   hideReconnectBanner();
   const saved = sessionStorage.getItem('gta-player');
-  if (saved && myRoomId) {
+  if (saved) {
     const data = JSON.parse(saved);
-    socket.emit('gta:room:join', { roomId: data.roomId, name: data.name }, (cb) => {
-      if (cb && cb.ok) {
-        myPlayerId = cb.playerId;
-        myRole = cb.role;
-      }
-    });
+    if (data.roomId) {
+      socket.emit('gta:room:join', { roomId: data.roomId, name: data.name }, (cb) => {
+        if (cb && cb.ok) {
+          myPlayerId = cb.playerId;
+          myRoomId = cb.roomId;
+          myRole = cb.role;
+        }
+      });
+    }
   }
 });
 
@@ -176,13 +180,13 @@ $('responseInput').addEventListener('input', () => {
 });
 
 // ─── Vote ───────────────────────────────────────────────────────────────────
-function castVote(targetId) {
+window.castVote = function castVote(targetId) {
   if (hasVoted) return;
   hasVoted = true;
   socket.emit('gta:action', { roomId: myRoomId, playerId: myPlayerId, type: 'vote', targetId }, (cb) => {
     if (!cb?.ok) hasVoted = false;
   });
-}
+};
 
 // ─── Rematch ────────────────────────────────────────────────────────────────
 window.doRematch = function () {
@@ -293,6 +297,10 @@ function renderPrompt(state) {
   // Show hint for human
   $('humanHint').hidden = myRole !== 'human';
 
+  // Clear textarea for new round
+  $('responseInput').value = '';
+  $('charCount').textContent = '0';
+
   // Reset submit button if new round
   const responses = state.responsesByRound?.[state.round];
   const hasResponded = responses && myPlayerId && responses[myPlayerId];
@@ -332,7 +340,10 @@ function renderReveal(state) {
 
 function renderVote(state) {
   $('voteRoundLabel').textContent = `Round ${state.round} of ${state.maxRounds} — Who is the Human?`;
-  hasVoted = false; // reset for new vote phase
+  if (hasVotedRound !== state.round) {
+    hasVoted = false;
+    hasVotedRound = state.round;
+  }
 
   const responses = state.responsesByRound?.[state.round] || {};
   const alivePlayers = state.players.filter(p => p.alive);
@@ -360,9 +371,17 @@ function renderVote(state) {
         <span class="gta-vote-count">${voteCount > 0 ? voteCount + ' vote' + (voteCount > 1 ? 's' : '') : ''}</span>
       </div>
       <p class="gta-response-text">"${esc(response)}"</p>
-      ${showVoteBtn ? `<button class="gta-vote-btn" onclick="castVote('${p.id}')">Vote</button>` : ''}
+      ${showVoteBtn ? `<button class="gta-vote-btn" data-vote-target="${esc(p.id)}">Vote</button>` : ''}
     </div>`;
   }).join('');
+
+  // Delegated click handler for vote buttons
+  $('voteCards').querySelectorAll('.gta-vote-btn[data-vote-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-vote-target');
+      if (targetId) window.castVote(targetId);
+    });
+  });
 
   const totalAgents = alivePlayers.filter(p => p.id !== myPlayerId || myRole !== 'human').length;
   const totalVotes = Object.values(tally).reduce((a, b) => a + b, 0);

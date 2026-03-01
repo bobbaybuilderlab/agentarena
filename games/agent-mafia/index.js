@@ -4,6 +4,19 @@ function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
 
+function capEvents(room) {
+  if (room.events.length > 100) room.events = room.events.slice(-50);
+}
+
+function fisherYatesShuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 function createStore() {
   return new Map();
 }
@@ -199,7 +212,7 @@ function startGame(store, { roomId, hostPlayerId }) {
   room.tally = {};
   room.events = [{ type: 'GAME_STARTED', at: Date.now(), day: room.day }];
 
-  const shuffled = [...room.players].sort(() => Math.random() - 0.5);
+  const shuffled = fisherYatesShuffle(room.players);
   const mafiaCount = Math.max(1, Math.floor(room.players.length / 4));
   shuffled.forEach((p, idx) => {
     p.role = idx < mafiaCount ? 'mafia' : 'town';
@@ -326,12 +339,17 @@ function resolveVote(room) {
   room.tally = counts;
   room.actions.vote = {};
 
-  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-  const executedId = sorted[0]?.[0] || null;
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  // Skip elimination on tie (top two have same vote count)
+  const topVotes = sorted[0]?.[1] || 0;
+  const isTied = sorted.length >= 2 && sorted[1][1] === topVotes;
+  const executedId = (!isTied && sorted[0]?.[0]) || null;
   if (executedId) {
     const target = room.players.find((p) => p.id === executedId);
     if (target && target.alive) target.alive = false;
     room.events.push({ type: 'DAY_EXECUTION', targetId: executedId, at: Date.now(), day: room.day });
+  } else if (isTied) {
+    room.events.push({ type: 'VOTE_TIED', at: Date.now(), day: room.day });
   }
 
   const winner = checkWin(room);
@@ -352,6 +370,7 @@ function finish(room, winner) {
   if (!transitioned.ok) return transitioned;
   room.winner = winner;
   room.events.push({ type: 'GAME_FINISHED', winner, day: room.day, at: Date.now() });
+  capEvents(room);
   return { ok: true, room };
 }
 
@@ -368,7 +387,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.winner = null;
   room.actions = { night: {}, vote: {} };
   room.tally = {};
-  room.events.push({ type: 'REMATCH_READY', at: Date.now() });
+  room.events = [{ type: 'REMATCH_READY', at: Date.now() }];
   for (const player of room.players) {
     player.alive = true;
     player.role = null;

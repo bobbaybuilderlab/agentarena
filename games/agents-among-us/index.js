@@ -4,6 +4,19 @@ function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
 
+function capEvents(room) {
+  if (room.events.length > 100) room.events = room.events.slice(-50);
+}
+
+function fisherYatesShuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 function createStore() {
   return new Map();
 }
@@ -204,7 +217,7 @@ function startGame(store, { roomId, hostPlayerId }) {
   room.votes = {};
   room.events = [{ type: 'GAME_STARTED', at: Date.now() }];
 
-  const shuffled = [...room.players].sort(() => Math.random() - 0.5);
+  const shuffled = fisherYatesShuffle(room.players);
   const imposterCount = 1;
   shuffled.forEach((p, i) => {
     p.role = i < imposterCount ? 'imposter' : 'crew';
@@ -263,6 +276,7 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
   if (room.phase === 'meeting' && type === 'vote') {
     const target = room.players.find((p) => p.id === targetId);
     if (!target || !target.alive) return { ok: false, error: { code: 'INVALID_TARGET', message: 'Invalid target' } };
+    if (target.id === actor.id) return { ok: false, error: { code: 'SELF_VOTE', message: 'Cannot vote for yourself' } };
 
     room.votes[actor.id] = target.id;
     if (Object.keys(room.votes).length >= alive(room).length) {
@@ -297,12 +311,17 @@ function forceAdvance(store, { roomId }) {
 function resolveMeeting(room) {
   const counts = {};
   for (const targetId of Object.values(room.votes)) counts[targetId] = (counts[targetId] || 0) + 1;
-  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-  const ejectedId = sorted[0]?.[0] || null;
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  // Skip ejection on tie
+  const topVotes = sorted[0]?.[1] || 0;
+  const isTied = sorted.length >= 2 && sorted[1][1] === topVotes;
+  const ejectedId = (!isTied && sorted[0]?.[0]) || null;
   if (ejectedId) {
     const p = room.players.find((x) => x.id === ejectedId);
     if (p && p.alive) p.alive = false;
     room.events.push({ type: 'EJECTED', playerId: ejectedId, at: Date.now() });
+  } else if (isTied) {
+    room.events.push({ type: 'VOTE_TIED', at: Date.now() });
   }
 
   room.votes = {};
@@ -322,6 +341,7 @@ function finish(room, winner) {
   if (!transitioned.ok) return transitioned;
   room.winner = winner;
   room.events.push({ type: 'GAME_FINISHED', winner, at: Date.now() });
+  capEvents(room);
   return { ok: true, room };
 }
 
@@ -337,7 +357,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.winner = null;
   room.meetingReason = null;
   room.votes = {};
-  room.events.push({ type: 'REMATCH_READY', at: Date.now() });
+  room.events = [{ type: 'REMATCH_READY', at: Date.now() }];
   for (const player of room.players) {
     player.alive = true;
     player.role = null;

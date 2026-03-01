@@ -8,6 +8,10 @@ function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
 
+function capEvents(room) {
+  if (room.events.length > 100) room.events = room.events.slice(-50);
+}
+
 function createStore() {
   return new Map();
 }
@@ -15,9 +19,9 @@ function createStore() {
 // ─── Phase Transitions ─────────────────────────────────────────────────────
 const VALID_TRANSITIONS = {
   lobby:   new Set(['prompt']),
-  prompt:  new Set(['reveal']),
-  reveal:  new Set(['vote']),
-  vote:    new Set(['result']),
+  prompt:  new Set(['reveal', 'finished']),
+  reveal:  new Set(['vote', 'finished']),
+  vote:    new Set(['result', 'finished']),
   result:  new Set(['prompt', 'finished']),
   finished: new Set(),
 };
@@ -287,6 +291,12 @@ function resolveRound(room) {
       if (eliminated.role === 'human') {
         return finish(room, 'agents');
       }
+
+      // Win check: all agents eliminated?
+      const remainingAgents = room.players.filter(p => p.alive && p.role === 'agent');
+      if (remainingAgents.length === 0) {
+        return finish(room, 'human');
+      }
     }
   }
 
@@ -297,11 +307,12 @@ function resolveRound(room) {
 
 // ─── finish ──────────────────────────────────────────────────────────────────
 function finish(room, winner) {
-  room.status = 'finished';
-  room.phase = 'finished';
+  const t = transition(room, 'finished', { nextStatus: 'finished' });
+  if (!t.ok) return t;
   room.winner = winner;
   // humanPlayerId was set at startGame — now it's safe to reveal in toPublic()
   room.events.push({ type: 'GAME_FINISHED', winner, humanPlayerId: room.humanPlayerId, at: Date.now() });
+  capEvents(room);
 }
 
 // ─── forceAdvance ────────────────────────────────────────────────────────────
@@ -398,7 +409,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
     // In a rematch, same roles unless we add role-rotation later
   }
 
-  room.events.push({ type: 'REMATCH_READY', at: Date.now() });
+  room.events = [{ type: 'REMATCH_READY', at: Date.now() }];
   return { ok: true, room };
 }
 

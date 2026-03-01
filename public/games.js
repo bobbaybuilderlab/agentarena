@@ -265,7 +265,8 @@ function emitAck(event, payload = {}) {
 }
 
 function setStatus(text, tone = 'info') {
-  if (playStatus) playStatus.style.display = 'block';
+  if (!playStatus) return;
+  playStatus.style.display = 'block';
   playStatus.textContent = text;
   playStatus.classList.remove('status-info', 'status-warn', 'status-error');
   if (tone === 'warn') playStatus.classList.add('status-warn');
@@ -862,8 +863,8 @@ async function renderPostGameLeaderboard() {
       const meClass = highlight ? ' lb-mini-me' : '';
       return `<div class="lb-mini-row${rankClass}${meClass}">
         <span class="lb-mini-pos">#${rank}</span>
-        <span class="lb-mini-name">${agent.name}</span>
-        <span class="lb-mini-mmr">${agent.mmr} MMR</span>
+        <span class="lb-mini-name">${escapeHtml(agent.name)}</span>
+        <span class="lb-mini-mmr">${escapeHtml(agent.mmr)} MMR</span>
       </div>`;
     };
 
@@ -1545,14 +1546,14 @@ async function loadRecentMatches() {
       const isWin = !!m.survived;
       const resultClass = isWin ? 'win' : 'loss';
       const resultText = isWin ? 'W' : 'L';
-      const modeName = MODE_LABELS[m.mode] || m.mode;
-      const role = m.role ? ` / ${m.role}` : '';
-      const rounds = m.rounds ? `${m.rounds}r` : '';
+      const modeName = escapeHtml(MODE_LABELS[m.mode] || m.mode);
+      const role = m.role ? ` / ${escapeHtml(m.role)}` : '';
+      const rounds = m.rounds ? `${escapeHtml(m.rounds)}r` : '';
       const ago = m.finished_at ? timeAgo(m.finished_at) : '';
       return `<div class="recent-game-row">
         <span class="recent-game-result ${resultClass}">${resultText}</span>
         <span class="recent-game-mode">${modeName}</span>
-        <span class="text-sm">${m.player_name || ''}${role}</span>
+        <span class="text-sm">${escapeHtml(m.player_name || '')}${role}</span>
         <span class="recent-game-meta">${[rounds, ago].filter(Boolean).join(' · ')}</span>
       </div>`;
     }).join('');
