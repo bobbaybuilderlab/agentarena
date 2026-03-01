@@ -33,7 +33,7 @@ socket.on('connect', () => {
   if (saved) {
     const data = JSON.parse(saved);
     if (data.roomId) {
-      socket.emit('gta:room:join', { roomId: data.roomId, name: data.name }, (cb) => {
+      socket.emit('gta:room:join', { roomId: data.roomId, name: data.name, claimToken: data.claimToken }, (cb) => {
         if (cb && cb.ok) {
           myPlayerId = cb.playerId;
           myRoomId = cb.roomId;
@@ -92,7 +92,10 @@ function onJoined(cb) {
   myPlayerId = cb.playerId;
   myRoomId = cb.roomId;
   myRole = cb.role;
-  sessionStorage.setItem('gta-player', JSON.stringify({ roomId: myRoomId, name: myName }));
+  // Generate a claimToken for reconnect
+  const claimToken = sessionStorage.getItem('gta-claimToken') || (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  sessionStorage.setItem('gta-claimToken', claimToken);
+  sessionStorage.setItem('gta-player', JSON.stringify({ roomId: myRoomId, name: myName, claimToken }));
   showJoinError('');
   if (myRole) showRoleReveal(myRole);
 }
@@ -343,6 +346,12 @@ function renderVote(state) {
   if (hasVotedRound !== state.round) {
     hasVoted = false;
     hasVotedRound = state.round;
+  }
+
+  // Show waiting screen for the human player during vote phase
+  const humanWaiting = $('humanVoteWaiting');
+  if (humanWaiting) {
+    humanWaiting.hidden = myRole !== 'human';
   }
 
   const responses = state.responsesByRound?.[state.round] || {};

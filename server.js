@@ -804,6 +804,15 @@ function scheduleGtaPhase(room) {
     room.roundEndsAt = Date.now() + GTA_PROMPT_MS;
     emitGtaRoom(room); // re-emit with updated roundEndsAt
 
+    // Emit prompt to live AI agent sockets
+    const liveAgents = room.players.filter(p => p.isLiveAgent && p.alive && p.socketId);
+    for (const agent of liveAgents) {
+      const agentSock = io.sockets.sockets.get(agent.socketId);
+      if (agentSock) {
+        agentSock.emit('gta:prompt', { prompt: room.currentPrompt, round: room.round, roomId: room.id });
+      }
+    }
+
     // Schedule bot responses
     const bots = room.players.filter(p => p.isBot && p.alive);
     for (const bot of bots) {
@@ -844,6 +853,17 @@ function scheduleGtaPhase(room) {
 
   if (room.phase === 'vote') {
     room.roundEndsAt = Date.now() + GTA_VOTE_MS;
+
+    // Emit vote request to live AI agent sockets
+    const liveVoters = room.players.filter(p => p.isLiveAgent && p.alive && p.socketId && p.role === 'agent');
+    const publicPlayers = room.players.filter(p => p.alive).map(p => ({ id: p.id, name: p.name, alive: p.alive }));
+    for (const agent of liveVoters) {
+      const agentSock = io.sockets.sockets.get(agent.socketId);
+      if (agentSock) {
+        agentSock.emit('gta:vote_request', { players: publicPlayers, round: room.round, roomId: room.id });
+      }
+    }
+
     // Schedule bot votes
     const aliveBots = room.players.filter(p => p.isBot && p.alive && p.role === 'agent');
     for (const bot of aliveBots) {
@@ -1391,6 +1411,18 @@ io.on('connection', (socket) => {
     logRoomEvent('gta', reset.room, 'REMATCH_STARTED', {});
     emitGtaRoom(reset.room);
     cb?.({ ok: true });
+  });
+
+  // ── Live AI Agent join (marks player as live agent, not a bot) ──
+  socket.on('gta:agent:join', (payload) => {
+    const { roomId, playerId } = payload || {};
+    const room = gtaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return;
+    const player = room.players.find(p => p.id === playerId && p.socketId === socket.id);
+    if (!player) return;
+    player.isLiveAgent = true;
+    player.isBot = false;
+    logRoomEvent('gta', room, 'LIVE_AGENT_JOINED', { playerId, playerName: player.name });
   });
 
   socket.on('room:create', (payload, cb) => {
