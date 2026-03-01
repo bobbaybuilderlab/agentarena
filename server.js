@@ -660,27 +660,8 @@ function runVillaBotAutoplay(room) {
     if (room.status !== 'in_progress' || room.phase !== startingPhase) break;
   }
 
-  // If room is bot-filled with a single human and they're idle, submit a deterministic
-  // fallback action so the autoplay loop can complete without stalling on one missing vote.
-  if (room.status === 'in_progress' && room.phase === startingPhase) {
-    const aliveHumans = room.players.filter((p) => p.alive && !p.isBot);
-    if (aliveHumans.length === 1) {
-      const human = aliveHumans[0];
-      const currentBucket = room.actions?.[startingPhase] || {};
-      if (!currentBucket[human.id]) {
-        const target = pickVillaTarget(room, human.id);
-        if (target) {
-          const fallback = villaGame.submitAction(villaRooms, {
-            roomId: room.id,
-            playerId: human.id,
-            type: phaseType,
-            targetId: target.id,
-          });
-          if (fallback.ok) acted += 1;
-        }
-      }
-    }
-  }
+  // NOTE: Removed human auto-submit — only bots should be autoplayed.
+  // forceAdvance() already handles deadline expiry for idle humans.
 
   if (acted > 0) {
     logRoomEvent('villa', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, round: room.round, status: room.status });
@@ -1864,7 +1845,12 @@ function authorizeConnectSession(req, connect) {
   return token === connect.accessToken || token === connect.callbackProof;
 }
 
-function persistState() {
+let _persistDirty = false;
+let _persistTimer = null;
+
+function _flushState() {
+  _persistTimer = null;
+  _persistDirty = false;
   try {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
     const serializable = {
@@ -1875,6 +1861,13 @@ function persistState() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(serializable, null, 2));
   } catch (err) {
     logStructured('error.persistState', { error: err.message });
+  }
+}
+
+function persistState() {
+  _persistDirty = true;
+  if (!_persistTimer) {
+    _persistTimer = setTimeout(_flushState, 5000);
   }
 }
 
@@ -2662,7 +2655,7 @@ function getLobbyStore(mode) {
 function getClaimableLobbySeats(mode, roomId) {
   const store = getLobbyStore(mode);
   if (!store) {
-    return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } };
+    return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa|gta' } };
   }
 
   const room = store.get(String(roomId || '').toUpperCase());
@@ -2756,6 +2749,9 @@ function createQuickJoinRoom(mode, hostName) {
   if (mode === 'villa') {
     return villaGame.createRoom(villaRooms, { hostName, hostSocketId: socketId });
   }
+  if (mode === 'gta') {
+    return gtaGame.createRoom(gtaRooms, { hostName, hostSocketId: socketId });
+  }
   return mafiaGame.createRoom(mafiaRooms, { hostName, hostSocketId: socketId });
 }
 
@@ -2811,7 +2807,7 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
 
 function stripDisconnectedLobbyHumans(mode, roomId) {
   const store = getLobbyStore(mode);
-  if (!store) return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa' } };
+  if (!store) return { ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa|gta' } };
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only update lobby rooms' } };
@@ -2843,9 +2839,9 @@ function getLobbyStartReadiness(mode, room, playerId) {
 }
 
 function startReadyLobby(mode, roomId, playerId) {
-  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
-  const game = mode === 'amongus' ? amongUsGame : mode === 'villa' ? villaGame : mafiaGame;
-  const emitRoom = mode === 'amongus' ? emitAmongUsRoom : mode === 'villa' ? emitVillaRoom : emitMafiaRoom;
+  const store = mode === 'gta' ? gtaRooms : mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mafiaRooms;
+  const game = mode === 'gta' ? gtaGame : mode === 'amongus' ? amongUsGame : mode === 'villa' ? villaGame : mafiaGame;
+  const emitRoom = mode === 'gta' ? emitGtaRoom : mode === 'amongus' ? emitAmongUsRoom : mode === 'villa' ? emitVillaRoom : emitMafiaRoom;
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
 
@@ -2889,7 +2885,8 @@ function startReadyLobby(mode, roomId, playerId) {
     round: started.room.round,
   });
   emitRoom(started.room);
-  if (mode === 'amongus') scheduleAmongUsPhase(started.room);
+  if (mode === 'gta') scheduleGtaPhase(started.room);
+  else if (mode === 'amongus') scheduleAmongUsPhase(started.room);
   else if (mode === 'villa') scheduleVillaPhase(started.room);
   else scheduleMafiaPhase(started.room);
 
@@ -3519,13 +3516,13 @@ function cleanupStaleRooms() {
       const isEmpty = !room.players || room.players.length === 0;
       const isEmptyLobby = room.status === 'lobby' && isEmpty;
 
-      if (isFinished && age > STALE_FINISHED_ROOM_MS) {
-        store.delete(id);
-        cleaned++;
-      } else if (isEmptyLobby && age > STALE_EMPTY_LOBBY_MS) {
-        store.delete(id);
-        cleaned++;
-      } else if (age > STALE_INACTIVE_ROOM_MS) {
+      let shouldDelete = false;
+      if (isFinished && age > STALE_FINISHED_ROOM_MS) shouldDelete = true;
+      else if (isEmptyLobby && age > STALE_EMPTY_LOBBY_MS) shouldDelete = true;
+      else if (age > STALE_INACTIVE_ROOM_MS) shouldDelete = true;
+
+      if (shouldDelete) {
+        roomScheduler.clearRoom(id, label);
         store.delete(id);
         cleaned++;
       }
@@ -3570,9 +3567,15 @@ if (require.main === module) {
     console.log(`Agent Arena running on http://localhost:${PORT}`);
   });
 
-  process.on('SIGTERM', () => {
+  server.on('close', () => {
+    if (_persistDirty) _flushState();
     closeDb();
     process.exit(0);
+  });
+
+  process.on('SIGTERM', () => {
+    server.close();
+    setTimeout(() => process.exit(0), 10000);
   });
 }
 
