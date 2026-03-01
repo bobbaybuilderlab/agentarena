@@ -10,27 +10,37 @@
 
     if (!hamburger || !drawer) return;
 
-    hamburger.addEventListener('click', function () {
+    function openNav() {
       document.body.classList.add('nav-mobile-open');
+      hamburger.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeNav() {
+      document.body.classList.remove('nav-mobile-open');
+      hamburger.setAttribute('aria-expanded', 'false');
+    }
+
+    hamburger.addEventListener('click', function () {
+      openNav();
     });
 
     if (closeBtn) {
       closeBtn.addEventListener('click', function () {
-        document.body.classList.remove('nav-mobile-open');
+        closeNav();
       });
     }
 
     // Close on backdrop click
     drawer.addEventListener('click', function (e) {
       if (e.target === drawer) {
-        document.body.classList.remove('nav-mobile-open');
+        closeNav();
       }
     });
 
     // Close on Escape key
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
-        document.body.classList.remove('nav-mobile-open');
+        closeNav();
       }
     });
   }

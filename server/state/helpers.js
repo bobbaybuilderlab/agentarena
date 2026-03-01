@@ -1,6 +1,11 @@
 const { randomUUID } = require('crypto');
 
-function shortId(len = 8) {
+function shortId(len = 8, existingIds) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const id = randomUUID().replace(/-/g, '').slice(0, len);
+    if (!existingIds || !existingIds.has(id)) return id;
+  }
+  // Fallback: 10 collisions is astronomically unlikely; return last attempt anyway
   return randomUUID().replace(/-/g, '').slice(0, len);
 }
 

@@ -57,6 +57,10 @@ function createAnonymousUser(id) {
 
 function upgradeUser(userId, { email, displayName, agentId }) {
   const database = getDb();
+  // Validate and truncate inputs
+  if (email && (typeof email !== 'string' || email.length > 254)) email = typeof email === 'string' ? email.slice(0, 254) : undefined;
+  if (displayName && (typeof displayName !== 'string' || displayName.length > 32)) displayName = typeof displayName === 'string' ? displayName.slice(0, 32) : undefined;
+  if (agentId && (typeof agentId !== 'string' || agentId.length > 64)) agentId = typeof agentId === 'string' ? agentId.slice(0, 64) : undefined;
   if (!database) return { id: userId, email, displayName, agentId };
   const updates = [];
   const params = [];
@@ -191,7 +195,10 @@ function getReports({ status, limit } = {}) {
   return database.prepare(`SELECT * FROM reports ${where} ORDER BY created_at DESC LIMIT ?`).all(...params);
 }
 
+const VALID_REPORT_STATUSES = ['pending', 'reviewed', 'dismissed'];
+
 function updateReportStatus(id, status) {
+  if (!VALID_REPORT_STATUSES.includes(status)) return;
   const database = getDb();
   if (!database) return;
   database.prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id);

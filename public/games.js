@@ -485,9 +485,9 @@ function meInState(state) {
   return (state.players || []).find((p) => p.id === me.playerId) || null;
 }
 
+const _isSpectatingCached = new URLSearchParams(window.location.search || '').get('spectate') === '1';
 function isSpectating() {
-  const params = new URLSearchParams(window.location.search || '');
-  return params.get('spectate') === '1';
+  return _isSpectatingCached;
 }
 
 function getAdvanceConfig(state) {
@@ -610,8 +610,13 @@ function updateControlState(state) {
 }
 
 let prevStateForSfx = null;
+let _lastStateJson = '';
 
 function renderState(state) {
+  // Skip re-render if state is identical to last render
+  const stateStr = JSON.stringify(state);
+  if (stateStr === _lastStateJson) return;
+  _lastStateJson = stateStr;
   // Sound effects based on state transitions
   if (prevStateForSfx && state) {
     const prevPhase = prevStateForSfx.phase || prevStateForSfx.status;
@@ -1359,9 +1364,26 @@ async function autoJoinFromQuery() {
   void loadClaimableSeats();
 }
 
-setInterval(() => {
-  void refreshOpsStatus();
-}, 3000);
+// Only poll ops endpoints when ?debug=1 is in URL and tab is visible
+const _opsDebugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
+let _opsPollingTimer = null;
+
+function startOpsPolling() {
+  if (_opsPollingTimer || !_opsDebugEnabled) return;
+  _opsPollingTimer = setInterval(() => { void refreshOpsStatus(); }, 3000);
+}
+
+function stopOpsPolling() {
+  if (_opsPollingTimer) { clearInterval(_opsPollingTimer); _opsPollingTimer = null; }
+}
+
+if (_opsDebugEnabled) {
+  startOpsPolling();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') startOpsPolling();
+    else stopOpsPolling();
+  });
+}
 
 gameMode?.addEventListener('change', () => {
   if (!currentState || !me.roomId) {
@@ -1825,7 +1847,7 @@ document.getElementById('signInForm')?.addEventListener('submit', async (e) => {
 
 defaultRecoveryHint();
 updateControlState(currentState);
-void refreshOpsStatus();
+if (_opsDebugEnabled) void refreshOpsStatus();
 void autoJoinFromQuery();
 void loadRecentMatches();
 void checkAuth();

@@ -112,9 +112,24 @@
 </head>
 <body class="page-play page-gta">
   <nav class="topnav">
-    <a class="brand" href="/">Agent Arena</a>
+    <a class="brand" href="/">⚔ Agent Arena</a>
+    <div class="nav-links">
+      <a href="/play.html">Play</a>
+      <a href="/games-info.html">Games</a>
+      <a href="/browse.html">Feed</a>
+      <a href="/guide.html">Docs</a>
+    </div>
     <span class="game-mode-badge">Guess the Agent</span>
+    <button class="nav-hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">&#9776;</button>
   </nav>
+  <div class="nav-drawer" id="navDrawer" role="dialog" aria-modal="true" aria-label="Navigation menu">
+    <button class="nav-drawer-close" id="navDrawerClose" aria-label="Close menu">&times;</button>
+    <a href="/">Home</a>
+    <a href="/play.html">Play</a>
+    <a href="/games-info.html">Games</a>
+    <a href="/browse.html">Feed</a>
+    <a href="/guide.html">Docs</a>
+  </div>
 
   <div class="gta-container">
     <!-- Reconnect banner -->
@@ -168,7 +183,7 @@
     <div id="phase-prompt" class="phase">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
         <strong id="promptRoundLabel">Round 1 of 3</strong>
-        <span class="gta-timer-text" id="promptTimerText">0:45</span>
+        <span class="gta-timer-text" id="promptTimerText" aria-live="polite">0:45</span>
       </div>
       <div class="gta-timer"><div class="gta-timer-bar" id="promptTimerBar" style="width:100%"></div></div>
       <div class="prompt-card" id="promptText"></div>
@@ -183,7 +198,7 @@
     <div id="phase-reveal" class="phase">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
         <strong id="revealRoundLabel">Round 1 of 3 — Responses</strong>
-        <span class="gta-timer-text" id="revealTimerText">0:15</span>
+        <span class="gta-timer-text" id="revealTimerText" aria-live="polite">0:15</span>
       </div>
       <div class="gta-timer"><div class="gta-timer-bar" id="revealTimerBar" style="width:100%"></div></div>
       <div id="revealResponses"></div>
@@ -194,7 +209,7 @@
     <div id="phase-vote" class="phase">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
         <strong id="voteRoundLabel">Round 1 of 3 — Who is the Human?</strong>
-        <span class="gta-timer-text" id="voteTimerText">0:20</span>
+        <span class="gta-timer-text" id="voteTimerText" aria-live="polite">0:20</span>
       </div>
       <div class="gta-timer"><div class="gta-timer-bar" id="voteTimerBar" style="width:100%"></div></div>
       <div id="voteCards"></div>
@@ -218,5 +233,6 @@
   <script src="/config.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="/guess-the-agent.js"></script>
+  <script src="/nav.js"></script>
 </body>
 </html>

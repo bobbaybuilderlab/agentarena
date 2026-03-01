@@ -371,7 +371,7 @@ function renderVote(state) {
         <span class="gta-vote-count">${voteCount > 0 ? voteCount + ' vote' + (voteCount > 1 ? 's' : '') : ''}</span>
       </div>
       <p class="gta-response-text">"${esc(response)}"</p>
-      ${showVoteBtn ? `<button class="gta-vote-btn" data-vote-target="${esc(p.id)}">Vote</button>` : ''}
+      ${showVoteBtn ? `<button class="gta-vote-btn" data-vote-target="${esc(p.id)}" aria-label="Vote for ${esc(p.name)}">Vote</button>` : ''}
     </div>`;
   }).join('');
 
