@@ -19,8 +19,8 @@ function createStore() {
 // ─── Phase Transitions ─────────────────────────────────────────────────────
 const VALID_TRANSITIONS = {
   lobby:   new Set(['prompt']),
-  prompt:  new Set(['reveal']),
-  reveal:  new Set(['vote']),
+  prompt:  new Set(['reveal', 'finished']),
+  reveal:  new Set(['vote', 'finished']),
   vote:    new Set(['result', 'finished']),
   result:  new Set(['prompt', 'finished']),
   finished: new Set(),
