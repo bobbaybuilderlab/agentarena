@@ -1698,7 +1698,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
-  if (!allowedOrigins.length || allowedOrigins.includes(origin)) {
+  if (effectiveOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -1869,7 +1869,10 @@ function persistState() {
   }
 }
 
+let _stateLoaded = false;
 function loadState() {
+  if (_stateLoaded) return;
+  _stateLoaded = true;
   try {
     if (!fs.existsSync(DATA_FILE)) return;
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -1994,36 +1997,7 @@ function runAutoBattle() {
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
-// Health check endpoint for monitoring
-app.get('/health', (_req, res) => {
-  try {
-    const { getDb } = require('./server/db');
-    const db = getDb();
-    if (!db) {
-      // DB unavailable (better-sqlite3 not installed) — server is healthy, persistence degraded
-      return res.status(200).json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        database: 'unavailable',
-        uptime: process.uptime(),
-      });
-    }
-    const integrityCheck = db.pragma('integrity_check');
-    const dbOk = integrityCheck[0]?.integrity_check === 'ok';
-    res.status(dbOk ? 200 : 503).json({
-      status: dbOk ? 'healthy' : 'degraded',
-      timestamp: new Date().toISOString(),
-      database: dbOk ? 'ok' : 'failed',
-      uptime: process.uptime(),
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: error.message,
-    });
-  }
-});
+// Health check — single handler (see bottom of file)
 
 app.post('/api/track/share', (_req, res) => {
   incrementGrowthMetric('referral.inviteSends', 1);
@@ -3467,14 +3441,31 @@ app.get('/health', (_req, res) => {
   const scheduler = roomScheduler.stats();
   const eventQueueDepth = roomEvents.pending();
   const eventQueueByMode = roomEvents.pendingByMode();
+
+  let dbStatus = 'unavailable';
+  try {
+    const { getDb: getHealthDb } = require('./server/db');
+    const database = getHealthDb();
+    if (database) {
+      const integrityCheck = database.pragma('integrity_check');
+      dbStatus = integrityCheck[0]?.integrity_check === 'ok' ? 'ok' : 'degraded';
+    }
+  } catch (_e) {
+    dbStatus = 'error';
+  }
+
   res.json({
     ok: true,
+    status: dbStatus === 'ok' || dbStatus === 'unavailable' ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    database: dbStatus,
     uptimeSec: Math.floor(process.uptime()),
     rooms: {
       arena: rooms.size,
       mafia: mafiaRooms.size,
       amongus: amongUsRooms.size,
       villa: villaRooms.size,
+      gta: gtaRooms.size,
     },
     agents: agentProfiles.size,
     roasts: roastFeed.length,

@@ -176,13 +176,13 @@ $('responseInput').addEventListener('input', () => {
 });
 
 // ─── Vote ───────────────────────────────────────────────────────────────────
-function castVote(targetId) {
+window.castVote = function castVote(targetId) {
   if (hasVoted) return;
   hasVoted = true;
   socket.emit('gta:action', { roomId: myRoomId, playerId: myPlayerId, type: 'vote', targetId }, (cb) => {
     if (!cb?.ok) hasVoted = false;
   });
-}
+};
 
 // ─── Rematch ────────────────────────────────────────────────────────────────
 window.doRematch = function () {
@@ -360,9 +360,17 @@ function renderVote(state) {
         <span class="gta-vote-count">${voteCount > 0 ? voteCount + ' vote' + (voteCount > 1 ? 's' : '') : ''}</span>
       </div>
       <p class="gta-response-text">"${esc(response)}"</p>
-      ${showVoteBtn ? `<button class="gta-vote-btn" onclick="castVote('${p.id}')">Vote</button>` : ''}
+      ${showVoteBtn ? `<button class="gta-vote-btn" data-vote-target="${esc(p.id)}">Vote</button>` : ''}
     </div>`;
   }).join('');
+
+  // Delegated click handler for vote buttons
+  $('voteCards').querySelectorAll('.gta-vote-btn[data-vote-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-vote-target');
+      if (targetId) window.castVote(targetId);
+    });
+  });
 
   const totalAgents = alivePlayers.filter(p => p.id !== myPlayerId || myRole !== 'human').length;
   const totalVotes = Object.values(tally).reduce((a, b) => a + b, 0);
