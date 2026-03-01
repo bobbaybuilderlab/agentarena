@@ -26,7 +26,7 @@ const { runEval } = require('./lib/eval-harness');
 const { parseThresholdsFromEnv, evaluateEvalReport } = require('./lib/eval-thresholds');
 const { createCanaryMode } = require('./lib/canary-mode');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
-const { shortId, correlationId, logStructured } = require('./server/state/helpers');
+const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('./server/state/helpers');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
@@ -189,7 +189,7 @@ function createRoom(host) {
     canaryBucket,
     hostSocketId: host.socketId,
     theme: THEMES[0],
-    themeRotation: [...THEMES].sort(() => Math.random() - 0.5).slice(0, 5),
+    themeRotation: fisherYatesShuffle(THEMES).slice(0, 5),
     players: [],
     spectators: new Set(),
     status: 'lobby',
@@ -1467,7 +1467,7 @@ io.on('connection', (socket) => {
     room.roastsByRound = {};
     room.votesByRound = {};
     room.lastWinner = null;
-    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
+    room.themeRotation = fisherYatesShuffle(THEMES).slice(0, room.maxRounds);
     const started = beginRound(room);
     if (started && started.ok === false) return cb?.({ ok: false, error: started.error.message, code: started.error.code });
     logRoomEvent('arena', room, 'BATTLE_STARTED', { status: room.status, round: room.round, theme: room.theme });
@@ -1603,7 +1603,7 @@ io.on('connection', (socket) => {
     room.lastWinner = null;
     room.roundEndsAt = null;
     room.voteEndsAt = null;
-    room.themeRotation = [...THEMES].sort(() => Math.random() - 0.5).slice(0, room.maxRounds);
+    room.themeRotation = fisherYatesShuffle(THEMES).slice(0, room.maxRounds);
     room.theme = room.themeRotation[0] || THEMES[0];
     room.players.forEach((p) => { room.totalVotes[p.id] = 0; });
 
@@ -1984,7 +1984,7 @@ function runAutoBattle() {
   const deployed = [...agentProfiles.values()].filter((a) => a.deployed);
   if (deployed.length < 2) return null;
 
-  const shuffled = deployed.sort(() => Math.random() - 0.5).slice(0, Math.min(4, deployed.length));
+  const shuffled = fisherYatesShuffle(deployed).slice(0, Math.min(4, deployed.length));
   const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
   const battleId = shortId(8);
 
@@ -3492,6 +3492,7 @@ app.use((err, _req, res, _next) => {
 // ── Stale room cleanup ──
 const STALE_FINISHED_ROOM_MS = 30 * 60 * 1000; // 30 min after finish
 const STALE_EMPTY_LOBBY_MS = 15 * 60 * 1000; // 15 min empty lobby
+const STALE_INACTIVE_ROOM_MS = 2 * 60 * 60 * 1000; // 2 hours inactive
 
 function cleanupStaleRooms() {
   const now = Date.now();
@@ -3508,6 +3509,9 @@ function cleanupStaleRooms() {
         store.delete(id);
         cleaned++;
       } else if (isEmptyLobby && age > STALE_EMPTY_LOBBY_MS) {
+        store.delete(id);
+        cleaned++;
+      } else if (age > STALE_INACTIVE_ROOM_MS) {
         store.delete(id);
         cleaned++;
       }

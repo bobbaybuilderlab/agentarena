@@ -4,6 +4,15 @@ function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
 
+function fisherYatesShuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 function createStore() {
   return new Map();
 }
@@ -204,7 +213,7 @@ function startGame(store, { roomId, hostPlayerId }) {
   room.votes = {};
   room.events = [{ type: 'GAME_STARTED', at: Date.now() }];
 
-  const shuffled = [...room.players].sort(() => Math.random() - 0.5);
+  const shuffled = fisherYatesShuffle(room.players);
   const imposterCount = 1;
   shuffled.forEach((p, i) => {
     p.role = i < imposterCount ? 'imposter' : 'crew';
