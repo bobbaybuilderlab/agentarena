@@ -4,6 +4,10 @@ function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
 
+function capEvents(room) {
+  if (room.events.length > 100) room.events = room.events.slice(-50);
+}
+
 function createStore() {
   return new Map();
 }
@@ -332,9 +336,11 @@ function tallyVotes(votes) {
 }
 
 function pickTopByTally(tally, fallbackIds = []) {
-  const sorted = Object.entries(tally || {}).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+  const sorted = Object.entries(tally || {}).sort((a, b) => b[1] - a[1]);
+  // Skip on tie (top two have same vote count)
+  if (sorted.length >= 2 && sorted[0][1] === sorted[1][1]) return null;
   if (sorted[0]?.[0]) return sorted[0][0];
-  return (fallbackIds || []).sort((a, b) => String(a).localeCompare(String(b)))[0] || null;
+  return null;
 }
 
 function checkWin(room) {
@@ -356,6 +362,7 @@ function finish(room, winner) {
     round: room.round,
     at: Date.now(),
   });
+  capEvents(room);
   return { ok: true, room };
 }
 
@@ -562,7 +569,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.winnerPlayerIds = [];
   room.actions = newActionBuckets();
   room.roundState = newRoundState();
-  room.events.push({ type: 'REMATCH_READY', at: Date.now() });
+  room.events = [{ type: 'REMATCH_READY', at: Date.now() }];
 
   for (const player of room.players) {
     player.alive = true;

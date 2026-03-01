@@ -961,27 +961,29 @@ setInterval(() => {
 }, 30000);
 
 io.on('connection', (socket) => {
-  socket.onAny((event, payload) => {
-    // Rate limit check
+  // Rate limiting via socket.use middleware — blocks handler execution
+  socket.use(([event, ...args], next) => {
     if (!checkSocketRateLimit(socket.id)) {
       logStructured('socket.rate_limited', { socketId: socket.id, event });
-      // If sustained abuse (3x limit), disconnect
       const entry = socketEventCounts.get(socket.id);
       if (entry && entry.count > SOCKET_RATE_LIMIT * 3) {
         logStructured('socket.rate_limit_disconnect', { socketId: socket.id });
         socket.disconnect(true);
       }
-      return;
+      return next(new Error('rate limited'));
     }
 
-    if (!event.includes(':')) return;
-    const roomId = String(payload?.roomId || '').toUpperCase() || null;
-    logStructured('socket.event', {
-      correlationId: socket.data.correlationId,
-      socketId: socket.id,
-      event,
-      roomId,
-    });
+    if (event.includes(':')) {
+      const payload = args[0];
+      const roomId = String(payload?.roomId || '').toUpperCase() || null;
+      logStructured('socket.event', {
+        correlationId: socket.data.correlationId,
+        socketId: socket.id,
+        event,
+        roomId,
+      });
+    }
+    next();
   });
   socket.on('mafia:room:create', (payload, cb) => {
     const { name } = payload || {};
