@@ -265,7 +265,8 @@ function emitAck(event, payload = {}) {
 }
 
 function setStatus(text, tone = 'info') {
-  if (playStatus) playStatus.style.display = 'block';
+  if (!playStatus) return;
+  playStatus.style.display = 'block';
   playStatus.textContent = text;
   playStatus.classList.remove('status-info', 'status-warn', 'status-error');
   if (tone === 'warn') playStatus.classList.add('status-warn');

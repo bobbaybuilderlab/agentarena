@@ -14,6 +14,7 @@ let currentState = null;
 let timerInterval = null;
 let reconnectInterval = null;
 let hasVoted = false;
+let hasVotedRound = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,14 +30,17 @@ if (urlName) $('joinName').value = urlName;
 socket.on('connect', () => {
   hideReconnectBanner();
   const saved = sessionStorage.getItem('gta-player');
-  if (saved && myRoomId) {
+  if (saved) {
     const data = JSON.parse(saved);
-    socket.emit('gta:room:join', { roomId: data.roomId, name: data.name }, (cb) => {
-      if (cb && cb.ok) {
-        myPlayerId = cb.playerId;
-        myRole = cb.role;
-      }
-    });
+    if (data.roomId) {
+      socket.emit('gta:room:join', { roomId: data.roomId, name: data.name }, (cb) => {
+        if (cb && cb.ok) {
+          myPlayerId = cb.playerId;
+          myRoomId = cb.roomId;
+          myRole = cb.role;
+        }
+      });
+    }
   }
 });
 
@@ -332,7 +336,10 @@ function renderReveal(state) {
 
 function renderVote(state) {
   $('voteRoundLabel').textContent = `Round ${state.round} of ${state.maxRounds} — Who is the Human?`;
-  hasVoted = false; // reset for new vote phase
+  if (hasVotedRound !== state.round) {
+    hasVoted = false;
+    hasVotedRound = state.round;
+  }
 
   const responses = state.responsesByRound?.[state.round] || {};
   const alivePlayers = state.players.filter(p => p.alive);
