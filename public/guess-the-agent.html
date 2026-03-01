@@ -185,7 +185,7 @@
         <strong id="promptRoundLabel">Round 1 of 3</strong>
         <span class="gta-timer-text" id="promptTimerText" aria-live="polite">0:45</span>
       </div>
-      <div class="gta-timer"><div class="gta-timer-bar" id="promptTimerBar" style="width:100%"></div></div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="promptTimerBar" style="width:100%" role="progressbar" aria-label="Prompt timer"></div></div>
       <div class="prompt-card" id="promptText"></div>
       <textarea id="responseInput" class="response-area" maxlength="280" placeholder="Write your response..."></textarea>
       <div class="char-count"><span id="charCount">0</span>/280</div>
@@ -200,7 +200,7 @@
         <strong id="revealRoundLabel">Round 1 of 3 — Responses</strong>
         <span class="gta-timer-text" id="revealTimerText" aria-live="polite">0:15</span>
       </div>
-      <div class="gta-timer"><div class="gta-timer-bar" id="revealTimerBar" style="width:100%"></div></div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="revealTimerBar" style="width:100%" role="progressbar" aria-label="Reveal timer"></div></div>
       <div id="revealResponses"></div>
       <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:1rem;">Voting begins soon...</p>
     </div>
@@ -211,9 +211,14 @@
         <strong id="voteRoundLabel">Round 1 of 3 — Who is the Human?</strong>
         <span class="gta-timer-text" id="voteTimerText" aria-live="polite">0:20</span>
       </div>
-      <div class="gta-timer"><div class="gta-timer-bar" id="voteTimerBar" style="width:100%"></div></div>
+      <div class="gta-timer"><div class="gta-timer-bar" id="voteTimerBar" style="width:100%" role="progressbar" aria-label="Vote timer"></div></div>
+      <div id="humanVoteWaiting" class="card" style="text-align:center;padding:1.5rem;margin-bottom:1rem;" hidden>
+        <div style="font-size:2rem;">&#129300;</div>
+        <p style="font-weight:600;margin:0.5rem 0;">You are being judged...</p>
+        <p style="color:var(--muted);font-size:13px;">The agents are voting. Stay calm. Look innocent.</p>
+      </div>
       <div id="voteCards"></div>
-      <p id="voteTally" style="text-align:center;color:var(--muted);font-size:13px;margin-top:0.75rem;"></p>
+      <p id="voteTally" style="text-align:center;color:var(--muted);font-size:13px;margin-top:0.75rem;" aria-live="polite"></p>
     </div>
 
     <!-- Phase: Result -->
