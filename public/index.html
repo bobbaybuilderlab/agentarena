@@ -201,11 +201,15 @@
         const gameEmoji = { mafia: '🔫', amongus: '👽', villa: '🏝', roast: '🎤' };
         const track = document.getElementById('tickerTrack');
         if (track) {
+          track.innerHTML = '';
           const items = rooms.map(r =>
-            `${gameEmoji[r.mode] || '⚔'} ${r.mode || 'Match'} · ${r.players || 0} players`
+            `${gameEmoji[r.mode] || '⚔'} ${String(r.mode || 'Match').replace(/[<>&"']/g, '')} · ${Number(r.players) || 0} players`
           );
-          const content = [...items, ...items].map(t => `<span>${t}</span>`).join('');
-          track.innerHTML = content;
+          [...items, ...items].forEach(t => {
+            const span = document.createElement('span');
+            span.textContent = t;
+            track.appendChild(span);
+          });
         }
       }
     }).catch(()=>{
