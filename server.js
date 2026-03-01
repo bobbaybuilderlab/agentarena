@@ -1657,9 +1657,10 @@ io.on('connection', (socket) => {
     }
 
     for (const room of gtaRooms.values()) {
+      // Save player ref BEFORE disconnectPlayer clears isConnected
+      const player = room.players.find(p => p.socketId === socket.id && p.isConnected);
       const changed = gtaGame.disconnectPlayer(gtaRooms, { roomId: room.id, socketId: socket.id });
       if (changed) {
-        const player = room.players.find(p => p.socketId === socket.id);
         // If human disconnects during in_progress → start abandon timer
         if (player && player.role === 'human' && room.status === 'in_progress') {
           roomScheduler.schedule({

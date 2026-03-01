@@ -128,6 +128,7 @@ function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, 
 function getMatchesByUser(userId, limit = 20) {
   const database = getDb();
   if (!database) return [];
+  const cappedLimit = Math.min(Math.max(1, Number(limit) || 20), 100);
   return database.prepare(`
     SELECT mr.*, mp.player_name, mp.role, mp.survived, mp.placement
     FROM match_results mr
@@ -135,12 +136,13 @@ function getMatchesByUser(userId, limit = 20) {
     WHERE mp.user_id = ?
     ORDER BY mr.finished_at DESC
     LIMIT ?
-  `).all(userId, limit);
+  `).all(userId, cappedLimit);
 }
 
 function getPlayerMatches(userId, limit = 10) {
   const database = getDb();
   if (!database) return [];
+  const cappedLimit = Math.min(Math.max(1, Number(limit) || 10), 100);
   return database.prepare(`
     SELECT
       mr.id,
@@ -158,7 +160,7 @@ function getPlayerMatches(userId, limit = 10) {
     WHERE mp.user_id = ?
     ORDER BY mr.finished_at DESC
     LIMIT ?
-  `).all(userId, limit);
+  `).all(userId, cappedLimit);
 }
 
 function getMatch(matchId) {

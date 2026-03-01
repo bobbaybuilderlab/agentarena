@@ -297,6 +297,10 @@ function renderPrompt(state) {
   // Show hint for human
   $('humanHint').hidden = myRole !== 'human';
 
+  // Clear textarea for new round
+  $('responseInput').value = '';
+  $('charCount').textContent = '0';
+
   // Reset submit button if new round
   const responses = state.responsesByRound?.[state.round];
   const hasResponded = responses && myPlayerId && responses[myPlayerId];

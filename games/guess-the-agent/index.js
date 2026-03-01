@@ -21,7 +21,7 @@ const VALID_TRANSITIONS = {
   lobby:   new Set(['prompt']),
   prompt:  new Set(['reveal']),
   reveal:  new Set(['vote']),
-  vote:    new Set(['result']),
+  vote:    new Set(['result', 'finished']),
   result:  new Set(['prompt', 'finished']),
   finished: new Set(),
 };
@@ -307,8 +307,8 @@ function resolveRound(room) {
 
 // ─── finish ──────────────────────────────────────────────────────────────────
 function finish(room, winner) {
-  room.status = 'finished';
-  room.phase = 'finished';
+  const t = transition(room, 'finished', { nextStatus: 'finished' });
+  if (!t.ok) return t;
   room.winner = winner;
   // humanPlayerId was set at startGame — now it's safe to reveal in toPublic()
   room.events.push({ type: 'GAME_FINISHED', winner, humanPlayerId: room.humanPlayerId, at: Date.now() });
