@@ -1999,17 +1999,23 @@ app.get('/health', (_req, res) => {
   try {
     const { getDb } = require('./server/db');
     const db = getDb();
+    if (!db) {
+      // DB unavailable (better-sqlite3 not installed) — server is healthy, persistence degraded
+      return res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        database: 'unavailable',
+        uptime: process.uptime(),
+      });
+    }
     const integrityCheck = db.pragma('integrity_check');
     const dbOk = integrityCheck[0]?.integrity_check === 'ok';
-    
-    const status = {
+    res.status(dbOk ? 200 : 503).json({
       status: dbOk ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
       database: dbOk ? 'ok' : 'failed',
       uptime: process.uptime(),
-    };
-    
-    res.status(dbOk ? 200 : 503).json(status);
+    });
   } catch (error) {
     res.status(503).json({
       status: 'unhealthy',

@@ -1,4 +1,10 @@
-const Database = require('better-sqlite3');
+let Database = null;
+try {
+  Database = require('better-sqlite3');
+} catch (_e) {
+  console.warn('[db] better-sqlite3 unavailable — running without persistence. Match records will not be saved.');
+}
+
 const path = require('path');
 const fs = require('fs');
 
@@ -6,6 +12,7 @@ let db = null;
 let schemaReady = false;
 
 function getDb(dbPath) {
+  if (!Database) return null;
   if (db) return db;
 
   const resolvedPath = dbPath || path.join(__dirname, '..', '..', 'data', 'arena.db');
@@ -20,6 +27,7 @@ function getDb(dbPath) {
 }
 
 function initDb(dbPath) {
+  if (!Database) return null;
   const database = getDb(dbPath);
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   database.exec(schema);
@@ -39,6 +47,7 @@ function closeDb() {
 
 function createAnonymousUser(id) {
   const database = getDb();
+  if (!database) return { id, is_anonymous: 1 };
   const stmt = database.prepare(
     'INSERT OR IGNORE INTO users (id, is_anonymous) VALUES (?, 1)'
   );
@@ -48,6 +57,7 @@ function createAnonymousUser(id) {
 
 function upgradeUser(userId, { email, displayName, agentId }) {
   const database = getDb();
+  if (!database) return { id: userId, email, displayName, agentId };
   const updates = [];
   const params = [];
   if (email) { updates.push('email = ?'); params.push(email); }
@@ -62,6 +72,7 @@ function upgradeUser(userId, { email, displayName, agentId }) {
 
 function getUserByToken(token) {
   const database = getDb();
+  if (!database) return null;
   return database.prepare(`
     SELECT u.* FROM users u
     JOIN sessions s ON s.user_id = u.id
@@ -73,6 +84,7 @@ function getUserByToken(token) {
 
 function createSession(id, userId, token, expiresAt) {
   const database = getDb();
+  if (!database) return { id, userId, token, expiresAt };
   database.prepare(
     'INSERT INTO sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)'
   ).run(id, userId, token, expiresAt);
@@ -81,6 +93,7 @@ function createSession(id, userId, token, expiresAt) {
 
 function getSessionByToken(token) {
   const database = getDb();
+  if (!database) return null;
   return database.prepare(
     "SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')"
   ).get(token);
@@ -89,8 +102,9 @@ function getSessionByToken(token) {
 // ── Match operations ──
 
 function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, players }) {
-  if (!schemaReady) initDb();
   const database = getDb();
+  if (!database) return { id, roomId, mode };
+  if (!schemaReady) initDb();
   const insertMatch = database.prepare(`
     INSERT INTO match_results (id, room_id, mode, winner, rounds, duration_ms, started_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -113,6 +127,7 @@ function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, 
 
 function getMatchesByUser(userId, limit = 20) {
   const database = getDb();
+  if (!database) return [];
   return database.prepare(`
     SELECT mr.*, mp.player_name, mp.role, mp.survived, mp.placement
     FROM match_results mr
@@ -125,6 +140,7 @@ function getMatchesByUser(userId, limit = 20) {
 
 function getPlayerMatches(userId, limit = 10) {
   const database = getDb();
+  if (!database) return [];
   return database.prepare(`
     SELECT
       mr.id,
@@ -147,6 +163,7 @@ function getPlayerMatches(userId, limit = 10) {
 
 function getMatch(matchId) {
   const database = getDb();
+  if (!database) return null;
   const match = database.prepare('SELECT * FROM match_results WHERE id = ?').get(matchId);
   if (!match) return null;
   match.players = database.prepare('SELECT * FROM match_players WHERE match_id = ?').all(matchId);
@@ -157,6 +174,7 @@ function getMatch(matchId) {
 
 function createReport({ reporterId, roomId, targetPlayer, messageText, reason }) {
   const database = getDb();
+  if (!database) return;
   database.prepare(`
     INSERT INTO reports (reporter_id, room_id, target_player, message_text, reason)
     VALUES (?, ?, ?, ?, ?)
@@ -165,6 +183,7 @@ function createReport({ reporterId, roomId, targetPlayer, messageText, reason })
 
 function getReports({ status, limit } = {}) {
   const database = getDb();
+  if (!database) return [];
   const where = status ? 'WHERE status = ?' : '';
   const params = status ? [status, limit || 50] : [limit || 50];
   return database.prepare(`SELECT * FROM reports ${where} ORDER BY created_at DESC LIMIT ?`).all(...params);
@@ -172,6 +191,7 @@ function getReports({ status, limit } = {}) {
 
 function updateReportStatus(id, status) {
   const database = getDb();
+  if (!database) return;
   database.prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id);
 }
 
