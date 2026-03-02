@@ -60,6 +60,11 @@ const PORT = process.env.PORT || 3000;
 const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
 const VOTE_MS = Number(process.env.VOTE_MS || 20_000);
 
+// Live agent (LLM-powered) phase timers — used when room has isLiveAgent players
+const MAFIA_AGENT_NIGHT_MS = Number(process.env.MAFIA_NIGHT_MS || 30_000);
+const MAFIA_AGENT_DISCUSSION_MS = Number(process.env.MAFIA_DISCUSSION_MS || 60_000);
+const MAFIA_AGENT_VOTE_MS = Number(process.env.MAFIA_VOTE_MS || 30_000);
+
 const THEMES = [
   'Yo Mama So Fast',
   'Tech Twitter',
@@ -544,8 +549,13 @@ function runMafiaBotAutoplay(room) {
   if (!room || room.status !== 'in_progress') return { acted: 0 };
   let acted = 0;
 
+  // Only autoplay for standard bots, not live agents (they make their own decisions via LLM)
+  const isAutoplayBot = (p) => p.isBot && !p.isLiveAgent;
+  const hasAgents = mafiaGame.hasLiveAgents(room);
+  const startPhase = room.phase;
+
   if (room.phase === 'night') {
-    const mafiaBots = room.players.filter((p) => p.alive && p.role === 'mafia' && p.isBot);
+    const mafiaBots = room.players.filter((p) => p.alive && p.role === 'mafia' && isAutoplayBot(p));
     for (const bot of mafiaBots) {
       if (room.actions?.night?.[bot.id]) continue;
       const target = room.players
@@ -559,8 +569,16 @@ function runMafiaBotAutoplay(room) {
     }
   }
 
+  // When live agents are present, stop after a phase transition so the agent
+  // gets prompted and has time to act in the new phase. Without this guard,
+  // bot autoplay falls through from night → discussion → voting in one call.
+  if (hasAgents && room.phase !== startPhase) {
+    if (acted > 0) logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
+    return { acted };
+  }
+
   if (room.status === 'in_progress' && room.phase === 'discussion') {
-    const readyBots = room.players.filter((p) => p.alive && p.isBot);
+    const readyBots = room.players.filter((p) => p.alive && isAutoplayBot(p));
     for (const bot of readyBots) {
       const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'ready' });
       if (result.ok) acted += 1;
@@ -568,8 +586,13 @@ function runMafiaBotAutoplay(room) {
     }
   }
 
+  if (hasAgents && room.phase !== startPhase) {
+    if (acted > 0) logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
+    return { acted };
+  }
+
   if (room.status === 'in_progress' && room.phase === 'voting') {
-    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+    const aliveBots = room.players.filter((p) => p.alive && isAutoplayBot(p));
     for (const bot of aliveBots) {
       if (room.actions?.vote?.[bot.id]) continue;
       const target = pickDeterministicTarget(room.players, bot.id);
@@ -669,12 +692,34 @@ function runVillaBotAutoplay(room) {
   return { acted };
 }
 
+function emitMafiaAgentPrompts(room) {
+  const liveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
+  if (liveAgents.length === 0) return;
+
+  for (const agent of liveAgents) {
+    const prompt = mafiaGame.buildAgentPrompt(room, agent.id);
+    if (!prompt) continue;
+    // Emit prompt directly to the agent's socket
+    if (agent.socketId) {
+      io.to(agent.socketId).emit('mafia:prompt', {
+        roomId: room.id,
+        playerId: agent.id,
+        prompt,
+      });
+    }
+  }
+}
+
 function scheduleMafiaPhase(room) {
   if (room.status !== 'in_progress') {
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
     return;
   }
 
+  // Emit prompts to live agents before running bot autoplay
+  emitMafiaAgentPrompts(room);
+
+  const phaseBeforeAutoplay = room.phase;
   const auto = runMafiaBotAutoplay(room);
   if (auto.acted > 0) emitMafiaRoom(room);
   if (room.status !== 'in_progress') {
@@ -682,11 +727,27 @@ function scheduleMafiaPhase(room) {
     return;
   }
 
+  // If bot autoplay caused a phase transition (e.g. night resolved → discussion),
+  // recurse so we emit prompts and schedule timers for the new phase.
+  if (room.phase !== phaseBeforeAutoplay) {
+    scheduleMafiaPhase(room);
+    return;
+  }
+
   const token = `${room.phase}:${Date.now()}`;
-  const ms = room.phase === 'night' ? 7000 : room.phase === 'discussion' ? 5000 : room.phase === 'voting' ? 7000 : 0;
+  const hasAgents = mafiaGame.hasLiveAgents(room);
+
+  // Use longer timers when live agents are in the room (they need time for LLM calls)
+  const ms = hasAgents
+    ? (room.phase === 'night' ? MAFIA_AGENT_NIGHT_MS : room.phase === 'discussion' ? MAFIA_AGENT_DISCUSSION_MS : room.phase === 'voting' ? MAFIA_AGENT_VOTE_MS : 0)
+    : (room.phase === 'night' ? 7000 : room.phase === 'discussion' ? 5000 : room.phase === 'voting' ? 7000 : 0);
   if (!ms) return;
 
   roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
+    // Timeout fallback: if live agents haven't responded, run autoplay for them too
+    if (hasAgents) {
+      runMafiaLiveAgentFallback(room);
+    }
     const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
     if (advanced.ok) {
       if (room.status === 'finished') recordFirstMatchCompletion('mafia', room.id);
@@ -694,6 +755,48 @@ function scheduleMafiaPhase(room) {
       scheduleMafiaPhase(room);
     }
   });
+}
+
+// Fallback: if live agents didn't respond in time, submit deterministic actions so the game doesn't stall
+function runMafiaLiveAgentFallback(room) {
+  if (!room || room.status !== 'in_progress') return;
+  const liveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
+  let fallbacks = 0;
+
+  if (room.phase === 'night') {
+    for (const agent of liveAgents) {
+      if (agent.role !== 'mafia') continue;
+      if (room.actions?.night?.[agent.id]) continue;
+      const target = room.players
+        .filter((p) => p.alive && p.id !== agent.id && p.role !== 'mafia')
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+      if (!target) continue;
+      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'nightKill', targetId: target.id });
+      fallbacks += 1;
+    }
+  }
+
+  if (room.phase === 'discussion') {
+    for (const agent of liveAgents) {
+      if (room.actions?.vote?.[agent.id] === '__READY__') continue;
+      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'ready' });
+      fallbacks += 1;
+    }
+  }
+
+  if (room.phase === 'voting') {
+    for (const agent of liveAgents) {
+      if (room.actions?.vote?.[agent.id]) continue;
+      const target = pickDeterministicTarget(room.players, agent.id);
+      if (!target) continue;
+      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'vote', targetId: target.id });
+      fallbacks += 1;
+    }
+  }
+
+  if (fallbacks > 0) {
+    logRoomEvent('mafia', room, 'AGENT_TIMEOUT_FALLBACK', { fallbacks, phase: room.phase, day: room.day });
+  }
 }
 
 function scheduleAmongUsPhase(room) {
@@ -1014,6 +1117,17 @@ io.on('connection', (socket) => {
     logRoomEvent('mafia', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
     emitMafiaRoom(joined.room);
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
+  });
+
+  socket.on('mafia:agent:join', ({ roomId, playerId }, cb) => {
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
+    const result = mafiaGame.markPlayerAsLiveAgent(mafiaRooms, { roomId, playerId });
+    if (!result.ok) return cb?.(result);
+    logRoomEvent('mafia', room, 'AGENT_JOINED', { playerId, playerName: result.player.name });
+    emitMafiaRoom(room);
+    cb?.({ ok: true, state: mafiaGame.toPublic(room) });
   });
 
   socket.on('mafia:autofill', (payload, cb) => {

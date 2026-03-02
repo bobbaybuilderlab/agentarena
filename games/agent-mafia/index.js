@@ -49,27 +49,28 @@ function transitionRoomState(room, nextPhase, options = {}) {
 }
 
 function summarizeBotAutoplay(room) {
-  const aliveBots = room.players.filter((p) => p.alive && p.isBot);
+  const aliveBots = room.players.filter((p) => p.alive && p.isBot && !p.isLiveAgent);
+  const aliveLiveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
   if (room.status !== 'in_progress') {
-    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
+    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
   }
 
   if (room.phase === 'night') {
     const pending = aliveBots.filter((p) => p.role === 'mafia' && !room.actions?.night?.[p.id]).length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are selecting night targets.' : 'Night bot actions complete.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are selecting night targets.' : 'Night bot actions complete.' };
   }
 
   if (room.phase === 'discussion') {
     const pending = aliveBots.filter((p) => room.actions?.vote?.[p.id] !== '__READY__').length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
   }
 
   if (room.phase === 'voting') {
     const pending = aliveBots.filter((p) => !room.actions?.vote?.[p.id]).length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are casting votes.' : 'Bot votes submitted.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are casting votes.' : 'Bot votes submitted.' };
   }
 
-  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay active.' };
+  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: 'Autoplay active.' };
 }
 
 function toPublic(room) {
@@ -89,6 +90,7 @@ function toPublic(room) {
       role: room.status === 'finished' ? p.role : undefined,
       isConnected: p.isConnected,
       isBot: Boolean(p.isBot),
+      isLiveAgent: Boolean(p.isLiveAgent),
     })),
     tally: room.tally,
     events: room.events.slice(-8),
@@ -432,6 +434,57 @@ function disconnectPlayer(store, { roomId, socketId }) {
   return true;
 }
 
+function markPlayerAsLiveAgent(store, { roomId, playerId }) {
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) return { ok: false, error: { code: 'PLAYER_NOT_FOUND', message: 'Player not found' } };
+  player.isLiveAgent = true;
+  return { ok: true, room, player };
+}
+
+function hasLiveAgents(room) {
+  return room.players.some((p) => p.isLiveAgent);
+}
+
+function buildAgentPrompt(room, playerId) {
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player || !player.alive) return null;
+
+  const alivePlayers = room.players.filter((p) => p.alive).map((p) => ({
+    id: p.id,
+    name: p.name,
+    isYou: p.id === playerId,
+  }));
+
+  const base = {
+    phase: room.phase,
+    day: room.day,
+    role: player.role,
+    yourId: player.id,
+    yourName: player.name,
+    alivePlayers,
+    recentEvents: room.events.slice(-8),
+  };
+
+  if (room.phase === 'night' && player.role === 'mafia') {
+    const otherMafia = room.players
+      .filter((p) => p.alive && p.role === 'mafia' && p.id !== playerId)
+      .map((p) => ({ id: p.id, name: p.name }));
+    return { ...base, action: 'nightKill', otherMafia, targets: alivePlayers.filter((p) => !p.isYou) };
+  }
+
+  if (room.phase === 'discussion') {
+    return { ...base, action: 'discussion' };
+  }
+
+  if (room.phase === 'voting') {
+    return { ...base, action: 'vote', targets: alivePlayers.filter((p) => !p.isYou) };
+  }
+
+  return null;
+}
+
 module.exports = {
   createStore,
   createRoom,
@@ -444,4 +497,7 @@ module.exports = {
   disconnectPlayer,
   transitionRoomState,
   toPublic,
+  markPlayerAsLiveAgent,
+  hasLiveAgents,
+  buildAgentPrompt,
 };
