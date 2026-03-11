@@ -1,171 +1,119 @@
 const { test, expect } = require('@playwright/test');
 
-// All public-facing pages
 const PAGES = [
   { path: '/', name: 'index' },
   { path: '/play.html', name: 'play' },
   { path: '/browse.html', name: 'browse' },
+  { path: '/dashboard.html', name: 'dashboard' },
   { path: '/guide.html', name: 'guide' },
   { path: '/games-info.html', name: 'games-info' },
-  { path: '/agent-villa.html', name: 'agent-villa' },
-  { path: '/dobby-dashboard.html', name: 'dobby-dashboard' },
 ];
 
-const NAV_LINKS = [
-  { href: '/play.html', text: 'Play' },
-  { href: '/games-info.html', text: 'Games' },
-  { href: '/browse.html', text: 'Feed' },
-  { href: '/guide.html', text: 'Docs' },
-];
-
-test.describe('Navigation consistency', () => {
-  for (const page of PAGES) {
-    test(`${page.name} has unified 4-link nav`, async ({ page: p }) => {
-      await p.goto(page.path);
-      for (const link of NAV_LINKS) {
-        const navLink = p.locator(`nav a[href="${link.href}"]`);
-        await expect(navLink).toBeVisible();
-      }
+test.describe('Public navigation', () => {
+  for (const entry of PAGES) {
+    test(`${entry.name} shows the mafia-first nav`, async ({ page }) => {
+      await page.goto(entry.path);
+      await expect(page.locator('nav a[href="/play.html"]').first()).toBeVisible();
+      await expect(page.locator('nav a[href="/browse.html"]').first()).toBeVisible();
+      await expect(page.locator('nav a[href="/guide.html"]').first()).toBeVisible();
+      await expect(page.locator('nav .nav-links a[href="/dashboard.html"]')).toHaveCount(0);
     });
 
-    test(`${page.name} has "Play Now" CTA`, async ({ page: p }) => {
-      await p.goto(page.path);
-      const cta = p.locator('nav a.btn-primary:has-text("Play Now")');
-      await expect(cta).toBeVisible();
-    });
-
-    test(`${page.name} returns 200`, async ({ page: p }) => {
-      const res = await p.goto(page.path);
-      expect(res.status()).toBe(200);
-    });
-
-    test(`${page.name} does not link to deleted pages`, async ({ page: p }) => {
-      await p.goto(page.path);
-      const forAgentsLinks = p.locator('a[href*="for-agents.html"]');
-      await expect(forAgentsLinks).toHaveCount(0);
-      const howItWorksLinks = p.locator('a[href*="how-it-works.html"]');
-      await expect(howItWorksLinks).toHaveCount(0);
+    test(`${entry.name} has an agent-first primary CTA`, async ({ page }) => {
+      await page.goto(entry.path);
+      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Connect your agent|Watch live|Back to Arena/);
     });
   }
 });
 
-test.describe('Deleted pages return 404', () => {
-  test('for-agents.html returns 404', async ({ page: p }) => {
-    const res = await p.goto('/for-agents.html');
-    expect(res.status()).toBe(404);
+test.describe('Homepage', () => {
+  test('focuses on Agent Mafia and agent onboarding', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('h1')).toContainText('Watch agents lie, accuse, and expose the Mafia');
+    await expect(page.locator('#liveRoomsList')).toBeVisible();
+    await expect(page.locator('text=Live agent deception')).toBeVisible();
+    await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Connect your agent');
+    await expect(page.locator('.mvp-hero .mvp-copy')).toContainText('six agents bluff');
+    await expect(page.locator('text=Six connected agents enter the room')).toBeVisible();
   });
 
-  test('how-it-works.html returns 404', async ({ page: p }) => {
-    const res = await p.goto('/how-it-works.html');
-    expect(res.status()).toBe(404);
+  test('does not advertise playable non-mafia CTAs', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('a[href*="amongus"], button[data-instant-play="amongus"]')).toHaveCount(0);
+    await expect(page.locator('a[href*="villa"], button[data-instant-play="villa"]')).toHaveCount(0);
   });
 });
 
-test.describe('No stale guide.html game anchors', () => {
-  for (const page of PAGES) {
-    test(`${page.name} has no guide.html#mafia/amongus/villa links`, async ({ page: p }) => {
-      await p.goto(page.path);
-      const staleLinks = p.locator('a[href*="guide.html#mafia"], a[href*="guide.html#amongus"], a[href*="guide.html#villa"]');
-      await expect(staleLinks).toHaveCount(0);
+test.describe('Play page', () => {
+  test('is the live owner arena page', async ({ page }) => {
+    await page.goto('/play.html');
+    await expect(page.locator('#startArenaBtn')).toBeVisible();
+    await expect(page.locator('h1')).toContainText('Your live Agent Mafia control room');
+    await expect(page.locator('text=Every public seat belongs to a connected OpenClaw agent')).toBeVisible();
+    await expect(page.locator('#joinBtn')).toHaveCount(0);
+    await expect(page.locator('#quickMatchBtn')).toHaveCount(0);
+  });
+});
+
+test.describe('Roadmap and docs', () => {
+  test('games page is mafia-only', async ({ page }) => {
+    await page.goto('/games-info.html');
+    await expect(page.locator('#mafia')).toBeVisible();
+    await expect(page.locator('text=Why it is fun to watch')).toBeVisible();
+    await expect(page.locator('text=Six connected agents enter the room')).toBeVisible();
+    await expect(page.locator('#amongus')).toHaveCount(0);
+    await expect(page.locator('#villa')).toHaveCount(0);
+  });
+
+  test('guide stays lightweight and setup-focused', async ({ page }) => {
+    await page.goto('/guide.html');
+    await expect(page.locator('#join')).toBeVisible();
+    await expect(page.locator('#generateCmdBtn')).toBeVisible();
+    await expect(page.locator('#quickstart code').filter({ hasText: '--decision-cmd' }).first()).toBeVisible();
+    await expect(page.locator('text=What Agent Arena handles')).toBeVisible();
+    await expect(page.locator('details')).toHaveCount(0);
+  });
+});
+
+test.describe('Dashboard', () => {
+  test('shows the owner dashboard empty state before an agent is connected', async ({ page }) => {
+    await page.goto('/dashboard.html');
+    await expect(page.locator('h1')).toContainText('Track your agent');
+    await expect(page.locator('text=Use this after matches, not during them')).toBeVisible();
+    await expect(page.locator('#dashboardEmptyState')).toBeVisible();
+    await expect(page.locator('#dashboardEmptyState')).toContainText('No agent connected yet');
+    await expect(page.locator('#dashboardShell')).toBeHidden();
+  });
+});
+
+test.describe('Launch API smoke', () => {
+  test('instant play requires a connected agent', async ({ request }) => {
+    const res = await request.post('/api/play/instant', {
+      data: { mode: 'mafia' },
     });
-  }
-});
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('AGENT_REQUIRED');
+  });
 
-test.describe('Games page anchors', () => {
-  const anchors = ['#mafia', '#amongus', '#villa'];
-
-  for (const anchor of anchors) {
-    test(`games-info.html${anchor} scrolls to target`, async ({ page: p }) => {
-      await p.goto(`/games-info.html${anchor}`);
-      const target = p.locator(anchor);
-      await expect(target).toBeVisible();
-      await expect(target).toBeInViewport();
+  test('instant play blocks non-mafia modes', async ({ request }) => {
+    const res = await request.post('/api/play/instant', {
+      data: { mode: 'villa' },
     });
-  }
-});
-
-test.describe('Homepage simplified', () => {
-  test('has minimal game cards', async ({ page: p }) => {
-    await p.goto('/');
-    const miniCards = p.locator('.game-card-mini');
-    await expect(miniCards).toHaveCount(3);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('MODE_DISABLED');
   });
 
-  test('no phase diagrams or role pills', async ({ page: p }) => {
-    await p.goto('/');
-    const phaseMini = p.locator('.phase-mini');
-    await expect(phaseMini).toHaveCount(0);
-    const rolePills = p.locator('.role-pill');
-    await expect(rolePills).toHaveCount(0);
-  });
-
-  test('no CLI/connect section', async ({ page: p }) => {
-    await p.goto('/');
-    const joinSection = p.locator('#join');
-    await expect(joinSection).toHaveCount(0);
-    const onboarding = p.locator('.onboarding-steps');
-    await expect(onboarding).toHaveCount(0);
-  });
-
-  test('"Learn how each game works" link to games-info.html', async ({ page: p }) => {
-    await p.goto('/');
-    const link = p.locator('a[href="/games-info.html"]:has-text("Learn how each game works")');
-    await expect(link).toBeVisible();
-  });
-});
-
-test.describe('Games page human-readable', () => {
-  test('has plain English structure', async ({ page: p }) => {
-    await p.goto('/games-info.html');
-    await expect(p.locator('text=The setup').first()).toBeVisible();
-    await expect(p.locator('text=How it plays').first()).toBeVisible();
-    await expect(p.locator('text=How you win').first()).toBeVisible();
-  });
-
-  test('no code action names or tables', async ({ page: p }) => {
-    await p.goto('/games-info.html');
-    const tables = p.locator('table');
-    await expect(tables).toHaveCount(0);
-  });
-});
-
-test.describe('Guide page', () => {
-  test('has Connect Runtime section', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    await expect(p.locator('#join')).toBeVisible();
-    await expect(p.locator('#generateCmdBtn')).toBeVisible();
-  });
-
-  test('retains quickstart section', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    await expect(p.locator('#quickstart')).toBeVisible();
-  });
-
-  test('retains socket events section', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    await expect(p.locator('#events')).toBeVisible();
-  });
-
-  test('retains persona section', async ({ page: p }) => {
-    await p.goto('/guide.html');
-    await expect(p.locator('#persona')).toBeVisible();
-  });
-});
-
-test.describe('Internal links resolve (no 404s)', () => {
-  test('all internal href targets return 200', async ({ page: p, request }) => {
-    const checked = new Set();
-    for (const pg of PAGES) {
-      await p.goto(pg.path);
-      const hrefs = await p.locator('a[href^="/"]').evaluateAll(els =>
-        els.map(el => el.getAttribute('href').split('#')[0]).filter(Boolean)
-      );
-      for (const href of hrefs) {
-        if (checked.has(href)) continue;
-        checked.add(href);
-        const res = await request.get(href);
-        expect(res.status(), `${href} from ${pg.path}`).toBe(200);
-      }
-    }
+  test('watch endpoint returns a Mafia watch URL', async ({ request }) => {
+    const res = await request.get('/api/play/watch');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.found).toBe(false);
+    expect(body.requiredAgents).toBe(6);
+    expect(body.message).toContain('No live agent-only Mafia');
   });
 });

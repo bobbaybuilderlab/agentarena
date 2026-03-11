@@ -57,13 +57,9 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || undefined;
 const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
 const VOTE_MS = Number(process.env.VOTE_MS || 20_000);
-
-// Live agent (LLM-powered) phase timers — used when room has isLiveAgent players
-const MAFIA_AGENT_NIGHT_MS = Number(process.env.MAFIA_NIGHT_MS || 30_000);
-const MAFIA_AGENT_DISCUSSION_MS = Number(process.env.MAFIA_DISCUSSION_MS || 60_000);
-const MAFIA_AGENT_VOTE_MS = Number(process.env.MAFIA_VOTE_MS || 30_000);
 
 const THEMES = [
   'Yo Mama So Fast',
@@ -98,6 +94,9 @@ const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') })
 const playRoomTelemetry = new Map();
 const pendingQuickJoinTickets = new Map();
 const reconnectClaimTickets = new Map();
+const liveAgentRuntimes = new Map();
+const agentRuntimeSockets = new Map();
+const activeAgentMatchRooms = new Set();
 const arenaCanary = createCanaryMode({
   enabled: process.env.ARENA_CANARY_ENABLED !== '0',
   percent: Number(process.env.ARENA_CANARY_PERCENT || 0),
@@ -547,15 +546,11 @@ function pickVillaTarget(room, actorId) {
 
 function runMafiaBotAutoplay(room) {
   if (!room || room.status !== 'in_progress') return { acted: 0 };
+  if (room.publicArena) return { acted: 0 };
   let acted = 0;
 
-  // Only autoplay for standard bots, not live agents (they make their own decisions via LLM)
-  const isAutoplayBot = (p) => p.isBot && !p.isLiveAgent;
-  const hasAgents = mafiaGame.hasLiveAgents(room);
-  const startPhase = room.phase;
-
   if (room.phase === 'night') {
-    const mafiaBots = room.players.filter((p) => p.alive && p.role === 'mafia' && isAutoplayBot(p));
+    const mafiaBots = room.players.filter((p) => p.alive && p.role === 'mafia' && p.isBot);
     for (const bot of mafiaBots) {
       if (room.actions?.night?.[bot.id]) continue;
       const target = room.players
@@ -569,16 +564,8 @@ function runMafiaBotAutoplay(room) {
     }
   }
 
-  // When live agents are present, stop after a phase transition so the agent
-  // gets prompted and has time to act in the new phase. Without this guard,
-  // bot autoplay falls through from night → discussion → voting in one call.
-  if (hasAgents && room.phase !== startPhase) {
-    if (acted > 0) logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
-    return { acted };
-  }
-
   if (room.status === 'in_progress' && room.phase === 'discussion') {
-    const readyBots = room.players.filter((p) => p.alive && isAutoplayBot(p));
+    const readyBots = room.players.filter((p) => p.alive && p.isBot);
     for (const bot of readyBots) {
       const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'ready' });
       if (result.ok) acted += 1;
@@ -586,13 +573,8 @@ function runMafiaBotAutoplay(room) {
     }
   }
 
-  if (hasAgents && room.phase !== startPhase) {
-    if (acted > 0) logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
-    return { acted };
-  }
-
   if (room.status === 'in_progress' && room.phase === 'voting') {
-    const aliveBots = room.players.filter((p) => p.alive && isAutoplayBot(p));
+    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
     for (const bot of aliveBots) {
       if (room.actions?.vote?.[bot.id]) continue;
       const target = pickDeterministicTarget(room.players, bot.id);
@@ -692,111 +674,114 @@ function runVillaBotAutoplay(room) {
   return { acted };
 }
 
-function emitMafiaAgentPrompts(room) {
-  const liveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
-  if (liveAgents.length === 0) return;
+function buildMafiaAgentDecisionPayload(room, player) {
+  const alivePlayers = (room.players || [])
+    .filter((p) => p.alive)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      alive: p.alive,
+      isSelf: p.id === player.id,
+    }));
 
-  for (const agent of liveAgents) {
-    const prompt = mafiaGame.buildAgentPrompt(room, agent.id);
-    if (!prompt) continue;
-    // Emit prompt directly to the agent's socket
-    if (agent.socketId) {
-      io.to(agent.socketId).emit('mafia:prompt', {
-        roomId: room.id,
-        playerId: agent.id,
-        prompt,
-      });
-    }
+  return {
+    roomId: room.id,
+    playerId: player.id,
+    phase: room.phase,
+    day: room.day,
+    role: player.role,
+    players: alivePlayers,
+    tally: room.tally || {},
+    events: (room.events || []).slice(-8),
+  };
+}
+
+function emitMafiaLiveAgentRequests(room) {
+  if (!room?.publicArena || room.status !== 'in_progress') return;
+  const promptKey = `${room.day}:${room.phase}`;
+  if (room.liveAgentPromptKey === promptKey) return;
+  room.liveAgentPromptKey = promptKey;
+
+  let eventName = null;
+  let targets = [];
+  if (room.phase === 'night') {
+    eventName = 'mafia:agent:night_request';
+    targets = room.players.filter((p) => p.alive && p.isLiveAgent && p.role === 'mafia' && !room.actions?.night?.[p.id]);
+  } else if (room.phase === 'discussion') {
+    eventName = 'mafia:agent:discussion_request';
+    targets = room.players.filter((p) => p.alive && p.isLiveAgent && room.actions?.vote?.[p.id] !== '__READY__');
+  } else if (room.phase === 'voting') {
+    eventName = 'mafia:agent:vote_request';
+    targets = room.players.filter((p) => p.alive && p.isLiveAgent && !room.actions?.vote?.[p.id]);
+  }
+  if (!eventName) return;
+
+  for (const player of targets) {
+    const runtime = getAgentRuntime(player.agentId);
+    if (!runtime?.connected || !runtime.socketId) continue;
+    const sock = io.sockets.sockets.get(runtime.socketId);
+    if (!sock) continue;
+    sock.emit(eventName, buildMafiaAgentDecisionPayload(room, player));
+  }
+}
+
+function releasePublicArenaRoom(room) {
+  if (!room?.publicArena || !activeAgentMatchRooms.has(room.id)) return;
+  activeAgentMatchRooms.delete(room.id);
+  for (const player of room.players || []) {
+    if (!player.isLiveAgent || !player.agentId) continue;
+    const runtime = getAgentRuntime(player.agentId);
+    clearAgentRuntimeAssignment(player.agentId, runtime?.connected ? 'idle' : 'offline');
+  }
+  setImmediate(() => {
+    void processPublicArenaQueue();
+  });
+}
+
+function handlePublicArenaRoomUpdate(room) {
+  if (!room?.publicArena) return;
+  if (room.status === 'finished') {
+    releasePublicArenaRoom(room);
+  } else {
+    emitMafiaLiveAgentRequests(room);
   }
 }
 
 function scheduleMafiaPhase(room) {
   if (room.status !== 'in_progress') {
+    room.phaseEndsAt = null;
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    handlePublicArenaRoomUpdate(room);
     return;
   }
 
-  // Emit prompts to live agents before running bot autoplay
-  emitMafiaAgentPrompts(room);
-
-  const phaseBeforeAutoplay = room.phase;
   const auto = runMafiaBotAutoplay(room);
   if (auto.acted > 0) emitMafiaRoom(room);
+  handlePublicArenaRoomUpdate(room);
   if (room.status !== 'in_progress') {
+    room.phaseEndsAt = null;
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
-    return;
-  }
-
-  // If bot autoplay caused a phase transition (e.g. night resolved → discussion),
-  // recurse so we emit prompts and schedule timers for the new phase.
-  if (room.phase !== phaseBeforeAutoplay) {
-    scheduleMafiaPhase(room);
+    handlePublicArenaRoomUpdate(room);
     return;
   }
 
   const token = `${room.phase}:${Date.now()}`;
-  const hasAgents = mafiaGame.hasLiveAgents(room);
-
-  // Use longer timers when live agents are in the room (they need time for LLM calls)
-  const ms = hasAgents
-    ? (room.phase === 'night' ? MAFIA_AGENT_NIGHT_MS : room.phase === 'discussion' ? MAFIA_AGENT_DISCUSSION_MS : room.phase === 'voting' ? MAFIA_AGENT_VOTE_MS : 0)
-    : (room.phase === 'night' ? 7000 : room.phase === 'discussion' ? 5000 : room.phase === 'voting' ? 7000 : 0);
-  if (!ms) return;
+  const ms = room.phase === 'night' ? MAFIA_PHASE_MS.night : room.phase === 'discussion' ? MAFIA_PHASE_MS.discussion : room.phase === 'voting' ? MAFIA_PHASE_MS.voting : 0;
+  if (!ms) {
+    room.phaseEndsAt = null;
+    return;
+  }
+  room.phaseEndsAt = Date.now() + ms;
 
   roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
-    // Timeout fallback: if live agents haven't responded, run autoplay for them too
-    if (hasAgents) {
-      runMafiaLiveAgentFallback(room);
-    }
     const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
     if (advanced.ok) {
       if (room.status === 'finished') recordFirstMatchCompletion('mafia', room.id);
       emitMafiaRoom(room);
+      handlePublicArenaRoomUpdate(room);
       scheduleMafiaPhase(room);
     }
   });
-}
-
-// Fallback: if live agents didn't respond in time, submit deterministic actions so the game doesn't stall
-function runMafiaLiveAgentFallback(room) {
-  if (!room || room.status !== 'in_progress') return;
-  const liveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
-  let fallbacks = 0;
-
-  if (room.phase === 'night') {
-    for (const agent of liveAgents) {
-      if (agent.role !== 'mafia') continue;
-      if (room.actions?.night?.[agent.id]) continue;
-      const target = room.players
-        .filter((p) => p.alive && p.id !== agent.id && p.role !== 'mafia')
-        .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
-      if (!target) continue;
-      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'nightKill', targetId: target.id });
-      fallbacks += 1;
-    }
-  }
-
-  if (room.phase === 'discussion') {
-    for (const agent of liveAgents) {
-      if (room.actions?.vote?.[agent.id] === '__READY__') continue;
-      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'ready' });
-      fallbacks += 1;
-    }
-  }
-
-  if (room.phase === 'voting') {
-    for (const agent of liveAgents) {
-      if (room.actions?.vote?.[agent.id]) continue;
-      const target = pickDeterministicTarget(room.players, agent.id);
-      if (!target) continue;
-      mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: agent.id, type: 'vote', targetId: target.id });
-      fallbacks += 1;
-    }
-  }
-
-  if (fallbacks > 0) {
-    logRoomEvent('mafia', room, 'AGENT_TIMEOUT_FALLBACK', { fallbacks, phase: room.phase, day: room.day });
-  }
 }
 
 function scheduleAmongUsPhase(room) {
@@ -1056,13 +1041,16 @@ function checkSocketRateLimit(socketId) {
   return entry.count <= SOCKET_RATE_LIMIT;
 }
 
-// Cleanup stale entries periodically
-setInterval(() => {
+// Cleanup stale entries periodically.
+const socketRateCleanupTimer = setInterval(() => {
   const cutoff = Date.now() - SOCKET_RATE_WINDOW_MS * 2;
   for (const [id, entry] of socketEventCounts) {
     if (entry.windowStart < cutoff) socketEventCounts.delete(id);
   }
 }, 30000);
+if (typeof socketRateCleanupTimer.unref === 'function') {
+  socketRateCleanupTimer.unref();
+}
 
 io.on('connection', (socket) => {
   // Rate limiting via socket.use middleware — blocks handler execution
@@ -1089,6 +1077,43 @@ io.on('connection', (socket) => {
     }
     next();
   });
+  socket.on('agent:runtime:register', async (payload, cb) => {
+    const token = String(payload?.token || '').trim();
+    const proof = String(payload?.proof || '').trim();
+    const connect = connectSessions.get(token);
+    if (!connect) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_NOT_FOUND', message: 'connect session not found' } });
+    if (Date.now() > (connect.expiresAt || 0)) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_EXPIRED', message: 'connect session expired' } });
+    if (!proof || (proof !== connect.callbackProof && proof !== connect.accessToken)) {
+      return cb?.({ ok: false, error: { code: 'INVALID_RUNTIME_PROOF', message: 'invalid runtime proof' } });
+    }
+    if (!connect.agentId) return cb?.({ ok: false, error: { code: 'AGENT_NOT_READY', message: 'agent profile not ready yet' } });
+
+    const agent = agentProfiles.get(connect.agentId);
+    if (!agent) return cb?.({ ok: false, error: { code: 'AGENT_NOT_FOUND', message: 'agent not found' } });
+
+    const prior = getAgentRuntime(agent.id);
+    if (prior?.socketId && prior.socketId !== socket.id) {
+      io.sockets.sockets.get(prior.socketId)?.disconnect(true);
+    }
+
+    socket.data.agentRuntime = { agentId: agent.id, connectSessionId: connect.id };
+    agentRuntimeSockets.set(socket.id, agent.id);
+    setAgentRuntimeStatus(agent.id, 'idle', {
+      connected: true,
+      socketId: socket.id,
+      connectSessionId: connect.id,
+      connectedAt: Date.now(),
+    });
+    markAgentProfileConnection(agent.id, true, 'live runtime connected');
+    persistState();
+    await processPublicArenaQueue();
+    cb?.({
+      ok: true,
+      agent: { id: agent.id, name: agent.name },
+      arena: summarizeAgentArenaState(agent.id),
+    });
+  });
+
   socket.on('mafia:room:create', (payload, cb) => {
     const { name } = payload || {};
     const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
@@ -1119,17 +1144,6 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
   });
 
-  socket.on('mafia:agent:join', ({ roomId, playerId }, cb) => {
-    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
-    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
-    if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
-    const result = mafiaGame.markPlayerAsLiveAgent(mafiaRooms, { roomId, playerId });
-    if (!result.ok) return cb?.(result);
-    logRoomEvent('mafia', room, 'AGENT_JOINED', { playerId, playerName: result.player.name });
-    emitMafiaRoom(room);
-    cb?.({ ok: true, state: mafiaGame.toPublic(room) });
-  });
-
   socket.on('mafia:autofill', (payload, cb) => {
     const { roomId, playerId, minPlayers } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
@@ -1148,8 +1162,9 @@ io.on('connection', (socket) => {
     const started = mafiaGame.startGame(mafiaRooms, { roomId, hostPlayerId: playerId });
     if (!started.ok) return cb?.(started);
     logRoomEvent('mafia', started.room, 'GAME_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
-    emitMafiaRoom(started.room);
     scheduleMafiaPhase(started.room);
+    emitMafiaRoom(started.room);
+    handlePublicArenaRoomUpdate(started.room);
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
@@ -1181,8 +1196,9 @@ io.on('connection', (socket) => {
       recordTelemetryEvent('mafia', started.room.id, 'party_streak_extended');
     }
     logRoomEvent('mafia', started.room, 'REMATCH_STARTED', { status: started.room.status, phase: started.room.phase, day: started.room.day });
-    emitMafiaRoom(started.room);
     scheduleMafiaPhase(started.room);
+    emitMafiaRoom(started.room);
+    handlePublicArenaRoomUpdate(started.room);
     cb?.({ ok: true, state: mafiaGame.toPublic(started.room) });
   });
 
@@ -1204,8 +1220,36 @@ io.on('connection', (socket) => {
       day: result.room.day,
       winner: result.room.winner || null,
     });
-    emitMafiaRoom(result.room);
     scheduleMafiaPhase(result.room);
+    emitMafiaRoom(result.room);
+    handlePublicArenaRoomUpdate(result.room);
+    cb?.({ ok: true, state: mafiaGame.toPublic(result.room) });
+  });
+
+  socket.on('mafia:agent:decision', (payload, cb) => {
+    const { roomId, playerId, phase, type, targetId } = payload || {};
+    const room = mafiaRooms.get(String(roomId || '').toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    const player = room.players.find((entry) => entry.id === playerId);
+    if (!player || !player.isLiveAgent) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Player is not a live agent seat' } });
+    if (player.socketId !== socket.id) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
+    if (phase && phase !== room.phase) return cb?.({ ok: false, error: { code: 'STALE_PHASE', message: 'Decision does not match current phase' } });
+
+    const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
+    if (!result.ok) return cb?.(result);
+    recordRoomWinner('mafia', result.room);
+    if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
+    logRoomEvent('mafia', result.room, 'LIVE_AGENT_DECISION', {
+      actorId: playerId,
+      action: type,
+      targetId: targetId || null,
+      status: result.room.status,
+      phase: result.room.phase,
+      day: result.room.day,
+    });
+    scheduleMafiaPhase(result.room);
+    emitMafiaRoom(result.room);
+    handlePublicArenaRoomUpdate(result.room);
     cb?.({ ok: true, state: mafiaGame.toPublic(result.room) });
   });
 
@@ -1813,6 +1857,39 @@ io.on('connection', (socket) => {
         emitGtaRoom(room);
       }
     }
+
+    const runtimeAgentId = agentRuntimeSockets.get(socket.id);
+    if (runtimeAgentId) {
+      agentRuntimeSockets.delete(socket.id);
+      const runtime = getAgentRuntime(runtimeAgentId);
+      if (runtime) {
+        setAgentRuntimeStatus(runtimeAgentId, 'offline', {
+          connected: false,
+          socketId: null,
+        });
+        markAgentProfileConnection(runtimeAgentId, false, 'live runtime disconnected');
+        persistState();
+
+        if (runtime.currentRoomId && runtime.currentPlayerId) {
+          const room = mafiaRooms.get(runtime.currentRoomId);
+          if (room) {
+            const forfeited = mafiaGame.forfeitPlayer(mafiaRooms, {
+              roomId: runtime.currentRoomId,
+              playerId: runtime.currentPlayerId,
+              reason: 'runtime_disconnect',
+            });
+            if (forfeited.ok) {
+              emitMafiaRoom(room);
+              handlePublicArenaRoomUpdate(room);
+              scheduleMafiaPhase(room);
+            }
+          }
+        }
+      }
+      setImmediate(() => {
+        void processPublicArenaQueue();
+      });
+    }
   });
 });
 
@@ -1849,9 +1926,13 @@ app.use(express.json());
 
 // ── Rate Limiting ──
 const rateLimitKey = (req) => ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || 'unknown');
-const apiLimiter = rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
-const authLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
-const opsLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
+const API_RATE_LIMIT_MAX = Number(process.env.API_RATE_LIMIT_MAX || 100);
+const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX || 10);
+const OPS_RATE_LIMIT_MAX = Number(process.env.OPS_RATE_LIMIT_MAX || 5);
+const apiLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+const authLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: AUTH_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+const opsLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: OPS_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/openclaw/', authLimiter);
@@ -1937,10 +2018,10 @@ function recordFirstMatchCompletion(mode, roomId) {
         mode,
         winner: room.winner || room.lastWinner?.name || null,
         rounds: room.round || 0,
-        durationMs: room.startedAt ? Date.now() - room.startedAt : null,
+        durationMs: room.startedAt ? Math.max(0, (room.finishedAt || Date.now()) - room.startedAt) : null,
         startedAt: room.startedAt ? new Date(room.startedAt).toISOString() : null,
         players: (room.players || []).map((p, i) => ({
-          userId: p.userId || null,
+          userId: p.userId || p.agentId || null,
           name: p.name,
           role: p.role || null,
           isBot: !!p.isBot,
@@ -1952,6 +2033,36 @@ function recordFirstMatchCompletion(mode, roomId) {
   } catch (err) {
     logStructured('error.recordMatch', { error: err.message });
   }
+}
+
+function buildMatchBaseline(mode = 'mafia') {
+  const store = getLobbyStore(mode);
+  const finishedDurations = [...(store?.values?.() || [])]
+    .filter((room) => room?.startedAt && room?.finishedAt && room.finishedAt >= room.startedAt)
+    .map((room) => ({
+      roomId: room.id,
+      durationMs: room.finishedAt - room.startedAt,
+      startedAt: room.startedAt,
+      finishedAt: room.finishedAt,
+    }))
+    .sort((a, b) => b.finishedAt - a.finishedAt);
+
+  const durations = finishedDurations.map((entry) => entry.durationMs).filter((value) => value > 0);
+  const avgDurationMs = durations.length
+    ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
+    : null;
+
+  return {
+    mode,
+    sampleSize: durations.length,
+    avgDurationMs,
+    fastestDurationMs: durations.length ? Math.min(...durations) : null,
+    slowestDurationMs: durations.length ? Math.max(...durations) : null,
+    estimatedGamesPerHour: avgDurationMs ? Number((3600000 / avgDurationMs).toFixed(1)) : null,
+    estimatedGamesPer12Hours: avgDurationMs ? Number(((12 * 3600000) / avgDurationMs).toFixed(1)) : null,
+    latestCompletedRoomId: finishedDurations[0]?.roomId || null,
+    latestCompletedAt: finishedDurations[0]?.finishedAt ? new Date(finishedDurations[0].finishedAt).toISOString() : null,
+  };
 }
 
 function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
@@ -2127,6 +2238,168 @@ function ensureSeedAgents() {
   persistState();
 }
 
+function isPublicRankedAgent(agent) {
+  if (!agent) return false;
+  if (agent.owner === 'system') return false;
+  if (agent.openclaw?.mode === 'seed') return false;
+  return true;
+}
+
+function isEnabledPublicMode(mode) {
+  return mode === PUBLIC_LAUNCH_MODE;
+}
+
+function listConnectedLaunchAgents() {
+  return [...agentProfiles.values()].filter((agent) => {
+    if (!isPublicRankedAgent(agent)) return false;
+    if (!agent.deployed) return false;
+    return Boolean(liveAgentRuntimes.get(agent.id)?.connected);
+  });
+}
+
+function buildArenaAvailability() {
+  const connectedAgents = listConnectedLaunchAgents();
+  const requiredAgents = PUBLIC_ARENA_REQUIRED_AGENTS;
+  return {
+    mode: PUBLIC_LAUNCH_MODE,
+    connectedAgents: connectedAgents.length,
+    requiredAgents,
+    missingAgents: Math.max(0, requiredAgents - connectedAgents.length),
+    canStart: connectedAgents.length >= requiredAgents,
+  };
+}
+
+function getAgentRuntime(agentId) {
+  return liveAgentRuntimes.get(String(agentId || '').trim()) || null;
+}
+
+function upsertAgentRuntime(agentId, patch) {
+  const current = getAgentRuntime(agentId) || {
+    agentId,
+    connected: false,
+    status: 'offline',
+    socketId: null,
+    connectSessionId: null,
+    currentRoomId: null,
+    currentPlayerId: null,
+    connectedAt: 0,
+    lastSeenAt: 0,
+  };
+  const next = {
+    ...current,
+    ...patch,
+    agentId: current.agentId || agentId,
+    lastSeenAt: Date.now(),
+  };
+  liveAgentRuntimes.set(next.agentId, next);
+  return next;
+}
+
+function setAgentRuntimeStatus(agentId, status, patch = {}) {
+  return upsertAgentRuntime(agentId, { status, ...patch });
+}
+
+function clearAgentRuntimeAssignment(agentId, nextStatus = 'idle') {
+  const runtime = getAgentRuntime(agentId);
+  if (!runtime) return null;
+  if (!runtime.connected) nextStatus = 'offline';
+  return upsertAgentRuntime(agentId, {
+    status: nextStatus,
+    currentRoomId: null,
+    currentPlayerId: null,
+  });
+}
+
+function runtimeSocketForAgent(agentId) {
+  const runtime = getAgentRuntime(agentId);
+  if (!runtime?.socketId) return null;
+  return io.sockets.sockets.get(runtime.socketId) || null;
+}
+
+function idleLaunchAgents() {
+  return [...agentProfiles.values()]
+    .filter((agent) => {
+      if (!isPublicRankedAgent(agent) || !agent.deployed) return false;
+      const runtime = getAgentRuntime(agent.id);
+      return Boolean(runtime?.connected) && runtime.status === 'idle';
+    })
+    .sort((a, b) => {
+      const aRuntime = getAgentRuntime(a.id);
+      const bRuntime = getAgentRuntime(b.id);
+      return Number(aRuntime?.connectedAt || 0) - Number(bRuntime?.connectedAt || 0);
+    });
+}
+
+function markAgentProfileConnection(agentId, connected, note = null) {
+  const agent = agentProfiles.get(agentId);
+  if (!agent) return;
+  agent.openclaw = {
+    ...(agent.openclaw || {}),
+    connected,
+    connectedAt: connected ? Date.now() : agent.openclaw?.connectedAt || null,
+    note: note || agent.openclaw?.note || null,
+  };
+}
+
+function summarizeAgentArenaState(agentId) {
+  const runtime = getAgentRuntime(agentId);
+  if (!runtime) {
+    return {
+      runtimeConnected: false,
+      queueStatus: 'offline',
+      activeRoomId: null,
+      activePlayerId: null,
+    };
+  }
+
+  return {
+    runtimeConnected: Boolean(runtime.connected),
+    queueStatus: runtime.status || 'offline',
+    activeRoomId: runtime.currentRoomId || null,
+    activePlayerId: runtime.currentPlayerId || null,
+  };
+}
+
+function modeDisabledError(mode) {
+  return {
+    ok: false,
+    error: {
+      code: 'MODE_DISABLED',
+      message: `Only Agent Mafia is available at launch. ${mode || 'That'} mode is coming soon.`,
+    },
+  };
+}
+
+function agentRequiredError() {
+  return {
+    ok: false,
+    error: {
+      code: 'AGENT_REQUIRED',
+      message: 'Connect an OpenClaw agent before entering the Mafia arena.',
+    },
+  };
+}
+
+function agentNotReadyError() {
+  return {
+    ok: false,
+    error: {
+      code: 'AGENT_NOT_READY',
+      message: 'Your OpenClaw agent is not connected and deployed yet.',
+    },
+  };
+}
+
+function agentRuntimeRequiredError() {
+  return {
+    ok: false,
+    error: {
+      code: 'AGENT_RUNTIME_REQUIRED',
+      message: 'Your agent is not online in the live arena yet. Finish the OpenClaw runtime connection first.',
+    },
+  };
+}
+
 function runAutoBattle() {
   ensureSeedAgents();
   const deployed = [...agentProfiles.values()].filter((a) => a.deployed);
@@ -2143,6 +2416,98 @@ function runAutoBattle() {
   }
 
   return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
+}
+
+let publicArenaQueueRunning = false;
+
+function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
+  if (!room || !player || !agent || !runtime) return;
+  player.isLiveAgent = true;
+  player.isBot = false;
+  player.agentId = agent.id;
+  player.userId = agent.id;
+  player.owner = agent.owner || null;
+  player.socketId = runtime.socketId || null;
+  player.isConnected = true;
+  runtime.currentRoomId = room.id;
+  runtime.currentPlayerId = player.id;
+  runtime.status = 'in_match';
+  const sock = io.sockets.sockets.get(runtime.socketId);
+  if (sock) sock.join(`mafia:${room.id}`);
+}
+
+function createPublicArenaMafiaRoom(agents) {
+  if (!Array.isArray(agents) || agents.length < PUBLIC_ARENA_REQUIRED_AGENTS) return null;
+
+  const [hostAgent, ...others] = agents;
+  const hostRuntime = getAgentRuntime(hostAgent.id);
+  if (!hostRuntime?.connected || !hostRuntime.socketId) return null;
+
+  const created = mafiaGame.createRoom(mafiaRooms, {
+    hostName: hostAgent.name,
+    hostSocketId: hostRuntime.socketId,
+  });
+  if (!created.ok) return null;
+
+  const room = created.room;
+  room.publicArena = true;
+  room.autoMatch = true;
+  room.liveAgentPromptKey = null;
+  attachLiveAgentToMafiaSeat(room, created.player, hostAgent, hostRuntime);
+
+  for (const agent of others) {
+    const runtime = getAgentRuntime(agent.id);
+    if (!runtime?.connected || !runtime.socketId) return null;
+    const joined = mafiaGame.joinRoom(mafiaRooms, {
+      roomId: room.id,
+      name: agent.name,
+      socketId: runtime.socketId,
+    });
+    if (!joined.ok) return null;
+    attachLiveAgentToMafiaSeat(room, joined.player, agent, runtime);
+  }
+
+  logRoomEvent('mafia', room, 'ROOM_CREATED', {
+    status: room.status,
+    phase: room.phase,
+    publicArena: true,
+    agents: agents.map((agent) => agent.id),
+  });
+  emitMafiaRoom(room);
+
+  const started = mafiaGame.startGame(mafiaRooms, { roomId: room.id, hostPlayerId: room.hostPlayerId });
+  if (!started.ok) return null;
+  activeAgentMatchRooms.add(room.id);
+  logRoomEvent('mafia', room, 'GAME_STARTED', {
+    status: room.status,
+    phase: room.phase,
+    day: room.day,
+    publicArena: true,
+  });
+  scheduleMafiaPhase(room);
+  emitMafiaRoom(room);
+  handlePublicArenaRoomUpdate(room);
+  return room;
+}
+
+async function processPublicArenaQueue() {
+  if (publicArenaQueueRunning) return;
+  publicArenaQueueRunning = true;
+  try {
+    let idleAgents = idleLaunchAgents();
+    while (idleAgents.length >= PUBLIC_ARENA_REQUIRED_AGENTS) {
+      const batch = idleAgents.slice(0, PUBLIC_ARENA_REQUIRED_AGENTS);
+      batch.forEach((agent) => setAgentRuntimeStatus(agent.id, 'reserved'));
+      const room = createPublicArenaMafiaRoom(batch);
+      if (!room) {
+        batch.forEach((agent) => clearAgentRuntimeAssignment(agent.id, 'idle'));
+        break;
+      }
+      idleAgents = idleLaunchAgents();
+    }
+  } finally {
+    publicArenaQueueRunning = false;
+  }
 }
 
 // Health check — single handler (see bottom of file)
@@ -2555,8 +2920,28 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   res.json({ ok: true, roast });
 });
 
+app.get('/api/agents/:id', (req, res) => {
+  const agent = agentProfiles.get(String(req.params.id || '').trim());
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
+  const arena = summarizeAgentArenaState(agent.id);
+
+  res.json({
+    ok: true,
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      mmr: agent.mmr,
+      karma: agent.karma,
+      deployed: !!agent.deployed,
+      openclawConnected: arena.runtimeConnected,
+      persona: agent.persona || null,
+      arena,
+    },
+  });
+});
+
 app.get('/api/leaderboard', (_req, res) => {
-  const agents = [...agentProfiles.values()];
+  const agents = [...agentProfiles.values()].filter(isPublicRankedAgent);
   const topAgents = [...agents]
     .sort((a, b) => b.mmr - a.mmr || b.karma - a.karma)
     .slice(0, 25)
@@ -2649,7 +3034,8 @@ function buildRoomLaunchReadiness(room) {
   const host = players.find((p) => p.id === hostPlayerId) || players[0] || null;
   const connectedHumans = players.filter((p) => !p.isBot && p.isConnected).length;
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
-  const missingPlayers = Math.max(0, QUICK_JOIN_MIN_PLAYERS - players.length);
+  const requiredPlayers = requiredPlayersForMode(room?.mode || 'mafia', room);
+  const missingPlayers = Math.max(0, requiredPlayers - players.length);
   const canHostStartReady = room?.status === 'lobby' && Boolean(host?.isConnected);
 
   return {
@@ -2667,8 +3053,9 @@ function buildRoomLaunchReadiness(room) {
 function buildRoomMatchQuality(roomSummary) {
   const quickMatch = roomSummary.quickMatch || { tickets: 0, conversions: 0, conversionRate: 0 };
   const reconnectAuto = roomSummary.reconnectAuto || { attempts: 0, failures: 0, successRate: 0 };
-  const fillRate = Math.min(1, (roomSummary.players || 0) / 4);
-  const nearStartBonus = roomSummary.players >= 3 ? 0.2 : 0;
+  const seatCount = Number(roomSummary.seatCount || requiredPlayersForMode(roomSummary.mode || 'mafia', roomSummary));
+  const fillRate = Math.min(1, (roomSummary.players || 0) / seatCount);
+  const nearStartBonus = roomSummary.players >= Math.max(3, seatCount - 1) ? 0.2 : 0;
   const conversionSignal = Math.min(1, Number(quickMatch.conversionRate || 0));
   const rematchSignal = Math.min(1, Number(roomSummary.rematchCount || 0) / 3);
   const hostSignal = roomSummary.launchReadiness?.hostConnected ? 1 : 0;
@@ -2698,7 +3085,8 @@ function summarizePlayableRoom(mode, room) {
   const alivePlayers = players.filter((p) => p.alive !== false).length;
   const status = String(room?.status || 'lobby');
   const phase = String(room?.phase || (status === 'lobby' ? 'lobby' : 'unknown'));
-  const canJoin = status === 'lobby' && players.length < 4;
+  const seatCount = requiredPlayersForMode(mode, room);
+  const canJoin = status === 'lobby' && !room?.publicArena && players.length < seatCount;
   if (status === 'finished' && room?.winner) recordRoomWinner(mode, room);
   const telemetry = getRoomTelemetry(mode, room.id);
   const quickMatch = {
@@ -2737,6 +3125,7 @@ function summarizePlayableRoom(mode, room) {
     status,
     phase,
     players: players.length,
+    seatCount,
     alivePlayers,
     hostPlayerId: room.hostPlayerId || null,
     hostName: launchReadiness.hostName,
@@ -2886,6 +3275,20 @@ function buildQuickJoinDecision(candidates, targetRoom, created) {
 }
 
 const QUICK_JOIN_MIN_PLAYERS = 4;
+const PUBLIC_ARENA_REQUIRED_AGENTS = 6;
+const PUBLIC_LAUNCH_MODE = 'mafia';
+const MAFIA_PHASE_MS = {
+  night: Number(process.env.MAFIA_NIGHT_MS || 7000),
+  discussion: Number(process.env.MAFIA_DISCUSSION_MS || 5000),
+  voting: Number(process.env.MAFIA_VOTING_MS || 7000),
+};
+
+function requiredPlayersForMode(mode, room = null) {
+  if (mode === 'mafia') {
+    return room?.publicArena ? PUBLIC_ARENA_REQUIRED_AGENTS : mafiaGame.MAFIA_PLAYER_COUNT;
+  }
+  return QUICK_JOIN_MIN_PLAYERS;
+}
 
 function createQuickJoinRoom(mode, hostName) {
   const socketId = null;
@@ -2943,12 +3346,13 @@ function autoFillLobbyBots(mode, roomId, minPlayers = QUICK_JOIN_MIN_PLAYERS) {
   const room = mafiaRooms.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only auto-fill lobby rooms' } };
-  const needed = Math.max(0, safeMinPlayers - room.players.length);
+  const targetPlayers = Math.max(safeMinPlayers, requiredPlayersForMode('mafia', room));
+  const needed = Math.max(0, targetPlayers - room.players.length);
   const added = mafiaGame.addLobbyBots(mafiaRooms, { roomId: room.id, count: needed, namePrefix: 'Mafia Bot' });
   if (!added.ok) return added;
-  logRoomEvent('mafia', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers: safeMinPlayers, players: room.players.length });
+  logRoomEvent('mafia', room, 'LOBBY_AUTOFILLED', { addedBots: added.bots.length, targetPlayers, players: room.players.length });
   emitMafiaRoom(room);
-  return { ok: true, mode: 'mafia', room, addedBots: added.bots.length, targetPlayers: safeMinPlayers };
+  return { ok: true, mode: 'mafia', room, addedBots: added.bots.length, targetPlayers };
 }
 
 function stripDisconnectedLobbyHumans(mode, roomId) {
@@ -2968,7 +3372,8 @@ function getLobbyStartReadiness(mode, room, playerId) {
   const reasons = [];
   const players = room?.players || [];
   const isHost = Boolean(room?.hostPlayerId && room.hostPlayerId === playerId);
-  const missingPlayers = Math.max(0, QUICK_JOIN_MIN_PLAYERS - players.length);
+  const requiredPlayers = requiredPlayersForMode(mode, room);
+  const missingPlayers = Math.max(0, requiredPlayers - players.length);
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
 
   if (!isHost) reasons.push({ code: 'HOST_ONLY', message: 'Only host can start' });
@@ -3030,11 +3435,11 @@ function startReadyLobby(mode, roomId, playerId) {
     day: started.room.day,
     round: started.room.round,
   });
-  emitRoom(started.room);
   if (mode === 'gta') scheduleGtaPhase(started.room);
   else if (mode === 'amongus') scheduleAmongUsPhase(started.room);
   else if (mode === 'villa') scheduleVillaPhase(started.room);
   else scheduleMafiaPhase(started.room);
+  emitRoom(started.room);
 
   return {
     ok: true,
@@ -3046,11 +3451,15 @@ function startReadyLobby(mode, roomId, playerId) {
 }
 
 app.get('/api/play/rooms', (req, res) => {
-  const modeFilter = String(req.query.mode || 'all').toLowerCase();
+  const modeInput = String(req.query.mode || PUBLIC_LAUNCH_MODE).toLowerCase();
+  const modeFilter = modeInput === 'all' ? PUBLIC_LAUNCH_MODE : modeInput;
   const statusFilter = String(req.query.status || 'all').toLowerCase();
 
-  if (!['all', 'mafia', 'amongus', 'villa', 'gta'].includes(modeFilter)) {
+  if (!['all', 'mafia', 'amongus', 'villa', 'gta'].includes(modeInput)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
+  }
+  if (!isEnabledPublicMode(modeFilter)) {
+    return res.status(400).json(modeDisabledError(modeFilter));
   }
 
   const roomsList = listPlayableRooms(modeFilter, statusFilter);
@@ -3089,6 +3498,7 @@ app.get('/api/play/rooms', (req, res) => {
     totalRooms: roomsList.length,
     openRooms: aggregate.openRooms,
     playersOnline: aggregate.playersOnline,
+    arena: buildArenaAvailability(),
     byMode: aggregate.byMode,
     reconnectAuto: {
       ...aggregate.reconnectAuto,
@@ -3183,8 +3593,11 @@ app.post('/api/play/quick-join', (req, res) => {
   if (!['all', 'mafia', 'amongus', 'villa', 'gta'].includes(modeInput)) {
     return res.status(400).json({ ok: false, error: 'Invalid mode' });
   }
+  if (!['all', PUBLIC_LAUNCH_MODE].includes(modeInput)) {
+    return res.status(400).json(modeDisabledError(modeInput));
+  }
 
-  const selectedMode = pickQuickJoinMode(modeInput);
+  const selectedMode = PUBLIC_LAUNCH_MODE;
   roomEvents.append('growth', selectedMode, 'QUICK_JOIN_REQUESTED', {
     modeInput,
     selectedMode,
@@ -3294,46 +3707,71 @@ if (typeof loadGrowthMetrics === 'function') {
 // ── Instant Play: one-click to join a game ──
 app.post('/api/play/instant', (req, res) => {
   const modeInput = String(req.body?.mode || 'mafia').toLowerCase();
-  const mode = ['mafia', 'amongus', 'villa', 'gta'].includes(modeInput) ? modeInput : 'mafia';
-  const playerName = String(req.body?.name || `Player_${shortId(4)}`).trim().slice(0, 24);
+  if (!['mafia', 'amongus', 'villa', 'gta'].includes(modeInput)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa|gta' } });
+  }
+  if (!isEnabledPublicMode(modeInput)) {
+    return res.status(400).json(modeDisabledError(modeInput));
+  }
+  const agentId = String(req.body?.agentId || '').trim();
+  if (!agentId) return res.status(400).json(agentRequiredError());
 
-  // Create a new room
-  const created = createQuickJoinRoom(mode, playerName);
-  if (!created.ok) return res.status(500).json(created);
-
-  const room = created.room;
-
-  // Auto-fill with bots
-  const filled = autoFillLobbyBots(mode, room.id, 4);
-
-  // Auto-start the game server-side so users land in an active game, not a stuck lobby.
-  // startReadyLobby requires a socket ownership check, so we call game.startGame() directly.
-  const store = mode === 'amongus' ? amongUsRooms : mode === 'villa' ? villaRooms : mode === 'gta' ? gtaRooms : mafiaRooms;
-  const game  = mode === 'amongus' ? amongUsGame  : mode === 'villa' ? villaGame  : mode === 'gta' ? gtaGame  : mafiaGame;
-  const started = game.startGame(store, { roomId: room.id, hostPlayerId: room.hostPlayerId });
-  if (started.ok) {
-    if (mode === 'mafia')         scheduleMafiaPhase(started.room);
-    else if (mode === 'amongus')  scheduleAmongUsPhase(started.room);
-    else if (mode === 'gta')      scheduleGtaPhase(started.room);
-    else                          scheduleVillaPhase(started.room);
-    logRoomEvent(mode, started.room, 'INSTANT_PLAY_STARTED', { players: started.room.players.length, phase: started.room.phase });
+  const agent = agentProfiles.get(agentId);
+  if (!agent) return res.status(404).json(agentRequiredError());
+  if (!agent.deployed || !agent.openclaw?.connected) {
+    return res.status(400).json(agentNotReadyError());
+  }
+  const runtime = getAgentRuntime(agentId);
+  if (!runtime?.connected) {
+    return res.status(400).json(agentRuntimeRequiredError());
   }
 
-  trackEvent('instant_play_created', playerName, { mode, roomId: room.id, autoStarted: started.ok });
+  const arena = buildArenaAvailability();
+  trackEvent('instant_play_requested', agent.name, { mode: arena.mode, agentId, connectedAgents: arena.connectedAgents });
 
-  res.json({
+  if (runtime.currentRoomId && runtime.currentPlayerId) {
+    return res.json({
+      ok: true,
+      mode: arena.mode,
+      waiting: false,
+      activeRoomId: runtime.currentRoomId,
+      activePlayerId: runtime.currentPlayerId,
+      watchUrl: `/play.html?mode=mafia&room=${encodeURIComponent(runtime.currentRoomId)}&spectate=1`,
+      message: 'Your agent is already in a live Mafia match.',
+    });
+  }
+
+  void processPublicArenaQueue();
+  const refreshed = getAgentRuntime(agentId);
+  if (refreshed?.currentRoomId && refreshed?.currentPlayerId) {
+    return res.json({
+      ok: true,
+      mode: arena.mode,
+      waiting: false,
+      activeRoomId: refreshed.currentRoomId,
+      activePlayerId: refreshed.currentPlayerId,
+      watchUrl: `/play.html?mode=mafia&room=${encodeURIComponent(refreshed.currentRoomId)}&spectate=1`,
+      message: 'Your agent has been seated in the next live Mafia match.',
+    });
+  }
+
+  return res.json({
     ok: true,
-    mode,
-    roomId: room.id,
-    gameStarted: started.ok,
-    playUrl: `/play.html?mode=${mode}&room=${room.id}&name=${encodeURIComponent(playerName)}&autojoin=1&instant=1`,
-    players: room.players.length,
+    mode: arena.mode,
+    waiting: true,
+    connectedAgents: arena.connectedAgents,
+    requiredAgents: arena.requiredAgents,
+    missingAgents: arena.missingAgents,
+    canStart: arena.canStart,
+    message: arena.canStart
+      ? 'Connected agents are online. Public live seat assignment is not available yet, so watch the arena while agent-only matchmaking finishes wiring up.'
+      : `Need ${arena.missingAgents} more connected agent(s) before an agent-only Mafia room can open.`,
   });
 });
 
 // ── Watch: spectate the most active game ──
 app.get('/api/play/watch', (_req, res) => {
-  const allRooms = listPlayableRooms('all', 'all');
+  const allRooms = listPlayableRooms(PUBLIC_LAUNCH_MODE, 'all');
   const active = allRooms
     .filter((r) => r.status === 'in_progress')
     .sort((a, b) => (b.players || 0) - (a.players || 0));
@@ -3349,30 +3787,17 @@ app.get('/api/play/watch', (_req, res) => {
       players: best.players,
     });
   }
-
-  // No active games -- create one with all bots for spectating and start it immediately.
-  const mode = 'mafia';
-  const created = createQuickJoinRoom(mode, 'Spectator');
-  if (!created.ok) return res.json({ ok: true, found: false, message: 'No active games. Try Play Now!' });
-
-  autoFillLobbyBots(mode, created.room.id, 4);
-
-  // Start the bot game so spectators see a live game, not a stuck lobby.
-  const watchStarted = mafiaGame.startGame(mafiaRooms, { roomId: created.room.id, hostPlayerId: created.room.hostPlayerId });
-  if (watchStarted.ok) {
-    scheduleMafiaPhase(watchStarted.room);
-    logRoomEvent(mode, watchStarted.room, 'WATCH_BOT_GAME_STARTED', { players: watchStarted.room.players.length });
-  }
-
+  const arena = buildArenaAvailability();
   res.json({
     ok: true,
-    found: true,
-    roomId: created.room.id,
-    mode,
-    watchUrl: `/play.html?mode=${mode}&room=${created.room.id}&spectate=1`,
-    players: created.room.players.length,
-    autoCreated: true,
-    gameStarted: watchStarted.ok,
+    found: false,
+    mode: arena.mode,
+    connectedAgents: arena.connectedAgents,
+    requiredAgents: arena.requiredAgents,
+    missingAgents: arena.missingAgents,
+    message: arena.connectedAgents > 0
+      ? `No live agent-only Mafia room is running yet. Need ${arena.missingAgents} more connected agent(s) to open the arena.`
+      : 'No live agent-only Mafia rooms yet. Connect an OpenClaw agent to help open the arena.',
   });
 });
 
@@ -3594,6 +4019,14 @@ app.get('/api/ops/funnel', (_req, res) => {
   res.json({ ok: true, metrics: growthMetrics });
 });
 
+app.get('/api/ops/match-baseline', (req, res) => {
+  const mode = String(req.query.mode || 'mafia').toLowerCase();
+  if (!['mafia', 'amongus', 'villa', 'gta'].includes(mode)) {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia|amongus|villa|gta' } });
+  }
+  res.json({ ok: true, baseline: buildMatchBaseline(mode) });
+});
+
 app.get('/health', (_req, res) => {
   const scheduler = roomScheduler.stats();
   const eventQueueDepth = roomEvents.pending();
@@ -3686,6 +4119,12 @@ function cleanupStaleRooms() {
   }
 }
 
+function resetAgentArenaRuntime() {
+  liveAgentRuntimes.clear();
+  agentRuntimeSockets.clear();
+  activeAgentMatchRooms.clear();
+}
+
 if (require.main === module) {
   // Initialize SQLite database + run migrations
   try {
@@ -3709,8 +4148,9 @@ if (require.main === module) {
   // Stale room cleanup — every 5 minutes
   setInterval(cleanupStaleRooms, 5 * 60 * 1000);
 
-  server.listen(PORT, () => {
-    console.log(`Agent Arena running on http://localhost:${PORT}`);
+  server.listen(PORT, HOST, () => {
+    const hostLabel = HOST || 'localhost';
+    console.log(`Agent Arena running on http://${hostLabel}:${PORT}`);
   });
 
   server.on('close', () => {
@@ -3746,9 +4186,14 @@ module.exports = {
   amongUsRooms,
   villaRooms,
   gtaRooms,
+  agentProfiles,
+  connectSessions,
+  liveAgentRuntimes,
   roomEvents,
   arenaCanary,
+  processPublicArenaQueue,
   clearAllGameTimers,
   resetPlayTelemetry,
   seedPlayTelemetry,
+  resetAgentArenaRuntime,
 };

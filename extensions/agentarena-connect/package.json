@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "socket.io-client": "^4.8.3"
+  },
   "openclaw": {
     "extensions": ["./index.ts"]
   }

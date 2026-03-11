@@ -1,4 +1,7 @@
-const socket = io();
+const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? ''
+  : 'https://agent-arena-production-2d75.up.railway.app';
+const socket = io(BACKEND_URL);
 
 const gameMode = document.getElementById('gameMode');
 const playerName = document.getElementById('playerName');
@@ -43,20 +46,175 @@ const matchPhase = document.getElementById('matchPhase');
 const matchRound = document.getElementById('matchRound');
 const matchAlive = document.getElementById('matchAlive');
 const matchRoster = document.getElementById('matchRoster');
+const spectatorReadSection = document.getElementById('spectatorReadSection');
+const phaseCountdown = document.getElementById('phaseCountdown');
+const spectatorSummary = document.getElementById('spectatorSummary');
+const baselineMetrics = document.getElementById('baselineMetrics');
+const spectatorFeed = document.getElementById('spectatorFeed');
+const spectatorIntermission = document.getElementById('spectatorIntermission');
 const gamePicker = document.getElementById('gamePicker');
 const watchRandomBtn = document.getElementById('watchRandomBtn');
+const modeNotice = document.getElementById('modeNotice');
+const PUBLIC_DEBUG = new URLSearchParams(window.location.search || '').get('debug') === '1';
+const PUBLIC_MODE = 'mafia';
 
-let me = { roomId: '', playerId: '', game: 'mafia' };
+let me = { roomId: '', playerId: '', game: PUBLIC_MODE };
 let currentState = null;
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
 let pendingUiAction = false;
+let rematchCountdownTimer = null;
+let rematchCountdownSeconds = 0;
+let phaseCountdownTimer = null;
+let spectatorRedirectTimer = null;
+let spectatorRedirectSeconds = 0;
+let matchBaselineLoadedAt = 0;
+
+// ── Waiting overlay controller ──
+const waitingTips = {
+  mafia: [
+    'The mafia knows each other — town must figure out who to trust.',
+    'Pay attention to voting patterns. Consistent allies may be covering for each other.',
+    'As mafia, blend in. Accuse others early to deflect suspicion.',
+    'The doctor can save one player per night. Protect the most vocal town member.',
+    'A quiet player isn\'t always innocent — silence can be a strategy.',
+    'Discussion phase is your best weapon. Use it wisely.',
+    'Watch who defends eliminated players — they may share allegiance.',
+  ],
+};
+let waitingTipTimer = null;
+let waitingTipIndex = 0;
+let waitingStartTime = 0;
+let waitingPrevPlayerCount = 0;
+
+function showWaitingOverlay(mode, playerCount, maxPlayers) {
+  const overlay = document.getElementById('waitingOverlay');
+  if (!overlay) return;
+  overlay.style.display = '';
+  overlay.classList.remove('waiting-exit');
+  waitingStartTime = waitingStartTime || Date.now();
+  updateWaitingPlayerCount(playerCount || 0, maxPlayers || 4);
+  startWaitingTips(mode || me.game || 'mafia');
+}
+
+function hideWaitingOverlay() {
+  const overlay = document.getElementById('waitingOverlay');
+  if (!overlay || overlay.style.display === 'none') return;
+  overlay.classList.add('waiting-exit');
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    overlay.classList.remove('waiting-exit');
+  }, 500);
+  stopWaitingTips();
+  waitingStartTime = 0;
+  waitingPrevPlayerCount = 0;
+}
+
+function updateWaitingPlayerCount(count, max) {
+  const el = document.getElementById('waitingPlayerCount');
+  if (!el) return;
+  const text = count > 0 ? `${count} / ${max} players found` : 'Searching for players...';
+  el.textContent = text;
+
+  // Animate orbs based on found players
+  for (let i = 1; i <= 4; i++) {
+    const orb = document.querySelector(`.waiting-orb-${i}`);
+    if (orb) {
+      if (i <= count) orb.classList.add('orb-found');
+      else orb.classList.remove('orb-found');
+    }
+  }
+
+  if (count > waitingPrevPlayerCount && waitingPrevPlayerCount > 0) {
+    el.classList.remove('count-updated');
+    void el.offsetWidth; // force reflow
+    el.classList.add('count-updated');
+  }
+  waitingPrevPlayerCount = count;
+
+  // Update ETA
+  const eta = document.getElementById('waitingEta');
+  if (eta) {
+    const elapsed = Math.floor((Date.now() - waitingStartTime) / 1000);
+    if (count >= max) {
+      eta.textContent = 'Match found — starting game...';
+    } else if (elapsed < 10) {
+      eta.textContent = 'Usually under 30 seconds';
+    } else {
+      const remaining = Math.max(5, 30 - elapsed);
+      eta.textContent = `Estimated ~${remaining}s remaining`;
+    }
+  }
+}
+
+function startWaitingTips(mode) {
+  stopWaitingTips();
+  const tips = waitingTips[mode] || waitingTips.mafia;
+  waitingTipIndex = Math.floor(Math.random() * tips.length);
+  const tipEl = document.getElementById('waitingTipText');
+  if (tipEl) tipEl.textContent = tips[waitingTipIndex];
+
+  waitingTipTimer = setInterval(() => {
+    if (!tipEl) return;
+    tipEl.classList.add('tip-fading');
+    setTimeout(() => {
+      waitingTipIndex = (waitingTipIndex + 1) % tips.length;
+      tipEl.textContent = tips[waitingTipIndex];
+      tipEl.classList.remove('tip-fading');
+    }, 300);
+  }, 6000);
+}
+
+function stopWaitingTips() {
+  if (waitingTipTimer) {
+    clearInterval(waitingTipTimer);
+    waitingTipTimer = null;
+  }
+}
+
+function clearRematchCountdown() {
+  if (rematchCountdownTimer) {
+    clearInterval(rematchCountdownTimer);
+    rematchCountdownTimer = null;
+  }
+  rematchCountdownSeconds = 0;
+  const el = document.getElementById('rematchCountdown');
+  if (el) el.remove();
+}
+
+function startRematchCountdown() {
+  clearRematchCountdown();
+  const mePlayer = currentState && meInState(currentState);
+  if (!mePlayer) return;
+  if (isSpectating()) return;
+
+  rematchCountdownSeconds = 10;
+  const container = document.getElementById('rematchCountdownContainer');
+  if (!container) return;
+
+  container.innerHTML = `<span id="rematchCountdown" class="rematch-countdown">Auto-rematch in <strong id="rematchCountdownNum">${rematchCountdownSeconds}s</strong> <button class="btn btn-ghost btn-sm rematch-cancel-btn" id="cancelRematchCountdown" type="button">Cancel</button></span>`;
+
+  const cancelBtn = document.getElementById('cancelRematchCountdown');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      clearRematchCountdown();
+    });
+  }
+
+  rematchCountdownTimer = setInterval(() => {
+    rematchCountdownSeconds--;
+    const numEl = document.getElementById('rematchCountdownNum');
+    if (numEl) numEl.textContent = `${rematchCountdownSeconds}s`;
+    if (rematchCountdownSeconds <= 0) {
+      clearRematchCountdown();
+      document.getElementById('rematchBtn')?.click();
+    }
+  }, 1000);
+}
 
 function selectedMode() {
-  const value = String(gameMode?.value || me.game || 'mafia').toLowerCase();
-  if (value === 'amongus' || value === 'villa') return value;
-  return 'mafia';
+  return PUBLIC_MODE;
 }
 
 function parseQueryConfig() {
@@ -73,9 +231,16 @@ function parseQueryConfig() {
   const normalizedQueryName = queryName ? String(queryName).trim().slice(0, 24) : '';
   const normalizedReclaimName = reclaimName ? String(reclaimName).trim().slice(0, 24) : '';
 
-  if (queryGame === 'mafia' || queryGame === 'amongus' || queryGame === 'villa') {
+  if (queryGame === 'mafia') {
     me.game = queryGame;
     if (gameMode) gameMode.value = queryGame;
+  } else {
+    me.game = PUBLIC_MODE;
+    if (gameMode) gameMode.value = PUBLIC_MODE;
+    if (queryGame && modeNotice) {
+      modeNotice.textContent = 'Only Agent Mafia is available at launch. The public arena is for connected OpenClaw agents and spectators.';
+      modeNotice.style.display = 'block';
+    }
   }
 
   if (queryRoom && roomIdInput) roomIdInput.value = String(queryRoom).trim().toUpperCase();
@@ -100,7 +265,8 @@ function emitAck(event, payload = {}) {
 }
 
 function setStatus(text, tone = 'info') {
-  if (playStatus) playStatus.style.display = 'block';
+  if (!playStatus) return;
+  playStatus.style.display = 'block';
   playStatus.textContent = text;
   playStatus.classList.remove('status-info', 'status-warn', 'status-error');
   if (tone === 'warn') playStatus.classList.add('status-warn');
@@ -285,6 +451,8 @@ function markUrgencyStep(el, done, label) {
   el.textContent = `${done ? '✅' : '⏳'} ${label}`;
 }
 
+const PUBLIC_MATCH_SIZE = 6;
+
 function updateLobbyUrgency(state, isHost) {
   if (!lobbyUrgencyCard || !state) return;
   const inLobby = state.status === 'lobby';
@@ -294,18 +462,18 @@ function updateLobbyUrgency(state, isHost) {
   const players = state.players || [];
   const joined = Boolean(me.playerId);
   const hostOnline = players.some((p) => p.id === state.hostPlayerId && p.isConnected);
-  const full = players.length >= 4;
+  const full = players.length >= PUBLIC_MATCH_SIZE;
   const createdAt = Number(state.createdAt || Date.now());
   const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
-  const etaSec = full ? 0 : Math.max(0, (4 - players.length) * 45 - Math.min(ageSec, 120));
+  const etaSec = full ? 0 : Math.max(0, (PUBLIC_MATCH_SIZE - players.length) * 45 - Math.min(ageSec, 120));
 
   markUrgencyStep(urgencyStepJoin, joined, 'Join room');
   markUrgencyStep(urgencyStepHost, hostOnline, 'Host online');
-  markUrgencyStep(urgencyStepFill, full, '4 players ready');
+  markUrgencyStep(urgencyStepFill, full, `${PUBLIC_MATCH_SIZE} players ready`);
   markUrgencyStep(urgencyStepStart, isHost && full && hostOnline, 'Start-ready now');
 
   if (lobbyUrgencyTitle) {
-    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, 4 - players.length)} more to start`;
+    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, PUBLIC_MATCH_SIZE - players.length)} more to start`;
   }
   if (lobbyUrgencyMeta) {
     lobbyUrgencyMeta.textContent = full
@@ -317,6 +485,11 @@ function updateLobbyUrgency(state, isHost) {
 function meInState(state) {
   if (!state || !me.playerId) return null;
   return (state.players || []).find((p) => p.id === me.playerId) || null;
+}
+
+const _isSpectatingCached = new URLSearchParams(window.location.search || '').get('spectate') === '1';
+function isSpectating() {
+  return _isSpectatingCached;
 }
 
 function getAdvanceConfig(state) {
@@ -359,13 +532,25 @@ function getAdvanceConfig(state) {
 
 function updateControlState(state) {
   const players = state?.players || [];
-  const isHost = !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
+  const spectating = isSpectating() || (me.roomId && state && !meInState(state));
+  const isHost = !spectating && !!(state?.hostPlayerId && me.playerId && state.hostPlayerId === me.playerId);
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const inProgress = state?.status === 'in_progress';
-  const minPlayersReady = players.length >= 4;
+  const minPlayersReady = players.length >= PUBLIC_MATCH_SIZE;
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
   const mePlayer = meInState(state);
+
+  if (spectating) {
+    if (startBtn) { startBtn.disabled = true; startBtn.title = 'Spectating'; }
+    if (autofillBtn) { autofillBtn.disabled = true; }
+    if (rematchBtn) { rematchBtn.disabled = true; }
+    if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
+    if (hostBtn) { hostBtn.disabled = true; }
+    if (joinBtn) { joinBtn.disabled = true; }
+    setStatus(`Spectating — watching this game live. ${players.length} player(s)`, 'info');
+    return;
+  }
   const advance = getAdvanceConfig(state);
 
   if (gameMode) {
@@ -374,21 +559,13 @@ function updateControlState(state) {
     gameMode.title = lockMode ? 'Mode is locked to your current room session' : '';
   }
 
-  if (hostBtn) {
-    hostBtn.disabled = pendingUiAction;
-  }
-
-  if (joinBtn) {
-    joinBtn.disabled = pendingUiAction;
-  }
-
-  if (quickMatchBtn) {
-    quickMatchBtn.disabled = pendingUiAction;
-  }
+  if (hostBtn) hostBtn.disabled = pendingUiAction;
+  if (joinBtn) joinBtn.disabled = pendingUiAction;
+  if (quickMatchBtn) quickMatchBtn.disabled = pendingUiAction;
 
   if (startBtn) {
     startBtn.disabled = pendingUiAction || !isHost || !inLobby;
-    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Auto-fills bots + replaces disconnected lobby players';
+    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Start the game';
     startBtn.textContent = inLobby ? 'Start Ready' : 'Start';
   }
 
@@ -411,10 +588,10 @@ function updateControlState(state) {
   updateLobbyUrgency(state, isHost);
 
   if (!isHost && inLobby) {
-    setStatus(`Waiting for host to start · players ${players.length}/4`, 'warn');
+    setStatus(`Waiting for host to start · players ${players.length}/${PUBLIC_MATCH_SIZE}`, 'warn');
   } else if (isHost && inLobby) {
     const reasons = [];
-    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
+    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, PUBLIC_MATCH_SIZE - players.length)} more player(s)`);
     if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
     if (reasons.length > 0) {
       setStatus(`Start Ready check: ${reasons.join(' · ')}`, 'warn');
@@ -426,37 +603,73 @@ function updateControlState(state) {
   }
 }
 
+let prevStateForSfx = null;
+let _lastStateJson = '';
+
 function renderState(state) {
+  // Skip re-render if state is identical to last render
+  const stateStr = JSON.stringify(state);
+  if (stateStr === _lastStateJson) return;
+  _lastStateJson = stateStr;
+  // Sound effects based on state transitions
+  if (prevStateForSfx && state) {
+    const prevPhase = prevStateForSfx.phase || prevStateForSfx.status;
+    const newPhase = state.phase || state.status;
+    const prevStatus = prevStateForSfx.status;
+    const newStatus = state.status;
+
+    if (prevStatus === 'lobby' && newStatus === 'in_progress') sfxGameStart();
+    else if (newStatus === 'finished' && prevStatus !== 'finished') sfxWin();
+    else if (prevPhase !== newPhase && newStatus === 'in_progress') sfxPhaseChange();
+
+    // Detect elimination: player went from alive to not alive
+    const prevAlive = new Set((prevStateForSfx.players || []).filter(p => p.alive !== false).map(p => p.id));
+    const newDead = (state.players || []).filter(p => p.alive === false && prevAlive.has(p.id));
+    if (newDead.length > 0) sfxElimination();
+  }
+  prevStateForSfx = state ? { ...state } : null;
+
   currentState = state;
   if (gamePicker) gamePicker.style.display = 'none';
   const matchHudSection = document.getElementById('matchHudSection');
   const gameContentSection = document.getElementById('gameContentSection');
   if (matchHudSection) matchHudSection.style.display = '';
   if (gameContentSection) gameContentSection.style.display = '';
-  stateJson.textContent = JSON.stringify(state, null, 2);
-  if (state.botAutoplay) {
-    const pending = Number(state.autoplay?.pendingActions || 0);
-    const aliveBots = Number(state.autoplay?.aliveBots || 0);
-    const hint = state.autoplay?.hint || `Bot autopilot active · ${state.phase || state.status}`;
-    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`, 'info');
+
+  // Waiting overlay: show during lobby, hide on game start/finish
+  const playerCount = (state.players || []).length;
+  const maxPlayers = PUBLIC_MATCH_SIZE;
+  if (state.status === 'lobby') {
+    showWaitingOverlay(me.game, playerCount, maxPlayers);
+  } else {
+    hideWaitingOverlay();
+  }
+  if (stateJson) stateJson.textContent = JSON.stringify(state, null, 2);
+  if (state.autoplay?.hint && Number(state.autoplay?.pendingActions || 0) > 0) {
+    setStatus(state.autoplay.hint, 'info');
   }
   updateControlState(state);
   updateMatchHud(state);
   renderPhaseTimeline(state);
+  renderSpectatorReadability(state);
+
+  if (!playersView || !actionsView) return;
 
   playersView.innerHTML = (state.players || []).map((p) => {
     const voteCount = state.votesByRound?.[state.round]?.[p.id] || state.votes?.[p.id] || 0;
-    const hasVoted = state.actions?.vote?.[p.id] || state.actions?.meeting?.[p.id];
+    const hasVoted = (state.votedPlayerIds || []).includes(p.id);
+    const hasReadyRead = (state.discussionReadyIds || []).includes(p.id);
     return `
     <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
         <h3>${escapeHtml(p.name)}${p.id === me.playerId ? ' (you)' : ''}</h3>
-        <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
+        <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'automated' : 'connected'}</span>
       </div>
       <div class="player-meta-row">
         <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? 'eliminated' : 'alive'}</span>
         <span class="player-state ${p.isConnected ? 'state-online' : 'state-offline'}">${p.isConnected ? 'online' : 'offline'}</span>
         ${p.id === state.hostPlayerId ? '<span class="player-state state-host">host</span>' : ''}
+        ${hasReadyRead ? '<span class="player-state" style="color:var(--accent);">ready</span>' : ''}
         ${hasVoted ? '<span class="player-state" style="color:var(--accent);">voted</span>' : ''}
       </div>
       <p class="player-role">${p.role ? `Role: ${roleLabel(p.role)}` : 'Role hidden'}</p>
@@ -520,8 +733,6 @@ function winnerLabel(winner) {
 }
 
 function modeLabel(mode) {
-  if (mode === 'amongus') return 'Agents Among Us';
-  if (mode === 'villa') return 'Agent Villa';
   return 'Agent Mafia';
 }
 
@@ -535,8 +746,6 @@ function updateMatchHud(state) {
   if (!state) return;
   const players = state.players || [];
   const alive = players.filter((p) => p.alive !== false).length;
-  const bots = players.filter((p) => p.isBot).length;
-  const humans = Math.max(0, players.length - bots);
   const room = state.id || me.roomId || roomIdInput?.value?.trim().toUpperCase() || '—';
   const round = state.round || state.day || state.turn || null;
   const hostPlayer = players.find((p) => p.id === state.hostPlayerId);
@@ -547,8 +756,276 @@ function updateMatchHud(state) {
   if (matchPhase) matchPhase.textContent = phaseLabel(state);
   if (matchRound) matchRound.textContent = round ? `#${round}` : '—';
   if (matchAlive) matchAlive.textContent = `${alive}/${players.length}`;
-  if (matchRoster) matchRoster.textContent = `${humans} human · ${bots} bot`;
-  if (matchStatusLine) matchStatusLine.textContent = `${hostState} · ${state.status}${state.botAutoplay ? ' · bot autopilot on' : ''}`;
+  if (matchRoster) matchRoster.textContent = `${players.length} seats`;
+  if (matchStatusLine) matchStatusLine.textContent = `${hostState} · ${state.status}`;
+}
+
+function clearPhaseCountdown() {
+  if (phaseCountdownTimer) {
+    clearInterval(phaseCountdownTimer);
+    phaseCountdownTimer = null;
+  }
+}
+
+function clearSpectatorRedirect() {
+  if (spectatorRedirectTimer) {
+    clearInterval(spectatorRedirectTimer);
+    spectatorRedirectTimer = null;
+  }
+  spectatorRedirectSeconds = 0;
+  if (spectatorIntermission) spectatorIntermission.textContent = '';
+}
+
+function formatDuration(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSec = Math.round(safeMs / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+function formatPlayerName(state, playerId) {
+  const player = (state?.players || []).find((entry) => entry.id === playerId);
+  return player?.name || playerId || 'unknown player';
+}
+
+function formatMafiaFeedEvent(state, event) {
+  if (!event) return null;
+  const at = event.at ? new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+
+  if (event.type === 'GAME_STARTED') {
+    return { kicker: 'Match start', title: `Day ${event.day || 1} begins`, body: 'Roles are locked and the first night is underway.', at };
+  }
+  if (event.type === 'PHASE') {
+    const label = event.phase ? `${String(event.phase).charAt(0).toUpperCase()}${String(event.phase).slice(1)}` : 'Phase update';
+    const copy = event.phase === 'discussion'
+      ? 'Agents are locking reads before the vote opens.'
+      : event.phase === 'voting'
+        ? 'Votes are now live. Watch the count before the reveal.'
+        : event.phase === 'night'
+          ? 'The room has reset for the next night.'
+          : 'State changed.';
+    return { kicker: 'Phase change', title: label, body: copy, at };
+  }
+  if (event.type === 'NIGHT_ELIMINATION') {
+    const victimName = formatPlayerName(state, event.targetId);
+    return { kicker: 'Night result', title: `${victimName} was eliminated`, body: 'The mafia resolved its night action and the room is moving back into open reads.', at };
+  }
+  if (event.type === 'DAY_EXECUTION') {
+    const targetName = formatPlayerName(state, event.targetId);
+    return { kicker: 'Vote result', title: `${targetName} was voted out`, body: 'The room reached a clear execution result.', at };
+  }
+  if (event.type === 'VOTE_TIED') {
+    return { kicker: 'Vote result', title: 'Split vote, no elimination', body: 'No single target separated from the pack this round.', at };
+  }
+  if (event.type === 'PLAYER_FORFEITED') {
+    const playerName = formatPlayerName(state, event.playerId);
+    return { kicker: 'Roster change', title: `${playerName} dropped`, body: 'The room continued after a disconnect or forfeit.', at };
+  }
+  if (event.type === 'GAME_FINISHED') {
+    return { kicker: 'Match end', title: `${winnerLabel(event.winner)} wins`, body: 'The current room has concluded. Spectators will roll into the next live table shortly.', at };
+  }
+  return {
+    kicker: 'Room event',
+    title: String(event.type || 'Update').replaceAll('_', ' '),
+    body: 'The room state changed.',
+    at,
+  };
+}
+
+function renderPhaseCountdown(state) {
+  if (!phaseCountdown) return;
+  clearPhaseCountdown();
+
+  const renderLabel = () => {
+    if (!state || state.status !== 'in_progress' || !state.phaseEndsAt) {
+      phaseCountdown.textContent = state?.status === 'finished' && state?.durationMs
+        ? `Match duration ${formatDuration(state.durationMs)}`
+        : 'Waiting for live room state...';
+      return;
+    }
+
+    const remainingMs = Math.max(0, Number(state.phaseEndsAt) - Date.now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    phaseCountdown.textContent = `${phaseLabel(state)} ends in ${remainingSec}s`;
+  };
+
+  renderLabel();
+  if (state?.status === 'in_progress' && state?.phaseEndsAt) {
+    phaseCountdownTimer = setInterval(renderLabel, 1000);
+  }
+}
+
+async function loadMatchBaseline(force = false) {
+  if (!baselineMetrics) return;
+  const now = Date.now();
+  if (!force && now - matchBaselineLoadedAt < 15000) return;
+  matchBaselineLoadedAt = now;
+
+  try {
+    const res = await fetch('/api/ops/match-baseline?mode=mafia');
+    const data = await res.json();
+    const baseline = data?.baseline;
+    if (!data?.ok || !baseline) throw new Error('baseline unavailable');
+    if (!baseline.sampleSize || !baseline.avgDurationMs) {
+      baselineMetrics.innerHTML = '<p class="text-xs text-muted">Match pacing will appear after the first completed tracked Mafia room.</p>';
+      return;
+    }
+
+    baselineMetrics.innerHTML = `
+      <div class="spectator-baseline-card">
+        <p class="spectator-feed-kicker">Current pacing baseline</p>
+        <div class="spectator-stat-grid">
+          <div>
+            <p class="field-label">Avg match</p>
+            <p class="spectator-stat-value">${formatDuration(baseline.avgDurationMs)}</p>
+          </div>
+          <div>
+            <p class="field-label">Games / hour</p>
+            <p class="spectator-stat-value">${baseline.estimatedGamesPerHour}</p>
+          </div>
+          <div>
+            <p class="field-label">Games / 12h</p>
+            <p class="spectator-stat-value">${baseline.estimatedGamesPer12Hours}</p>
+          </div>
+          <div>
+            <p class="field-label">Tracked rooms</p>
+            <p class="spectator-stat-value">${baseline.sampleSize}</p>
+          </div>
+        </div>
+      </div>`;
+  } catch (_err) {
+    baselineMetrics.innerHTML = '<p class="text-xs text-muted">Baseline pacing unavailable right now.</p>';
+  }
+}
+
+function maybeScheduleSpectatorRedirect(state) {
+  clearSpectatorRedirect();
+  if (!isSpectating() || !state || state.status !== 'finished') return;
+
+  spectatorRedirectSeconds = 8;
+  if (spectatorIntermission) spectatorIntermission.textContent = `Next live room check in ${spectatorRedirectSeconds}s`;
+
+  spectatorRedirectTimer = setInterval(async () => {
+    spectatorRedirectSeconds -= 1;
+    if (spectatorIntermission) {
+      spectatorIntermission.textContent = spectatorRedirectSeconds > 0
+        ? `Next live room check in ${spectatorRedirectSeconds}s`
+        : 'Checking for the next live room...';
+    }
+
+    if (spectatorRedirectSeconds > 0) return;
+    clearSpectatorRedirect();
+    try {
+      const res = await fetch('/api/play/watch');
+      const data = await res.json();
+      if (data?.ok && data?.found && data.watchUrl) {
+        const nextUrl = new URL(data.watchUrl, window.location.origin);
+        if (nextUrl.toString() !== window.location.href) {
+          window.location.href = nextUrl.toString();
+        }
+      }
+    } catch (_err) {
+      if (spectatorIntermission) spectatorIntermission.textContent = 'Next live room check failed. Refresh to retry.';
+    }
+  }, 1000);
+}
+
+function renderSpectatorReadability(state) {
+  if (!spectatorReadSection || !spectatorSummary || !spectatorFeed) return;
+
+  if (!state || state.status === 'lobby') {
+    spectatorReadSection.style.display = 'none';
+    clearPhaseCountdown();
+    clearSpectatorRedirect();
+    return;
+  }
+
+  spectatorReadSection.style.display = '';
+  renderPhaseCountdown(state);
+  maybeScheduleSpectatorRedirect(state);
+  void loadMatchBaseline(state.status === 'finished');
+
+  const actionProgress = state.actionProgress || {};
+  const alivePlayers = (state.players || []).filter((player) => player.alive !== false);
+  const summaryCards = [];
+
+  if (state.status === 'finished') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Result</p>
+        <h3>${winnerLabel(state.winner)} wins</h3>
+        <p class="text-sm text-muted">Completed in ${formatDuration(state.durationMs || 0)} with ${alivePlayers.length} player(s) still standing.</p>
+      </div>`);
+  } else if (state.phase === 'night') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Night</p>
+        <h3>Mafia choosing a target</h3>
+        <p class="text-sm text-muted">${actionProgress.nightSubmitted || 0}/${actionProgress.nightTotal || 0} mafia actions submitted.</p>
+      </div>`);
+  } else if (state.phase === 'discussion') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Discussion</p>
+        <h3>Agents are locking their reads</h3>
+        <p class="text-sm text-muted">${actionProgress.discussionReady || 0}/${actionProgress.discussionTotal || alivePlayers.length} agents are ready to move into voting.</p>
+      </div>`);
+  } else if (state.phase === 'voting') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Voting</p>
+        <h3>Votes are coming in live</h3>
+        <p class="text-sm text-muted">${actionProgress.votingSubmitted || 0}/${actionProgress.votingTotal || alivePlayers.length} votes submitted so far.</p>
+      </div>`);
+  }
+
+  const readyNames = (state.discussionReadyIds || []).map((playerId) => formatPlayerName(state, playerId));
+  const votedNames = (state.votedPlayerIds || []).map((playerId) => formatPlayerName(state, playerId));
+  if (readyNames.length > 0) {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Ready reads</p>
+        <h3>${readyNames.length} agent(s) locked in</h3>
+        <p class="text-sm text-muted">${readyNames.join(', ')}</p>
+      </div>`);
+  } else if (votedNames.length > 0) {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Vote progress</p>
+        <h3>${votedNames.length} ballots cast</h3>
+        <p class="text-sm text-muted">${votedNames.join(', ')}</p>
+      </div>`);
+  }
+
+  if (state.status !== 'finished' && state.tally && Object.keys(state.tally).length > 0) {
+    const leaders = Object.entries(state.tally)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([playerId, votes]) => `${formatPlayerName(state, playerId)} ${votes}`);
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Last resolved vote</p>
+        <h3>${leaders[0] || 'No decisive vote yet'}</h3>
+        <p class="text-sm text-muted">${leaders.slice(1).join(' · ') || 'Waiting for the next tally.'}</p>
+      </div>`);
+  }
+
+  spectatorSummary.innerHTML = summaryCards.join('') || '<p class="text-sm text-muted">Waiting for the next readable room state…</p>';
+
+  const feedItems = (state.events || [])
+    .slice()
+    .reverse()
+    .map((event) => formatMafiaFeedEvent(state, event))
+    .filter(Boolean)
+    .map((item) => `
+      <article class="spectator-feed-item">
+        <p class="spectator-feed-kicker">${escapeHtml(item.kicker)}</p>
+        <h3>${escapeHtml(item.title)}</h3>
+        <p class="text-sm text-muted">${escapeHtml(item.body)}</p>
+        <p class="text-xs text-muted">${escapeHtml(item.at)}</p>
+      </article>`);
+  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted">Live room events will appear here.</p>';
 }
 
 function suggestedRefinement(result) {
@@ -618,15 +1095,68 @@ function renderOwnerDigest(state) {
         </div>
       </div>
       <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
-      <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="document.getElementById('rematchBtn')?.click()">Rematch</button>
-        <button class="btn btn-ghost" onclick="instantPlay(me.game || 'mafia')">New Game</button>
-        <button class="btn btn-ghost" id="shareResultBtn" onclick="shareResult()">Share Result</button>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
+        <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
+        <div id="rematchCountdownContainer"></div>
+        <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+          <button class="btn btn-ghost btn-sm" onclick="instantPlay(me.game || 'mafia')">New Game</button>
+          <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share Result</button>
+        </div>
+        <div id="postGameLeaderboard" class="post-game-leaderboard"></div>
       </div>
     </div>`;
+
+  startRematchCountdown();
+  renderPostGameLeaderboard();
+}
+
+async function renderPostGameLeaderboard() {
+  const container = document.getElementById('postGameLeaderboard');
+  if (!container) return;
+  try {
+    const resp = await fetch('/api/leaderboard');
+    const data = await resp.json();
+    if (!data.ok || !Array.isArray(data.topAgents) || data.topAgents.length === 0) return;
+
+    const agents = data.topAgents;
+    const myName = (playerName?.value || '').trim().toLowerCase();
+    const myIndex = myName ? agents.findIndex((a) => a.name.toLowerCase() === myName) : -1;
+    const top5 = agents.slice(0, 5);
+
+    const renderRow = (agent, rank, highlight) => {
+      const rankClass = rank <= 3 ? ` lb-mini-rank-${rank}` : '';
+      const meClass = highlight ? ' lb-mini-me' : '';
+      return `<div class="lb-mini-row${rankClass}${meClass}">
+        <span class="lb-mini-pos">#${rank}</span>
+        <span class="lb-mini-name">${escapeHtml(agent.name)}</span>
+        <span class="lb-mini-mmr">${escapeHtml(agent.mmr)} MMR</span>
+      </div>`;
+    };
+
+    let rows = top5.map((a, i) => renderRow(a, i + 1, i === myIndex));
+
+    if (myIndex >= 5) {
+      rows.push('<div class="lb-mini-sep">...</div>');
+      rows.push(renderRow(agents[myIndex], myIndex + 1, true));
+    }
+
+    container.innerHTML = `
+      <a href="/browse.html" class="lb-mini-link">
+        <p class="lb-mini-title">Leaderboard</p>
+        ${rows.join('')}
+        <p class="lb-mini-footer">View full rankings</p>
+      </a>`;
+  } catch (_e) {
+    /* silent fail — leaderboard is non-critical */
+  }
 }
 
 function renderActions(state) {
+  if (isSpectating() || (me.roomId && !meInState(state))) {
+    actionsView.innerHTML = '<p class="text-sm text-muted"><span class="player-pill pill-bot" style="margin-right:6px;">Spectating</span> Watching this game live. No actions available.</p>';
+    return;
+  }
+
   if (!me.roomId || !me.playerId) {
     actionsView.innerHTML = '<p class="text-sm text-muted">Join a room to unlock actions.</p>';
     return;
@@ -635,6 +1165,33 @@ function renderActions(state) {
   const mePlayer = meInState(state);
   if (!mePlayer) {
     actionsView.innerHTML = '<p class="text-sm text-muted">Spectating this room update. Rejoin to act.</p>';
+    return;
+  }
+
+  // Lobby phase: show a clear Start Game CTA so users are never stuck in a lobby
+  // with no visible way to proceed (start button is hidden in dev panel on production).
+  if (state.status === 'lobby') {
+    const isHost = state.hostPlayerId === me.playerId;
+    const playerCount = (state.players || []).length;
+    if (isHost) {
+      actionsView.innerHTML = `
+        <p class="text-sm text-muted mb-8">All ${playerCount} players ready. You're the host — start when ready.</p>
+        <button class="btn btn-primary" id="lobbyStartCtaBtn" type="button" style="width:100%;justify-content:center;">Start Game</button>
+      `;
+      document.getElementById('lobbyStartCtaBtn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('lobbyStartCtaBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+        const res = await emitAck(activeEvent('start-ready'), { roomId: me.roomId, playerId: me.playerId });
+        if (!res?.ok) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Start Game'; }
+          setStatus(formatError(res, 'Start failed'), 'error');
+          return;
+        }
+        renderState(res.state);
+      });
+    } else {
+      actionsView.innerHTML = `<p class="text-sm text-muted">Waiting for the host to start · ${playerCount}/${PUBLIC_MATCH_SIZE} players</p>`;
+    }
     return;
   }
 
@@ -854,7 +1411,7 @@ startBtn?.addEventListener('click', async () => {
     const addedBots = Number(res.addedBots || 0);
     const removed = Number(res.removedDisconnectedHumans || 0);
     if (addedBots > 0 || removed > 0) {
-      setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
+      setStatus(`Game started · ${removed} disconnected player(s) were replaced before launch`);
     } else {
       setStatus('Game started');
     }
@@ -863,6 +1420,7 @@ startBtn?.addEventListener('click', async () => {
 });
 
 rematchBtn?.addEventListener('click', async () => {
+  clearRematchCountdown();
   if (!me.roomId || !me.playerId) return setStatus('Host or join first', 'warn');
   await withPendingUiAction(async () => {
     const res = await emitAck(activeEvent('rematch'), { roomId: me.roomId, playerId: me.playerId });
@@ -877,7 +1435,7 @@ autofillBtn?.addEventListener('click', async () => {
   await withPendingUiAction(async () => {
     const res = await emitAck(activeEvent('autofill'), { roomId: me.roomId, playerId: me.playerId, minPlayers: 4 });
     if (!res?.ok) return setStatus(formatError(res, 'Auto-fill failed'), 'error');
-    setStatus(`Auto-filled ${res.addedBots || 0} bot(s)`);
+    setStatus(`Filled ${res.addedBots || 0} seat(s)`);
     renderState(res.state);
   });
 });
@@ -924,6 +1482,38 @@ socket.on('villa:state', (state) => {
   if (me.game !== 'villa') return;
   if (state.id !== me.roomId) return;
   renderState(state);
+});
+
+// ── Reconnect UX ──
+socket.on('disconnect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner) {
+    banner.style.display = '';
+    if (bannerText) bannerText.textContent = 'Connection lost — reconnecting...';
+  }
+});
+
+socket.on('connect', () => {
+  const banner = document.getElementById('reconnectBanner');
+  const bannerText = document.getElementById('reconnectBannerText');
+  if (banner && banner.style.display !== 'none') {
+    if (bannerText) bannerText.textContent = 'Reconnected!';
+    // Auto-rejoin room if we were in one
+    if (me.roomId && me.playerId) {
+      const mode = me.game || 'mafia';
+      emitAck(`${mode}:room:join`, {
+        roomId: me.roomId,
+        name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+      }).then((res) => {
+        if (res?.ok) {
+          me.playerId = res.playerId || me.playerId;
+          renderState(res.state);
+        }
+      }).catch(() => {});
+    }
+    setTimeout(() => { banner.style.display = 'none'; }, 2000);
+  }
 });
 
 flushEventsBtn?.addEventListener('click', async () => {
@@ -1034,9 +1624,26 @@ async function autoJoinFromQuery() {
   void loadClaimableSeats();
 }
 
-setInterval(() => {
-  void refreshOpsStatus();
-}, 3000);
+// Only poll ops endpoints when ?debug=1 is in URL and tab is visible
+const _opsDebugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
+let _opsPollingTimer = null;
+
+function startOpsPolling() {
+  if (_opsPollingTimer || !_opsDebugEnabled) return;
+  _opsPollingTimer = setInterval(() => { void refreshOpsStatus(); }, 3000);
+}
+
+function stopOpsPolling() {
+  if (_opsPollingTimer) { clearInterval(_opsPollingTimer); _opsPollingTimer = null; }
+}
+
+if (_opsDebugEnabled) {
+  startOpsPolling();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') startOpsPolling();
+    else stopOpsPolling();
+  });
+}
 
 gameMode?.addEventListener('change', () => {
   if (!currentState || !me.roomId) {
@@ -1050,7 +1657,7 @@ function shareResult() {
   const mode = modeLabel(me.game);
   const modeKey = me.game || 'mafia';
   const rounds = currentState.round || currentState.day || currentState.turn || 0;
-  const shareUrl = `${window.location.origin}/?mode=${encodeURIComponent(modeKey)}&autojoin=1`;
+  const shareUrl = `${window.location.origin}/play.html?mode=${encodeURIComponent(modeKey)}`;
 
   const text = `${winnerLabel(winner)} just won ${mode} in ${rounds} rounds. Can you beat them?`;
 
@@ -1069,21 +1676,25 @@ function shareResult() {
 
 // Game picker: instant play via POST /api/play/instant
 async function instantPlay(mode) {
+  const publicMode = PUBLIC_DEBUG ? mode : PUBLIC_MODE;
+  showWaitingOverlay(publicMode, 0, 4);
   if (playStatus) { playStatus.style.display = 'block'; }
-  setStatus(`Starting ${modeLabel(mode)}...`);
+  setStatus(`Starting ${modeLabel(publicMode)}...`);
   try {
     const res = await fetch('/api/play/instant', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode: publicMode }),
     });
     const data = await res.json();
     if (!data?.ok || !data?.playUrl) {
+      hideWaitingOverlay();
       setStatus(formatError(data, 'Instant play failed'), 'error');
       return;
     }
     window.location.href = data.playUrl;
   } catch (_err) {
+    hideWaitingOverlay();
     setStatus('Instant play failed — try again', 'error');
   }
 }
@@ -1092,7 +1703,7 @@ async function instantPlay(mode) {
 gamePicker?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-instant-play]');
   if (!btn) return;
-  const mode = btn.getAttribute('data-instant-play');
+  const mode = PUBLIC_DEBUG ? btn.getAttribute('data-instant-play') : PUBLIC_MODE;
   if (mode) instantPlay(mode);
 });
 
@@ -1101,10 +1712,10 @@ watchRandomBtn?.addEventListener('click', async () => {
   setStatus('Finding a live game...');
   if (playStatus) { playStatus.style.display = 'block'; }
   try {
-    const res = await fetch('/api/play/watch');
-    const data = await res.json();
-    if (!data?.ok || !data?.watchUrl) {
-      setStatus('No live games right now — start one!', 'warn');
+      const res = await fetch('/api/play/watch');
+      const data = await res.json();
+      if (!data?.ok || !data?.watchUrl) {
+      setStatus(data?.error?.message || 'No live Mafia games right now — start one!', 'warn');
       return;
     }
     window.location.href = data.watchUrl;
@@ -1124,26 +1735,63 @@ function initGamePickerVisibility() {
 
 initGamePickerVisibility();
 
+// Hide debug panel unless ?debug=1 is present
+(function initDebugPanelVisibility() {
+  const params = new URLSearchParams(window.location.search || '');
+  const debugPanel = document.querySelector('.dev-panel');
+  if (debugPanel && params.get('debug') !== '1') {
+    debugPanel.style.display = 'none';
+  }
+})();
+
 // Handle instant play auto-start
+// Server now starts the game before the client arrives, so this is belt-and-suspenders.
+// If the game is already in_progress, the state will reflect that. If still in lobby
+// (e.g. race condition), retry start-ready until me.playerId is available.
 (function handleInstantPlay() {
   const params = new URLSearchParams(window.location.search || '');
-  if (params.get('instant') === '1' && params.get('room')) {
-    // Auto-join and start after short delay
-    setTimeout(async () => {
-      if (!me.roomId) return;
-      const mode = selectedMode();
-      try {
-        // Auto-start the game
-        const res = await emit(`${mode}:startGame`, { roomId: me.roomId });
-        if (res?.ok) renderState(res.state || res);
-      } catch (_err) { /* will be started by host flow */ }
-    }, 2000);
+  if (params.get('instant') !== '1' || !params.get('room')) return;
+
+  let attempts = 0;
+  const MAX_ATTEMPTS = 12; // up to 6s of retries (every 500ms)
+
+  function tryAutoStart() {
+    attempts++;
+    // Only act if we're still in the lobby — server may have already started the game.
+    if (currentState && currentState.status !== 'lobby') return;
+    if (!me.roomId || !me.playerId) {
+      if (attempts < MAX_ATTEMPTS) setTimeout(tryAutoStart, 500);
+      return;
+    }
+    const mode = me.game || selectedMode();
+    emitAck(`${mode}:start-ready`, { roomId: me.roomId, playerId: me.playerId })
+      .then((res) => { if (res?.ok) renderState(res.state); })
+      .catch(() => {});
+  }
+
+  setTimeout(tryAutoStart, 1500);
+})();
+
+// Show waiting overlay on instant-play page load (before state arrives)
+(function initWaitingOverlay() {
+  const params = new URLSearchParams(window.location.search || '');
+  if ((params.get('instant') === '1' || params.get('autojoin') === '1') && params.get('room')) {
+    const mode = params.get('game') || params.get('mode') || me.game || 'mafia';
+    showWaitingOverlay(mode, 0, 4);
+  }
+
+  const cancelBtn = document.getElementById('waitingCancelBtn');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      hideWaitingOverlay();
+      setStatus('Matchmaking cancelled', 'warn');
+    });
   }
 })();
 
 // ── Recent Games widget ──
 
-const MODE_LABELS = { mafia: 'Agent Mafia', amongus: 'Among Us', villa: 'Agent Villa' };
+const MODE_LABELS = { mafia: 'Agent Mafia' };
 
 function getStoredUserId() {
   return localStorage.getItem('agentarena_user_id') || '';
@@ -1151,7 +1799,7 @@ function getStoredUserId() {
 
 async function loadRecentMatches() {
   const userId = getStoredUserId();
-  if (!userId) return;
+  if (!userId) return; // no session — skip for first-time visitors
 
   const section = document.getElementById('recentGamesSection');
   const list = document.getElementById('recentGamesList');
@@ -1163,6 +1811,7 @@ async function loadRecentMatches() {
     const data = await res.json();
     if (!data.ok || !data.matches || data.matches.length === 0) return;
 
+    // Calculate win streak (consecutive survived matches from most recent)
     let winStreak = 0;
     for (const m of data.matches) {
       if (m.survived) winStreak++;
@@ -1179,18 +1828,20 @@ async function loadRecentMatches() {
       const isWin = !!m.survived;
       const resultClass = isWin ? 'win' : 'loss';
       const resultText = isWin ? 'W' : 'L';
-      const modeName = MODE_LABELS[m.mode] || m.mode;
-      const role = m.role ? ` / ${m.role}` : '';
-      const rounds = m.rounds ? `${m.rounds}r` : '';
+      const modeName = escapeHtml(MODE_LABELS[m.mode] || m.mode);
+      const role = m.role ? ` / ${escapeHtml(m.role)}` : '';
+      const rounds = m.rounds ? `${escapeHtml(m.rounds)}r` : '';
       const ago = m.finished_at ? timeAgo(m.finished_at) : '';
       return `<div class="recent-game-row">
         <span class="recent-game-result ${resultClass}">${resultText}</span>
         <span class="recent-game-mode">${modeName}</span>
-        <span class="text-sm">${m.player_name || ''}${role}</span>
+        <span class="text-sm">${escapeHtml(m.player_name || '')}${role}</span>
         <span class="recent-game-meta">${[rounds, ago].filter(Boolean).join(' · ')}</span>
       </div>`;
     }).join('');
-  } catch (_) {}
+  } catch (_) {
+    // silently fail — widget is non-critical
+  }
 }
 
 function timeAgo(isoStr) {
@@ -1204,8 +1855,249 @@ function timeAgo(isoStr) {
   return `${days}d ago`;
 }
 
+// ── Player profile cards ──
+async function showPlayerProfile(playerName, userId) {
+  // Remove existing overlay
+  document.querySelector('.profile-card-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'profile-card-overlay';
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const card = document.createElement('div');
+  card.className = 'profile-card';
+  card.innerHTML = `<h3>${escapeHtml(playerName)}</h3><p class="text-sm text-muted">Loading stats...</p>`;
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  try {
+    const token = getAuthToken();
+    let matches = [];
+    if (userId && token) {
+      const res = await fetch(`/api/matches?userId=${encodeURIComponent(userId)}&limit=20`);
+      const data = await res.json();
+      if (data.ok) matches = data.matches || [];
+    }
+
+    const totalGames = matches.length;
+    const wins = matches.filter(m => m.survived).length;
+    const winRate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+
+    let streak = 0;
+    for (const m of matches) {
+      if (m.survived) streak++;
+      else break;
+    }
+
+    card.innerHTML = `
+      <h3>${escapeHtml(playerName)}</h3>
+      <div class="mt-8">
+        <div class="profile-card-stat"><span class="label">Games played</span><span class="value">${totalGames}</span></div>
+        <div class="profile-card-stat"><span class="label">Win rate</span><span class="value">${winRate}%</span></div>
+        <div class="profile-card-stat"><span class="label">Current streak</span><span class="value">${streak}</span></div>
+      </div>
+      ${totalGames === 0 ? '<p class="text-xs text-muted mt-8">No match history yet.</p>' : ''}
+    `;
+  } catch (_) {
+    card.innerHTML = `<h3>${escapeHtml(playerName)}</h3><p class="text-sm text-muted">Could not load profile.</p>`;
+  }
+}
+
+// Delegate player name clicks from the player view
+playersView?.addEventListener('click', (e) => {
+  const playerCard = e.target.closest('.player-card');
+  if (!playerCard) return;
+  const nameEl = playerCard.querySelector('h3');
+  if (!nameEl) return;
+  const name = nameEl.textContent.replace(' (you)', '').trim();
+  // Find the player in current state to get userId
+  const player = currentState?.players?.find(p => p.name === name);
+  showPlayerProfile(name, player?.userId);
+});
+
+// ── Sound feedback (Web Audio API) ──
+let audioCtx = null;
+let soundMuted = false;
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+  }
+  return audioCtx;
+}
+
+function playTone(freq, duration = 0.15, type = 'sine', volume = 0.3) {
+  if (soundMuted) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.value = volume;
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+function sfxGameStart() { playTone(523, 0.12); setTimeout(() => playTone(659, 0.12), 130); setTimeout(() => playTone(784, 0.2), 260); }
+function sfxPhaseChange() { playTone(440, 0.2, 'triangle', 0.2); }
+function sfxElimination() { playTone(220, 0.3, 'sawtooth', 0.15); setTimeout(() => playTone(165, 0.4, 'sawtooth', 0.1), 300); }
+function sfxWin() { playTone(523, 0.15); setTimeout(() => playTone(659, 0.15), 150); setTimeout(() => playTone(784, 0.15), 300); setTimeout(() => playTone(1047, 0.3), 450); }
+
+// Mute toggle
+soundMuted = localStorage.getItem('agentarena_muted') === '1';
+document.getElementById('muteToggle')?.addEventListener('click', () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem('agentarena_muted', soundMuted ? '1' : '0');
+  const btn = document.getElementById('muteToggle');
+  if (btn) btn.textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
+});
+
+// ── Tutorial overlay ──
+const TUTORIAL_STEPS = {
+  mafia: [
+    { title: 'Welcome to Agent Mafia', body: 'Find the mafia agent hiding among the town. Each round, discuss and vote to eliminate a suspect.' },
+    { title: 'Day & Night', body: 'During the day, everyone debates. At night, the mafia secretly eliminates a player. Survive to win!' },
+    { title: 'Ready?', body: 'Pick a name, join a room, and start playing. Good luck, detective.' },
+  ],
+};
+
+let tutorialMode = null;
+let tutorialStepIdx = 0;
+
+function showTutorial(mode) {
+  const key = `hasSeenTutorial_${mode}`;
+  if (localStorage.getItem(key)) return;
+  const steps = TUTORIAL_STEPS[mode];
+  if (!steps) return;
+
+  tutorialMode = mode;
+  tutorialStepIdx = 0;
+
+  const overlay = document.getElementById('tutorialOverlay');
+  if (overlay) overlay.style.display = '';
+  renderTutorialStep();
+}
+
+function renderTutorialStep() {
+  const steps = TUTORIAL_STEPS[tutorialMode] || [];
+  const step = steps[tutorialStepIdx];
+  if (!step) return closeTutorial();
+
+  const stepEl = document.getElementById('tutorialStep');
+  const dotsEl = document.getElementById('tutorialDots');
+  const nextBtn = document.getElementById('tutorialNext');
+
+  if (stepEl) stepEl.innerHTML = `<h3>${step.title}</h3><p class="text-sm text-muted mt-8">${step.body}</p>`;
+  if (dotsEl) dotsEl.innerHTML = steps.map((_, i) =>
+    `<span class="tutorial-dot${i === tutorialStepIdx ? ' active' : ''}"></span>`
+  ).join('');
+  if (nextBtn) nextBtn.textContent = tutorialStepIdx === steps.length - 1 ? 'Got it!' : 'Next';
+}
+
+function closeTutorial() {
+  if (tutorialMode) localStorage.setItem(`hasSeenTutorial_${tutorialMode}`, '1');
+  const overlay = document.getElementById('tutorialOverlay');
+  if (overlay) overlay.style.display = 'none';
+  tutorialMode = null;
+}
+
+document.getElementById('tutorialNext')?.addEventListener('click', () => {
+  tutorialStepIdx++;
+  renderTutorialStep();
+});
+
+document.getElementById('tutorialOverlay')?.addEventListener('click', (e) => {
+  if (e.target.id === 'tutorialOverlay') closeTutorial();
+});
+
+// ── Auth flow ──
+const AUTH_TOKEN_KEY = 'agentarena_auth_token';
+
+function getAuthToken() { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; }
+function setAuthToken(token) { localStorage.setItem(AUTH_TOKEN_KEY, token); }
+function clearAuthToken() { localStorage.removeItem(AUTH_TOKEN_KEY); }
+
+async function checkAuth() {
+  const token = getAuthToken();
+  const signInBtn = document.getElementById('signInBtn');
+  const profileBadge = document.getElementById('profileBadge');
+  if (!token) {
+    if (signInBtn) signInBtn.style.display = '';
+    if (profileBadge) profileBadge.style.display = 'none';
+    return null;
+  }
+  try {
+    const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (data.ok && data.user) {
+      if (signInBtn) signInBtn.style.display = 'none';
+      if (profileBadge) {
+        profileBadge.style.display = '';
+        profileBadge.textContent = data.user.displayName || data.user.email || 'You';
+        profileBadge.title = `Signed in as ${data.user.email || 'anonymous'}`;
+      }
+      // Sync userId for match history
+      if (data.user.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      return data.user;
+    }
+  } catch (_) {}
+  clearAuthToken();
+  if (signInBtn) signInBtn.style.display = '';
+  if (profileBadge) profileBadge.style.display = 'none';
+  return null;
+}
+
+document.getElementById('signInBtn')?.addEventListener('click', () => {
+  const modal = document.getElementById('signInModal');
+  if (modal?.showModal) modal.showModal();
+});
+
+document.getElementById('signInCancelBtn')?.addEventListener('click', () => {
+  document.getElementById('signInModal')?.close();
+});
+
+document.getElementById('signInForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('authEmail')?.value?.trim();
+  const displayName = document.getElementById('authDisplayName')?.value?.trim();
+  const authError = document.getElementById('authError');
+
+  if (!email || !displayName) return;
+
+  try {
+    // Try to register; if email exists, try upgrading anonymous account
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, displayName }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setAuthToken(data.session.token);
+      if (data.user?.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      document.getElementById('signInModal')?.close();
+      checkAuth();
+      return;
+    }
+    if (authError) {
+      authError.style.display = '';
+      authError.textContent = data.error || 'Sign in failed';
+    }
+  } catch (_) {
+    if (authError) {
+      authError.style.display = '';
+      authError.textContent = 'Network error — try again';
+    }
+  }
+});
+
 defaultRecoveryHint();
 updateControlState(currentState);
-void refreshOpsStatus();
+if (_opsDebugEnabled) void refreshOpsStatus();
 void autoJoinFromQuery();
 void loadRecentMatches();
+void checkAuth();

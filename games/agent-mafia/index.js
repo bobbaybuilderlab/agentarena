@@ -1,5 +1,7 @@
 const { randomUUID } = require('crypto');
 
+const MAFIA_PLAYER_COUNT = 6;
+
 function shortId(len = 6) {
   return randomUUID().replace(/-/g, '').slice(0, len).toUpperCase();
 }
@@ -49,31 +51,43 @@ function transitionRoomState(room, nextPhase, options = {}) {
 }
 
 function summarizeBotAutoplay(room) {
-  const aliveBots = room.players.filter((p) => p.alive && p.isBot && !p.isLiveAgent);
-  const aliveLiveAgents = room.players.filter((p) => p.alive && p.isLiveAgent);
+  const aliveBots = room.players.filter((p) => p.alive && p.isBot);
   if (room.status !== 'in_progress') {
-    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
+    return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay starts when match is in progress.' };
   }
 
   if (room.phase === 'night') {
     const pending = aliveBots.filter((p) => p.role === 'mafia' && !room.actions?.night?.[p.id]).length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are selecting night targets.' : 'Night bot actions complete.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are selecting night targets.' : 'Night bot actions complete.' };
   }
 
   if (room.phase === 'discussion') {
     const pending = aliveBots.filter((p) => room.actions?.vote?.[p.id] !== '__READY__').length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
   }
 
   if (room.phase === 'voting') {
     const pending = aliveBots.filter((p) => !room.actions?.vote?.[p.id]).length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: pending > 0 ? 'Bots are casting votes.' : 'Bot votes submitted.' };
+    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are casting votes.' : 'Bot votes submitted.' };
   }
 
-  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, aliveLiveAgents: aliveLiveAgents.length, phase: room.phase, hint: 'Autoplay active.' };
+  return { enabled: true, pendingActions: 0, aliveBots: aliveBots.length, phase: room.phase, hint: 'Autoplay active.' };
 }
 
 function toPublic(room) {
+  const alive = room.players.filter((p) => p.alive);
+  const aliveMafia = alive.filter((p) => p.role === 'mafia');
+  const voteActions = room.actions?.vote || {};
+  const discussionReadyIds = alive
+    .filter((p) => voteActions[p.id] === '__READY__')
+    .map((p) => p.id);
+  const votedPlayerIds = alive
+    .filter((p) => voteActions[p.id] && voteActions[p.id] !== '__READY__')
+    .map((p) => p.id);
+  const durationMs = room.startedAt
+    ? Math.max(0, (room.finishedAt || Date.now()) - room.startedAt)
+    : null;
+
   return {
     id: room.id,
     partyChainId: room.partyChainId,
@@ -94,6 +108,20 @@ function toPublic(room) {
     })),
     tally: room.tally,
     events: room.events.slice(-8),
+    startedAt: room.startedAt || null,
+    finishedAt: room.finishedAt || null,
+    phaseEndsAt: room.phaseEndsAt || null,
+    durationMs,
+    actionProgress: {
+      nightSubmitted: aliveMafia.filter((p) => room.actions?.night?.[p.id]).length,
+      nightTotal: aliveMafia.length,
+      discussionReady: discussionReadyIds.length,
+      discussionTotal: alive.length,
+      votingSubmitted: votedPlayerIds.length,
+      votingTotal: alive.length,
+    },
+    discussionReadyIds,
+    votedPlayerIds,
     botAutoplay: true,
     autoplay: summarizeBotAutoplay(room),
   };
@@ -130,6 +158,9 @@ function createRoom(store, { hostName, hostSocketId }) {
     },
     tally: {},
     events: [],
+    startedAt: null,
+    finishedAt: null,
+    phaseEndsAt: null,
   };
 
   store.set(room.id, room);
@@ -144,7 +175,7 @@ function joinRoom(store, { roomId, name, socketId }) {
   const cleanName = String(name || '').trim().slice(0, 24);
   if (!cleanName) return { ok: false, error: { code: 'NAME_REQUIRED', message: 'name required' } };
 
-  const MAX_LOBBY_PLAYERS = 4;
+  const MAX_LOBBY_PLAYERS = MAFIA_PLAYER_COUNT;
   const normalized = cleanName.toLowerCase();
   const socketSeat = room.players.find((p) => p.isConnected && p.socketId && socketId && p.socketId === socketId);
   if (socketSeat) {
@@ -203,7 +234,7 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.hostPlayerId !== hostPlayerId) return { ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'INVALID_STATE', message: 'Game already started' } };
-  if (room.players.length < 4) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 4 players' } };
+  if (room.players.length < MAFIA_PLAYER_COUNT) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: `Need at least ${MAFIA_PLAYER_COUNT} players` } };
 
   const transitioned = transitionRoomState(room, 'night', { nextStatus: 'in_progress' });
   if (!transitioned.ok) return transitioned;
@@ -212,10 +243,13 @@ function startGame(store, { roomId, hostPlayerId }) {
   room.winner = null;
   room.actions = { night: {}, vote: {} };
   room.tally = {};
+  room.startedAt = Date.now();
+  room.finishedAt = null;
+  room.phaseEndsAt = null;
   room.events = [{ type: 'GAME_STARTED', at: Date.now(), day: room.day }];
 
   const shuffled = fisherYatesShuffle(room.players);
-  const mafiaCount = Math.max(1, Math.floor(room.players.length / 4));
+  const mafiaCount = room.players.length >= 6 ? 2 : 1;
   shuffled.forEach((p, idx) => {
     p.role = idx < mafiaCount ? 'mafia' : 'town';
     p.alive = true;
@@ -371,6 +405,8 @@ function finish(room, winner) {
   const transitioned = transitionRoomState(room, 'finished', { nextStatus: 'finished' });
   if (!transitioned.ok) return transitioned;
   room.winner = winner;
+  room.finishedAt = Date.now();
+  room.phaseEndsAt = null;
   room.events.push({ type: 'GAME_FINISHED', winner, day: room.day, at: Date.now() });
   capEvents(room);
   return { ok: true, room };
@@ -389,6 +425,9 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.winner = null;
   room.actions = { night: {}, vote: {} };
   room.tally = {};
+  room.startedAt = null;
+  room.finishedAt = null;
+  room.phaseEndsAt = null;
   room.events = [{ type: 'REMATCH_READY', at: Date.now() }];
   for (const player of room.players) {
     player.alive = true;
@@ -434,58 +473,60 @@ function disconnectPlayer(store, { roomId, socketId }) {
   return true;
 }
 
-function markPlayerAsLiveAgent(store, { roomId, playerId }) {
-  const room = store.get(String(roomId || '').toUpperCase());
-  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
-  const player = room.players.find((p) => p.id === playerId);
-  if (!player) return { ok: false, error: { code: 'PLAYER_NOT_FOUND', message: 'Player not found' } };
-  player.isLiveAgent = true;
-  return { ok: true, room, player };
-}
+function maybeAdvanceAfterRosterChange(room) {
+  const winner = checkWin(room);
+  if (winner) return finish(room, winner);
 
-function hasLiveAgents(room) {
-  return room.players.some((p) => p.isLiveAgent);
-}
+  const aliveCount = alivePlayers(room).length;
+  if (room.status !== 'in_progress' || aliveCount <= 0) return { ok: true, room };
 
-function buildAgentPrompt(room, playerId) {
-  const player = room.players.find((p) => p.id === playerId);
-  if (!player || !player.alive) return null;
-
-  const alivePlayers = room.players.filter((p) => p.alive).map((p) => ({
-    id: p.id,
-    name: p.name,
-    isYou: p.id === playerId,
-  }));
-
-  const base = {
-    phase: room.phase,
-    day: room.day,
-    role: player.role,
-    yourId: player.id,
-    yourName: player.name,
-    alivePlayers,
-    recentEvents: room.events.slice(-8),
-  };
-
-  if (room.phase === 'night' && player.role === 'mafia') {
-    const otherMafia = room.players
-      .filter((p) => p.alive && p.role === 'mafia' && p.id !== playerId)
-      .map((p) => ({ id: p.id, name: p.name }));
-    return { ...base, action: 'nightKill', otherMafia, targets: alivePlayers.filter((p) => !p.isYou) };
+  if (room.phase === 'night') {
+    return maybeAutoAdvance(room);
   }
 
   if (room.phase === 'discussion') {
-    return { ...base, action: 'discussion' };
+    const readyCount = Object.keys(room.actions?.vote || {}).length;
+    if (readyCount >= aliveCount) {
+      room.actions.vote = {};
+      const transitioned = transitionPhase(room, 'voting');
+      if (!transitioned.ok) return transitioned;
+    }
+    return { ok: true, room };
   }
 
   if (room.phase === 'voting') {
-    return { ...base, action: 'vote', targets: alivePlayers.filter((p) => !p.isYou) };
+    const voteCount = Object.values(room.actions?.vote || {}).filter((value) => value !== '__READY__').length;
+    if (voteCount >= aliveCount) {
+      return resolveVote(room);
+    }
   }
 
-  return null;
+  return { ok: true, room };
+}
+
+function forfeitPlayer(store, { roomId, playerId, reason = 'disconnect' }) {
+  const room = store.get(String(roomId || '').toUpperCase());
+  if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
+
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) return { ok: false, error: { code: 'INVALID_PLAYER', message: 'Invalid player' } };
+
+  player.isConnected = false;
+  if (room.status !== 'in_progress' || player.alive === false) {
+    return { ok: true, room, player };
+  }
+
+  player.alive = false;
+  room.events.push({ type: 'PLAYER_FORFEITED', playerId: player.id, reason, day: room.day, at: Date.now() });
+  capEvents(room);
+
+  const advanced = maybeAdvanceAfterRosterChange(room);
+  if (!advanced.ok) return advanced;
+  return { ok: true, room, player };
 }
 
 module.exports = {
+  MAFIA_PLAYER_COUNT,
   createStore,
   createRoom,
   joinRoom,
@@ -495,9 +536,7 @@ module.exports = {
   prepareRematch,
   addLobbyBots,
   disconnectPlayer,
+  forfeitPlayer,
   transitionRoomState,
   toPublic,
-  markPlayerAsLiveAgent,
-  hasLiveAgents,
-  buildAgentPrompt,
 };

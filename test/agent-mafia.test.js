@@ -22,7 +22,9 @@ test('agent-mafia room create/join/start happy path', () => {
   const p2 = joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
   const p3 = joinRoom(store, { roomId, name: 'P3', socketId: 's3' });
   const p4 = joinRoom(store, { roomId, name: 'P4', socketId: 's4' });
-  assert.equal(p2.ok && p3.ok && p4.ok, true);
+  const p5 = joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  const p6 = joinRoom(store, { roomId, name: 'P6', socketId: 's6' });
+  assert.equal(p2.ok && p3.ok && p4.ok && p5.ok && p6.ok, true);
 
   const started = startGame(store, { roomId, hostPlayerId });
   assert.equal(started.ok, true);
@@ -30,8 +32,8 @@ test('agent-mafia room create/join/start happy path', () => {
   assert.equal(started.room.phase, 'night');
 
   const roles = started.room.players.map((p) => p.role);
-  assert.ok(roles.includes('mafia'));
-  assert.equal(roles.filter((r) => r === 'town').length >= 1, true);
+  assert.equal(roles.filter((r) => r === 'mafia').length, 2);
+  assert.equal(roles.filter((r) => r === 'town').length, 4);
 });
 
 test('agent-mafia start requires host and minimum players', () => {
@@ -45,6 +47,8 @@ test('agent-mafia start requires host and minimum players', () => {
   joinRoom(store, { roomId: created.room.id, name: 'P2' });
   joinRoom(store, { roomId: created.room.id, name: 'P3' });
   joinRoom(store, { roomId: created.room.id, name: 'P4' });
+  joinRoom(store, { roomId: created.room.id, name: 'P5' });
+  joinRoom(store, { roomId: created.room.id, name: 'P6' });
 
   const nonHost = startGame(store, { roomId: created.room.id, hostPlayerId: 'not-host' });
   assert.equal(nonHost.ok, false);
@@ -87,12 +91,14 @@ test('agent-mafia enforces lobby capacity and avoids duplicate name identities',
   assert.equal(joinRoom(store, { roomId, name: 'P2', socketId: 's2' }).ok, true);
   assert.equal(joinRoom(store, { roomId, name: 'P3', socketId: 's3' }).ok, true);
   assert.equal(joinRoom(store, { roomId, name: 'P4', socketId: 's4' }).ok, true);
+  assert.equal(joinRoom(store, { roomId, name: 'P5', socketId: 's5' }).ok, true);
+  assert.equal(joinRoom(store, { roomId, name: 'P6', socketId: 's6' }).ok, true);
 
-  const full = joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  const full = joinRoom(store, { roomId, name: 'P7', socketId: 's7' });
   assert.equal(full.ok, false);
   assert.equal(full.error.code, 'ROOM_FULL');
 
-  const nameInUse = joinRoom(store, { roomId, name: 'P2', socketId: 's6' });
+  const nameInUse = joinRoom(store, { roomId, name: 'P2', socketId: 's8' });
   assert.equal(nameInUse.ok, false);
   assert.equal(nameInUse.error.code, 'NAME_IN_USE');
 

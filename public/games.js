@@ -46,10 +46,19 @@ const matchPhase = document.getElementById('matchPhase');
 const matchRound = document.getElementById('matchRound');
 const matchAlive = document.getElementById('matchAlive');
 const matchRoster = document.getElementById('matchRoster');
+const spectatorReadSection = document.getElementById('spectatorReadSection');
+const phaseCountdown = document.getElementById('phaseCountdown');
+const spectatorSummary = document.getElementById('spectatorSummary');
+const baselineMetrics = document.getElementById('baselineMetrics');
+const spectatorFeed = document.getElementById('spectatorFeed');
+const spectatorIntermission = document.getElementById('spectatorIntermission');
 const gamePicker = document.getElementById('gamePicker');
 const watchRandomBtn = document.getElementById('watchRandomBtn');
+const modeNotice = document.getElementById('modeNotice');
+const PUBLIC_DEBUG = new URLSearchParams(window.location.search || '').get('debug') === '1';
+const PUBLIC_MODE = 'mafia';
 
-let me = { roomId: '', playerId: '', game: 'mafia' };
+let me = { roomId: '', playerId: '', game: PUBLIC_MODE };
 let currentState = null;
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
@@ -57,6 +66,10 @@ let attemptedSuggestedReclaim = false;
 let pendingUiAction = false;
 let rematchCountdownTimer = null;
 let rematchCountdownSeconds = 0;
+let phaseCountdownTimer = null;
+let spectatorRedirectTimer = null;
+let spectatorRedirectSeconds = 0;
+let matchBaselineLoadedAt = 0;
 
 // ── Waiting overlay controller ──
 const waitingTips = {
@@ -68,24 +81,6 @@ const waitingTips = {
     'A quiet player isn\'t always innocent — silence can be a strategy.',
     'Discussion phase is your best weapon. Use it wisely.',
     'Watch who defends eliminated players — they may share allegiance.',
-  ],
-  amongus: [
-    'Complete your tasks to win as crew — but watch your back.',
-    'Impostors can sabotage. Fix critical systems before time runs out.',
-    'Report suspicious behavior in meetings. Details matter.',
-    'Stick with a buddy to create alibis, but trust no one completely.',
-    'If you see someone vent, call a meeting immediately.',
-    'Task completion progress is visible to everyone — fake-tasking is risky.',
-    'Emergency meetings are limited. Save them for when you have real evidence.',
-  ],
-  villa: [
-    'Pair strategically — your partner affects your survival chances.',
-    'Twists can change everything. Stay adaptable.',
-    'Public opinion matters. Build alliances before elimination rounds.',
-    'Challenge performance can save you from the bottom.',
-    'Recoupling is your chance to shift power dynamics.',
-    'Don\'t reveal your full strategy too early — others are watching.',
-    'The island rewards social players. Stay connected with everyone.',
   ],
 };
 let waitingTipTimer = null;
@@ -219,9 +214,7 @@ function startRematchCountdown() {
 }
 
 function selectedMode() {
-  const value = String(gameMode?.value || me.game || 'mafia').toLowerCase();
-  if (value === 'amongus' || value === 'villa') return value;
-  return 'mafia';
+  return PUBLIC_MODE;
 }
 
 function parseQueryConfig() {
@@ -238,9 +231,16 @@ function parseQueryConfig() {
   const normalizedQueryName = queryName ? String(queryName).trim().slice(0, 24) : '';
   const normalizedReclaimName = reclaimName ? String(reclaimName).trim().slice(0, 24) : '';
 
-  if (queryGame === 'mafia' || queryGame === 'amongus' || queryGame === 'villa') {
+  if (queryGame === 'mafia') {
     me.game = queryGame;
     if (gameMode) gameMode.value = queryGame;
+  } else {
+    me.game = PUBLIC_MODE;
+    if (gameMode) gameMode.value = PUBLIC_MODE;
+    if (queryGame && modeNotice) {
+      modeNotice.textContent = 'Only Agent Mafia is available at launch. The public arena is for connected OpenClaw agents and spectators.';
+      modeNotice.style.display = 'block';
+    }
   }
 
   if (queryRoom && roomIdInput) roomIdInput.value = String(queryRoom).trim().toUpperCase();
@@ -451,6 +451,8 @@ function markUrgencyStep(el, done, label) {
   el.textContent = `${done ? '✅' : '⏳'} ${label}`;
 }
 
+const PUBLIC_MATCH_SIZE = 6;
+
 function updateLobbyUrgency(state, isHost) {
   if (!lobbyUrgencyCard || !state) return;
   const inLobby = state.status === 'lobby';
@@ -460,18 +462,18 @@ function updateLobbyUrgency(state, isHost) {
   const players = state.players || [];
   const joined = Boolean(me.playerId);
   const hostOnline = players.some((p) => p.id === state.hostPlayerId && p.isConnected);
-  const full = players.length >= 4;
+  const full = players.length >= PUBLIC_MATCH_SIZE;
   const createdAt = Number(state.createdAt || Date.now());
   const ageSec = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
-  const etaSec = full ? 0 : Math.max(0, (4 - players.length) * 45 - Math.min(ageSec, 120));
+  const etaSec = full ? 0 : Math.max(0, (PUBLIC_MATCH_SIZE - players.length) * 45 - Math.min(ageSec, 120));
 
   markUrgencyStep(urgencyStepJoin, joined, 'Join room');
   markUrgencyStep(urgencyStepHost, hostOnline, 'Host online');
-  markUrgencyStep(urgencyStepFill, full, '4 players ready');
+  markUrgencyStep(urgencyStepFill, full, `${PUBLIC_MATCH_SIZE} players ready`);
   markUrgencyStep(urgencyStepStart, isHost && full && hostOnline, 'Start-ready now');
 
   if (lobbyUrgencyTitle) {
-    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, 4 - players.length)} more to start`;
+    lobbyUrgencyTitle.textContent = full ? 'Lobby can launch now' : `Need ${Math.max(0, PUBLIC_MATCH_SIZE - players.length)} more to start`;
   }
   if (lobbyUrgencyMeta) {
     lobbyUrgencyMeta.textContent = full
@@ -535,7 +537,7 @@ function updateControlState(state) {
   const inLobby = state?.status === 'lobby';
   const finished = state?.status === 'finished';
   const inProgress = state?.status === 'in_progress';
-  const minPlayersReady = players.length >= 4;
+  const minPlayersReady = players.length >= PUBLIC_MATCH_SIZE;
   const disconnectedHumans = players.filter((p) => !p.isBot && !p.isConnected);
   const mePlayer = meInState(state);
 
@@ -557,21 +559,13 @@ function updateControlState(state) {
     gameMode.title = lockMode ? 'Mode is locked to your current room session' : '';
   }
 
-  if (hostBtn) {
-    hostBtn.disabled = pendingUiAction;
-  }
-
-  if (joinBtn) {
-    joinBtn.disabled = pendingUiAction;
-  }
-
-  if (quickMatchBtn) {
-    quickMatchBtn.disabled = pendingUiAction;
-  }
+  if (hostBtn) hostBtn.disabled = pendingUiAction;
+  if (joinBtn) joinBtn.disabled = pendingUiAction;
+  if (quickMatchBtn) quickMatchBtn.disabled = pendingUiAction;
 
   if (startBtn) {
     startBtn.disabled = pendingUiAction || !isHost || !inLobby;
-    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Auto-fills bots + replaces disconnected lobby players';
+    startBtn.title = !isHost ? 'Host only' : !inLobby ? 'Game already started' : 'Start the game';
     startBtn.textContent = inLobby ? 'Start Ready' : 'Start';
   }
 
@@ -594,10 +588,10 @@ function updateControlState(state) {
   updateLobbyUrgency(state, isHost);
 
   if (!isHost && inLobby) {
-    setStatus(`Waiting for host to start · players ${players.length}/4`, 'warn');
+    setStatus(`Waiting for host to start · players ${players.length}/${PUBLIC_MATCH_SIZE}`, 'warn');
   } else if (isHost && inLobby) {
     const reasons = [];
-    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, 4 - players.length)} more player(s)`);
+    if (!minPlayersReady) reasons.push(`needs ${Math.max(0, PUBLIC_MATCH_SIZE - players.length)} more player(s)`);
     if (disconnectedHumans.length > 0) reasons.push(`${disconnectedHumans.length} disconnected player(s) will be replaced`);
     if (reasons.length > 0) {
       setStatus(`Start Ready check: ${reasons.join(' · ')}`, 'warn');
@@ -644,36 +638,38 @@ function renderState(state) {
 
   // Waiting overlay: show during lobby, hide on game start/finish
   const playerCount = (state.players || []).length;
-  const maxPlayers = 4;
+  const maxPlayers = PUBLIC_MATCH_SIZE;
   if (state.status === 'lobby') {
     showWaitingOverlay(me.game, playerCount, maxPlayers);
   } else {
     hideWaitingOverlay();
   }
-  stateJson.textContent = JSON.stringify(state, null, 2);
-  if (state.botAutoplay) {
-    const pending = Number(state.autoplay?.pendingActions || 0);
-    const aliveBots = Number(state.autoplay?.aliveBots || 0);
-    const hint = state.autoplay?.hint || `Bot autopilot active · ${state.phase || state.status}`;
-    setStatus(`🤖 ${hint} · pending ${pending} · alive bots ${aliveBots}`, 'info');
+  if (stateJson) stateJson.textContent = JSON.stringify(state, null, 2);
+  if (state.autoplay?.hint && Number(state.autoplay?.pendingActions || 0) > 0) {
+    setStatus(state.autoplay.hint, 'info');
   }
   updateControlState(state);
   updateMatchHud(state);
   renderPhaseTimeline(state);
+  renderSpectatorReadability(state);
+
+  if (!playersView || !actionsView) return;
 
   playersView.innerHTML = (state.players || []).map((p) => {
     const voteCount = state.votesByRound?.[state.round]?.[p.id] || state.votes?.[p.id] || 0;
-    const hasVoted = state.actions?.vote?.[p.id] || state.actions?.meeting?.[p.id];
+    const hasVoted = (state.votedPlayerIds || []).includes(p.id);
+    const hasReadyRead = (state.discussionReadyIds || []).includes(p.id);
     return `
     <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
         <h3>${escapeHtml(p.name)}${p.id === me.playerId ? ' (you)' : ''}</h3>
-        <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'bot' : 'human'}</span>
+        <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'automated' : 'connected'}</span>
       </div>
       <div class="player-meta-row">
         <span class="player-state ${p.alive === false ? 'state-dead' : 'state-alive'}">${p.alive === false ? 'eliminated' : 'alive'}</span>
         <span class="player-state ${p.isConnected ? 'state-online' : 'state-offline'}">${p.isConnected ? 'online' : 'offline'}</span>
         ${p.id === state.hostPlayerId ? '<span class="player-state state-host">host</span>' : ''}
+        ${hasReadyRead ? '<span class="player-state" style="color:var(--accent);">ready</span>' : ''}
         ${hasVoted ? '<span class="player-state" style="color:var(--accent);">voted</span>' : ''}
       </div>
       <p class="player-role">${p.role ? `Role: ${roleLabel(p.role)}` : 'Role hidden'}</p>
@@ -737,8 +733,6 @@ function winnerLabel(winner) {
 }
 
 function modeLabel(mode) {
-  if (mode === 'amongus') return 'Agents Among Us';
-  if (mode === 'villa') return 'Agent Villa';
   return 'Agent Mafia';
 }
 
@@ -752,8 +746,6 @@ function updateMatchHud(state) {
   if (!state) return;
   const players = state.players || [];
   const alive = players.filter((p) => p.alive !== false).length;
-  const bots = players.filter((p) => p.isBot).length;
-  const humans = Math.max(0, players.length - bots);
   const room = state.id || me.roomId || roomIdInput?.value?.trim().toUpperCase() || '—';
   const round = state.round || state.day || state.turn || null;
   const hostPlayer = players.find((p) => p.id === state.hostPlayerId);
@@ -764,8 +756,276 @@ function updateMatchHud(state) {
   if (matchPhase) matchPhase.textContent = phaseLabel(state);
   if (matchRound) matchRound.textContent = round ? `#${round}` : '—';
   if (matchAlive) matchAlive.textContent = `${alive}/${players.length}`;
-  if (matchRoster) matchRoster.textContent = `${humans} human · ${bots} bot`;
-  if (matchStatusLine) matchStatusLine.textContent = `${hostState} · ${state.status}${state.botAutoplay ? ' · bot autopilot on' : ''}`;
+  if (matchRoster) matchRoster.textContent = `${players.length} seats`;
+  if (matchStatusLine) matchStatusLine.textContent = `${hostState} · ${state.status}`;
+}
+
+function clearPhaseCountdown() {
+  if (phaseCountdownTimer) {
+    clearInterval(phaseCountdownTimer);
+    phaseCountdownTimer = null;
+  }
+}
+
+function clearSpectatorRedirect() {
+  if (spectatorRedirectTimer) {
+    clearInterval(spectatorRedirectTimer);
+    spectatorRedirectTimer = null;
+  }
+  spectatorRedirectSeconds = 0;
+  if (spectatorIntermission) spectatorIntermission.textContent = '';
+}
+
+function formatDuration(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSec = Math.round(safeMs / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+function formatPlayerName(state, playerId) {
+  const player = (state?.players || []).find((entry) => entry.id === playerId);
+  return player?.name || playerId || 'unknown player';
+}
+
+function formatMafiaFeedEvent(state, event) {
+  if (!event) return null;
+  const at = event.at ? new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+
+  if (event.type === 'GAME_STARTED') {
+    return { kicker: 'Match start', title: `Day ${event.day || 1} begins`, body: 'Roles are locked and the first night is underway.', at };
+  }
+  if (event.type === 'PHASE') {
+    const label = event.phase ? `${String(event.phase).charAt(0).toUpperCase()}${String(event.phase).slice(1)}` : 'Phase update';
+    const copy = event.phase === 'discussion'
+      ? 'Agents are locking reads before the vote opens.'
+      : event.phase === 'voting'
+        ? 'Votes are now live. Watch the count before the reveal.'
+        : event.phase === 'night'
+          ? 'The room has reset for the next night.'
+          : 'State changed.';
+    return { kicker: 'Phase change', title: label, body: copy, at };
+  }
+  if (event.type === 'NIGHT_ELIMINATION') {
+    const victimName = formatPlayerName(state, event.targetId);
+    return { kicker: 'Night result', title: `${victimName} was eliminated`, body: 'The mafia resolved its night action and the room is moving back into open reads.', at };
+  }
+  if (event.type === 'DAY_EXECUTION') {
+    const targetName = formatPlayerName(state, event.targetId);
+    return { kicker: 'Vote result', title: `${targetName} was voted out`, body: 'The room reached a clear execution result.', at };
+  }
+  if (event.type === 'VOTE_TIED') {
+    return { kicker: 'Vote result', title: 'Split vote, no elimination', body: 'No single target separated from the pack this round.', at };
+  }
+  if (event.type === 'PLAYER_FORFEITED') {
+    const playerName = formatPlayerName(state, event.playerId);
+    return { kicker: 'Roster change', title: `${playerName} dropped`, body: 'The room continued after a disconnect or forfeit.', at };
+  }
+  if (event.type === 'GAME_FINISHED') {
+    return { kicker: 'Match end', title: `${winnerLabel(event.winner)} wins`, body: 'The current room has concluded. Spectators will roll into the next live table shortly.', at };
+  }
+  return {
+    kicker: 'Room event',
+    title: String(event.type || 'Update').replaceAll('_', ' '),
+    body: 'The room state changed.',
+    at,
+  };
+}
+
+function renderPhaseCountdown(state) {
+  if (!phaseCountdown) return;
+  clearPhaseCountdown();
+
+  const renderLabel = () => {
+    if (!state || state.status !== 'in_progress' || !state.phaseEndsAt) {
+      phaseCountdown.textContent = state?.status === 'finished' && state?.durationMs
+        ? `Match duration ${formatDuration(state.durationMs)}`
+        : 'Waiting for live room state...';
+      return;
+    }
+
+    const remainingMs = Math.max(0, Number(state.phaseEndsAt) - Date.now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    phaseCountdown.textContent = `${phaseLabel(state)} ends in ${remainingSec}s`;
+  };
+
+  renderLabel();
+  if (state?.status === 'in_progress' && state?.phaseEndsAt) {
+    phaseCountdownTimer = setInterval(renderLabel, 1000);
+  }
+}
+
+async function loadMatchBaseline(force = false) {
+  if (!baselineMetrics) return;
+  const now = Date.now();
+  if (!force && now - matchBaselineLoadedAt < 15000) return;
+  matchBaselineLoadedAt = now;
+
+  try {
+    const res = await fetch('/api/ops/match-baseline?mode=mafia');
+    const data = await res.json();
+    const baseline = data?.baseline;
+    if (!data?.ok || !baseline) throw new Error('baseline unavailable');
+    if (!baseline.sampleSize || !baseline.avgDurationMs) {
+      baselineMetrics.innerHTML = '<p class="text-xs text-muted">Match pacing will appear after the first completed tracked Mafia room.</p>';
+      return;
+    }
+
+    baselineMetrics.innerHTML = `
+      <div class="spectator-baseline-card">
+        <p class="spectator-feed-kicker">Current pacing baseline</p>
+        <div class="spectator-stat-grid">
+          <div>
+            <p class="field-label">Avg match</p>
+            <p class="spectator-stat-value">${formatDuration(baseline.avgDurationMs)}</p>
+          </div>
+          <div>
+            <p class="field-label">Games / hour</p>
+            <p class="spectator-stat-value">${baseline.estimatedGamesPerHour}</p>
+          </div>
+          <div>
+            <p class="field-label">Games / 12h</p>
+            <p class="spectator-stat-value">${baseline.estimatedGamesPer12Hours}</p>
+          </div>
+          <div>
+            <p class="field-label">Tracked rooms</p>
+            <p class="spectator-stat-value">${baseline.sampleSize}</p>
+          </div>
+        </div>
+      </div>`;
+  } catch (_err) {
+    baselineMetrics.innerHTML = '<p class="text-xs text-muted">Baseline pacing unavailable right now.</p>';
+  }
+}
+
+function maybeScheduleSpectatorRedirect(state) {
+  clearSpectatorRedirect();
+  if (!isSpectating() || !state || state.status !== 'finished') return;
+
+  spectatorRedirectSeconds = 8;
+  if (spectatorIntermission) spectatorIntermission.textContent = `Next live room check in ${spectatorRedirectSeconds}s`;
+
+  spectatorRedirectTimer = setInterval(async () => {
+    spectatorRedirectSeconds -= 1;
+    if (spectatorIntermission) {
+      spectatorIntermission.textContent = spectatorRedirectSeconds > 0
+        ? `Next live room check in ${spectatorRedirectSeconds}s`
+        : 'Checking for the next live room...';
+    }
+
+    if (spectatorRedirectSeconds > 0) return;
+    clearSpectatorRedirect();
+    try {
+      const res = await fetch('/api/play/watch');
+      const data = await res.json();
+      if (data?.ok && data?.found && data.watchUrl) {
+        const nextUrl = new URL(data.watchUrl, window.location.origin);
+        if (nextUrl.toString() !== window.location.href) {
+          window.location.href = nextUrl.toString();
+        }
+      }
+    } catch (_err) {
+      if (spectatorIntermission) spectatorIntermission.textContent = 'Next live room check failed. Refresh to retry.';
+    }
+  }, 1000);
+}
+
+function renderSpectatorReadability(state) {
+  if (!spectatorReadSection || !spectatorSummary || !spectatorFeed) return;
+
+  if (!state || state.status === 'lobby') {
+    spectatorReadSection.style.display = 'none';
+    clearPhaseCountdown();
+    clearSpectatorRedirect();
+    return;
+  }
+
+  spectatorReadSection.style.display = '';
+  renderPhaseCountdown(state);
+  maybeScheduleSpectatorRedirect(state);
+  void loadMatchBaseline(state.status === 'finished');
+
+  const actionProgress = state.actionProgress || {};
+  const alivePlayers = (state.players || []).filter((player) => player.alive !== false);
+  const summaryCards = [];
+
+  if (state.status === 'finished') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Result</p>
+        <h3>${winnerLabel(state.winner)} wins</h3>
+        <p class="text-sm text-muted">Completed in ${formatDuration(state.durationMs || 0)} with ${alivePlayers.length} player(s) still standing.</p>
+      </div>`);
+  } else if (state.phase === 'night') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Night</p>
+        <h3>Mafia choosing a target</h3>
+        <p class="text-sm text-muted">${actionProgress.nightSubmitted || 0}/${actionProgress.nightTotal || 0} mafia actions submitted.</p>
+      </div>`);
+  } else if (state.phase === 'discussion') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Discussion</p>
+        <h3>Agents are locking their reads</h3>
+        <p class="text-sm text-muted">${actionProgress.discussionReady || 0}/${actionProgress.discussionTotal || alivePlayers.length} agents are ready to move into voting.</p>
+      </div>`);
+  } else if (state.phase === 'voting') {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Voting</p>
+        <h3>Votes are coming in live</h3>
+        <p class="text-sm text-muted">${actionProgress.votingSubmitted || 0}/${actionProgress.votingTotal || alivePlayers.length} votes submitted so far.</p>
+      </div>`);
+  }
+
+  const readyNames = (state.discussionReadyIds || []).map((playerId) => formatPlayerName(state, playerId));
+  const votedNames = (state.votedPlayerIds || []).map((playerId) => formatPlayerName(state, playerId));
+  if (readyNames.length > 0) {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Ready reads</p>
+        <h3>${readyNames.length} agent(s) locked in</h3>
+        <p class="text-sm text-muted">${readyNames.join(', ')}</p>
+      </div>`);
+  } else if (votedNames.length > 0) {
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Vote progress</p>
+        <h3>${votedNames.length} ballots cast</h3>
+        <p class="text-sm text-muted">${votedNames.join(', ')}</p>
+      </div>`);
+  }
+
+  if (state.status !== 'finished' && state.tally && Object.keys(state.tally).length > 0) {
+    const leaders = Object.entries(state.tally)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([playerId, votes]) => `${formatPlayerName(state, playerId)} ${votes}`);
+    summaryCards.push(`
+      <div class="spectator-summary-card">
+        <p class="spectator-feed-kicker">Last resolved vote</p>
+        <h3>${leaders[0] || 'No decisive vote yet'}</h3>
+        <p class="text-sm text-muted">${leaders.slice(1).join(' · ') || 'Waiting for the next tally.'}</p>
+      </div>`);
+  }
+
+  spectatorSummary.innerHTML = summaryCards.join('') || '<p class="text-sm text-muted">Waiting for the next readable room state…</p>';
+
+  const feedItems = (state.events || [])
+    .slice()
+    .reverse()
+    .map((event) => formatMafiaFeedEvent(state, event))
+    .filter(Boolean)
+    .map((item) => `
+      <article class="spectator-feed-item">
+        <p class="spectator-feed-kicker">${escapeHtml(item.kicker)}</p>
+        <h3>${escapeHtml(item.title)}</h3>
+        <p class="text-sm text-muted">${escapeHtml(item.body)}</p>
+        <p class="text-xs text-muted">${escapeHtml(item.at)}</p>
+      </article>`);
+  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted">Live room events will appear here.</p>';
 }
 
 function suggestedRefinement(result) {
@@ -930,7 +1190,7 @@ function renderActions(state) {
         renderState(res.state);
       });
     } else {
-      actionsView.innerHTML = `<p class="text-sm text-muted">Waiting for the host to start · ${playerCount}/4 players</p>`;
+      actionsView.innerHTML = `<p class="text-sm text-muted">Waiting for the host to start · ${playerCount}/${PUBLIC_MATCH_SIZE} players</p>`;
     }
     return;
   }
@@ -1151,7 +1411,7 @@ startBtn?.addEventListener('click', async () => {
     const addedBots = Number(res.addedBots || 0);
     const removed = Number(res.removedDisconnectedHumans || 0);
     if (addedBots > 0 || removed > 0) {
-      setStatus(`Game started · +${addedBots} bot(s), replaced ${removed} disconnected player(s)`);
+      setStatus(`Game started · ${removed} disconnected player(s) were replaced before launch`);
     } else {
       setStatus('Game started');
     }
@@ -1175,7 +1435,7 @@ autofillBtn?.addEventListener('click', async () => {
   await withPendingUiAction(async () => {
     const res = await emitAck(activeEvent('autofill'), { roomId: me.roomId, playerId: me.playerId, minPlayers: 4 });
     if (!res?.ok) return setStatus(formatError(res, 'Auto-fill failed'), 'error');
-    setStatus(`Auto-filled ${res.addedBots || 0} bot(s)`);
+    setStatus(`Filled ${res.addedBots || 0} seat(s)`);
     renderState(res.state);
   });
 });
@@ -1397,7 +1657,7 @@ function shareResult() {
   const mode = modeLabel(me.game);
   const modeKey = me.game || 'mafia';
   const rounds = currentState.round || currentState.day || currentState.turn || 0;
-  const shareUrl = `${window.location.origin}/?mode=${encodeURIComponent(modeKey)}&autojoin=1`;
+  const shareUrl = `${window.location.origin}/play.html?mode=${encodeURIComponent(modeKey)}`;
 
   const text = `${winnerLabel(winner)} just won ${mode} in ${rounds} rounds. Can you beat them?`;
 
@@ -1416,15 +1676,15 @@ function shareResult() {
 
 // Game picker: instant play via POST /api/play/instant
 async function instantPlay(mode) {
-  showTutorial(mode);
-  showWaitingOverlay(mode, 0, 4);
+  const publicMode = PUBLIC_DEBUG ? mode : PUBLIC_MODE;
+  showWaitingOverlay(publicMode, 0, 4);
   if (playStatus) { playStatus.style.display = 'block'; }
-  setStatus(`Starting ${modeLabel(mode)}...`);
+  setStatus(`Starting ${modeLabel(publicMode)}...`);
   try {
     const res = await fetch('/api/play/instant', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode: publicMode }),
     });
     const data = await res.json();
     if (!data?.ok || !data?.playUrl) {
@@ -1443,7 +1703,7 @@ async function instantPlay(mode) {
 gamePicker?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-instant-play]');
   if (!btn) return;
-  const mode = btn.getAttribute('data-instant-play');
+  const mode = PUBLIC_DEBUG ? btn.getAttribute('data-instant-play') : PUBLIC_MODE;
   if (mode) instantPlay(mode);
 });
 
@@ -1452,10 +1712,10 @@ watchRandomBtn?.addEventListener('click', async () => {
   setStatus('Finding a live game...');
   if (playStatus) { playStatus.style.display = 'block'; }
   try {
-    const res = await fetch('/api/play/watch');
-    const data = await res.json();
-    if (!data?.ok || !data?.watchUrl) {
-      setStatus('No live games right now — start one!', 'warn');
+      const res = await fetch('/api/play/watch');
+      const data = await res.json();
+      if (!data?.ok || !data?.watchUrl) {
+      setStatus(data?.error?.message || 'No live Mafia games right now — start one!', 'warn');
       return;
     }
     window.location.href = data.watchUrl;
@@ -1531,7 +1791,7 @@ initGamePickerVisibility();
 
 // ── Recent Games widget ──
 
-const MODE_LABELS = { mafia: 'Agent Mafia', amongus: 'Among Us', villa: 'Agent Villa' };
+const MODE_LABELS = { mafia: 'Agent Mafia' };
 
 function getStoredUserId() {
   return localStorage.getItem('agentarena_user_id') || '';
@@ -1702,16 +1962,6 @@ const TUTORIAL_STEPS = {
     { title: 'Welcome to Agent Mafia', body: 'Find the mafia agent hiding among the town. Each round, discuss and vote to eliminate a suspect.' },
     { title: 'Day & Night', body: 'During the day, everyone debates. At night, the mafia secretly eliminates a player. Survive to win!' },
     { title: 'Ready?', body: 'Pick a name, join a room, and start playing. Good luck, detective.' },
-  ],
-  amongus: [
-    { title: 'Agents Among Us', body: 'Complete tasks around the map or sabotage them as the impostor. Trust no one.' },
-    { title: 'Emergency Meetings', body: 'Call a meeting to discuss and vote. Eject the impostor before it\'s too late!' },
-    { title: 'Ready?', body: 'Jump in and see if you can spot the impostor — or fool everyone.' },
-  ],
-  villa: [
-    { title: 'Welcome to Agent Villa', body: 'Pair up, form alliances, and survive dramatic twists on the island.' },
-    { title: 'Coupling & Twists', body: 'Each round brings recouplings and surprise events. Adapt your strategy!' },
-    { title: 'Ready?', body: 'Enter the villa and see who comes out on top.' },
   ],
 };
 
