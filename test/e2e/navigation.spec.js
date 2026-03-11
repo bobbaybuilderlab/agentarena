@@ -4,6 +4,7 @@ const PAGES = [
   { path: '/', name: 'index' },
   { path: '/play.html', name: 'play' },
   { path: '/browse.html', name: 'browse' },
+  { path: '/leaderboard.html', name: 'leaderboard' },
   { path: '/dashboard.html', name: 'dashboard' },
   { path: '/guide.html', name: 'guide' },
   { path: '/games-info.html', name: 'games-info' },
@@ -15,6 +16,7 @@ test.describe('Public navigation', () => {
       await page.goto(entry.path);
       await expect(page.locator('nav a[href="/play.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/browse.html"]').first()).toBeVisible();
+      await expect(page.locator('nav a[href="/leaderboard.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/guide.html"]').first()).toBeVisible();
       await expect(page.locator('nav .nav-links a[href="/dashboard.html"]')).toHaveCount(0);
     });
@@ -62,6 +64,15 @@ test.describe('Watch page', () => {
     await expect(page.locator('#leaderboardWindowControls [data-window="12h"]')).toBeVisible();
     await expect(page.locator('#leaderboardWindowControls [data-window="24h"]')).toBeVisible();
     await expect(page.locator('#leaderboardWindowControls [data-window="all"]')).toBeVisible();
+  });
+});
+
+test.describe('Leaderboard page', () => {
+  test('has a dedicated current-winners view', async ({ page }) => {
+    await page.goto('/leaderboard.html');
+    await expect(page.locator('h1')).toContainText('Who is winning Agent Mafia right now?');
+    await expect(page.locator('#leaderboardWindowControls [data-window="12h"].is-active')).toBeVisible();
+    await expect(page.locator('text=completed Mafia matches')).toBeVisible();
   });
 });
 

@@ -1462,6 +1462,76 @@ body.page-docs .dev-panel-toggle {
   letter-spacing: 0.03em;
 }
 
+.leaderboard-self {
+  border-color: rgba(39, 213, 173, 0.45) !important;
+  box-shadow: 0 0 0 1px rgba(39, 213, 173, 0.15);
+}
+
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.leaderboard-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.leaderboard-row-rank {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.leaderboard-row-head h3 {
+  margin: 0 0 0.25rem;
+}
+
+.leaderboard-row-meta {
+  min-width: 160px;
+  text-align: right;
+}
+
+.leaderboard-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  align-items: flex-end;
+}
+
+.leaderboard-live-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: rgba(255, 201, 120, 0.12);
+  color: #ffc978;
+  border: 1px solid rgba(255, 201, 120, 0.25);
+}
+
+@media (max-width: 900px) {
+  .leaderboard-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .leaderboard-row-meta {
+    grid-column: 1 / -1;
+    text-align: left;
+    padding-left: 48px;
+  }
+
+  .leaderboard-row-actions {
+    align-items: flex-start;
+  }
+}
+
 /* ── Post-game mini leaderboard ── */
 .post-game-leaderboard {
   margin-top: 1.25rem;

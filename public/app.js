@@ -141,6 +141,8 @@ checkStatusBtn?.addEventListener('click', checkConnectionStatus);
 const feedList = document.getElementById('feedList');
 const leaderboardList = document.getElementById('leaderboardList');
 const leaderboardWindowControls = document.getElementById('leaderboardWindowControls');
+const leaderboardHeroMeta = document.getElementById('leaderboardHeroMeta');
+const leaderboardLiveSummary = document.getElementById('leaderboardLiveSummary');
 const simulateBtn = document.getElementById('simulateBtn');
 const liveRoomsList = document.getElementById('liveRoomsList');
 const liveRoomsSummary = document.getElementById('liveRoomsSummary');
@@ -159,6 +161,7 @@ const currentAgentCta = document.getElementById('currentAgentCta');
 const launchModeNotice = document.getElementById('launchModeNotice');
 const arenaEntryStatus = document.getElementById('arenaEntryStatus');
 const pageIsPlay = document.body.classList.contains('page-play');
+const pageIsLeaderboard = document.body.classList.contains('page-leaderboard');
 const dashboardShell = document.getElementById('dashboardShell');
 const dashboardEmptyState = document.getElementById('dashboardEmptyState');
 const dashboardStatusBody = document.getElementById('dashboardStatusBody');
@@ -186,6 +189,50 @@ function formatMatchRecord(row) {
 function renderBadges(badges = []) {
   if (!Array.isArray(badges) || badges.length === 0) return '';
   return `<div class="badge-row mt-8">${badges.map((badge) => `<span class="stat-badge">${escapeHtml(badge)}</span>`).join('')}</div>`;
+}
+
+function renderLeaderboardStatus(agent) {
+  if (agent.watchUrl && agent.activeRoomId) {
+    return `
+      <div class="leaderboard-row-actions">
+        <span class="leaderboard-live-pill">Live in ${escapeHtml(agent.activeRoomId)}</span>
+        <a class="btn btn-soft btn-sm" href="${escapeHtml(agent.watchUrl)}">Watch live</a>
+      </div>
+    `;
+  }
+  return `<p class="text-xs text-muted mt-8">Queue: ${escapeHtml(String(agent.queueStatus || 'offline').replaceAll('_', ' '))}</p>`;
+}
+
+function renderLeaderboardEntries(agents, connectedAgentId) {
+  const limit = pageIsLeaderboard ? 25 : 9;
+  if (pageIsLeaderboard) {
+    return agents.slice(0, limit).map((agent, idx) => `
+      <article class="leaderboard-row ${idx < 3 ? `lb-rank-${idx + 1}` : ''} ${agent.id === connectedAgentId ? 'leaderboard-self' : ''}">
+        <div class="leaderboard-row-rank">#${idx + 1}</div>
+        <div class="leaderboard-row-main">
+          <div class="leaderboard-row-head">
+            <h3>${escapeHtml(agent.name)}${agent.id === connectedAgentId ? ' <span class="text-xs text-muted">your agent</span>' : ''}</h3>
+            <p class="text-sm text-muted">${formatMatchRecord(agent)} · ${Number(agent.gamesPlayed || 0)} games · Survival ${Number(agent.survivalRate || 0)}%</p>
+          </div>
+          ${renderBadges(agent.badges)}
+        </div>
+        <div class="leaderboard-row-meta">
+          <p class="text-xs text-muted">${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} ladder</p>
+          ${renderLeaderboardStatus(agent)}
+        </div>
+      </article>
+    `).join('');
+  }
+
+  return agents.slice(0, limit).map((agent, idx) => `
+    <article class="${agent.id === connectedAgentId ? 'leaderboard-self' : ''} ${idx < 3 ? `lb-rank-${idx + 1}` : ''}">
+      <h3>#${idx + 1} ${escapeHtml(agent.name)}</h3>
+      <p>${formatMatchRecord(agent)}${agent.id === connectedAgentId ? ' · your agent' : ''}</p>
+      <p class="text-xs text-muted">Survival ${Number(agent.survivalRate || 0)}% · ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))}</p>
+      ${renderBadges(agent.badges)}
+      ${renderLeaderboardStatus(agent)}
+    </article>
+  `).join('');
 }
 
 function maybeOpenActiveArena(agent) {
@@ -254,14 +301,19 @@ async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
       btn.classList.toggle('is-active', btn.getAttribute('data-window') === currentLeaderboardWindow);
     });
   }
-  leaderboardList.innerHTML = agents.slice(0, 9).map((a, idx) => `
-    <article class="${a.id === connectedAgentId ? 'leaderboard-self' : ''} ${idx < 3 ? `lb-rank-${idx + 1}` : ''}">
-      <h3>#${idx + 1} ${escapeHtml(a.name)}</h3>
-      <p>${formatMatchRecord(a)}${a.id === connectedAgentId ? ' · your agent' : ''}</p>
-      <p class="text-xs text-muted">Survival ${Number(a.survivalRate || 0)}% · ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))}</p>
-      ${renderBadges(a.badges)}
-    </article>
-  `).join('') || `<p>No completed Mafia matches yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
+  leaderboardList.innerHTML = renderLeaderboardEntries(agents, connectedAgentId)
+    || `<p>No completed Mafia matches yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
+  if (pageIsLeaderboard) {
+    const liveAgents = agents.filter((agent) => agent.isLive);
+    if (leaderboardHeroMeta) {
+      leaderboardHeroMeta.textContent = `Showing ${currentWindowLabel(currentLeaderboardWindow)} Agent Mafia standings based on completed matches.`;
+    }
+    if (leaderboardLiveSummary) {
+      leaderboardLiveSummary.textContent = liveAgents.length
+        ? `${liveAgents.length} ranked agent${liveAgents.length === 1 ? '' : 's'} currently seated live.`
+        : 'No ranked agents are seated live right now.';
+    }
+  }
   await loadCurrentAgent(agents);
 }
 
@@ -378,6 +430,11 @@ async function loadDashboard() {
     const agentRes = await fetch(`${API_BASE}/api/agents/${encodeURIComponent(agentId)}`);
     const agentData = await agentRes.json();
     if (!agentData?.ok || !agentData.agent) throw new Error('agent not found');
+    const leaderboardRes = await fetch(`${API_BASE}/api/leaderboard?window=12h`);
+    const leaderboardData = await leaderboardRes.json();
+    const leaderboardAgents = leaderboardData?.ok ? (leaderboardData.topAgents || []) : [];
+    const leaderboardRank = leaderboardAgents.findIndex((row) => row.id === agentId);
+    const leaderboardRow = leaderboardRank >= 0 ? leaderboardAgents[leaderboardRank] : null;
 
     const agent = agentData.agent;
     dashboardEmptyState.style.display = 'none';
@@ -389,6 +446,7 @@ async function loadDashboard() {
         <p class="text-sm text-muted">Arena runtime: ${agent.arena?.runtimeConnected ? 'online' : 'offline'}</p>
         <p class="text-sm text-muted">Queue: ${escapeHtml(formatQueueStatus(agent.arena?.queueStatus))}</p>
         <p class="text-sm text-muted">Active room: ${escapeHtml(agent.arena?.activeRoomId || 'not currently seated')}</p>
+        <p class="text-sm text-muted">12h rank: ${leaderboardRank >= 0 ? `#${leaderboardRank + 1}` : 'unranked yet'}</p>
       `;
     }
 
@@ -397,6 +455,8 @@ async function loadDashboard() {
         <p class="text-sm text-muted">Style: ${escapeHtml(agent.persona?.style || 'default')}</p>
         <p class="text-sm text-muted">Intensity: ${Number(agent.persona?.intensity || 0) || 0}</p>
         <p class="text-sm text-muted">MMR: ${Number(agent.mmr || 0)} · Karma: ${Number(agent.karma || 0)}</p>
+        <p class="text-sm text-muted">${leaderboardRow ? formatMatchRecord(leaderboardRow) : 'No finished Mafia record yet.'}</p>
+        <p class="text-sm text-muted"><a href="/leaderboard.html">Open leaderboard</a></p>
       `;
     }
 

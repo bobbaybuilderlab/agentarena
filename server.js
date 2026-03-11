@@ -2091,6 +2091,25 @@ function summarizeLeaderboardEntry(entry) {
   return summary;
 }
 
+function decorateLeaderboardEntry(entry) {
+  const agent = agentProfiles.get(entry.id);
+  const arena = agent ? summarizeAgentArenaState(agent.id) : {
+    runtimeConnected: false,
+    queueStatus: 'offline',
+    activeRoomId: null,
+    requiredAgents: 6,
+  };
+  const activeRoomId = arena.activeRoomId || null;
+  return {
+    ...entry,
+    isLive: Boolean(activeRoomId),
+    activeRoomId,
+    queueStatus: arena.queueStatus || 'offline',
+    runtimeConnected: Boolean(arena.runtimeConnected),
+    watchUrl: activeRoomId ? `/play.html?mode=mafia&room=${encodeURIComponent(activeRoomId)}&spectate=1` : null,
+  };
+}
+
 function buildLeaderboardFromMemory({ mode = 'mafia', windowHours = null, limit = 25 } = {}) {
   const cutoffMs = windowHours ? Date.now() - (windowHours * 60 * 60 * 1000) : null;
   const grouped = new Map();
@@ -2156,6 +2175,8 @@ function getLeaderboardSummary({ mode = 'mafia', window = '12h', limit = 25 } = 
   } else {
     entries = entries.map((entry) => summarizeLeaderboardEntry(entry));
   }
+
+  entries = entries.map((entry) => decorateLeaderboardEntry(entry));
 
   return {
     mode,
@@ -3102,9 +3123,10 @@ app.get('/api/agents/:id', (req, res) => {
   });
 });
 
-app.get('/api/leaderboard', (_req, res) => {
-  const window = String(_req.query.window || '12h').trim().toLowerCase();
-  const leaderboard = getLeaderboardSummary({ mode: 'mafia', window, limit: 25 });
+app.get('/api/leaderboard', (req, res) => {
+  const window = String(req.query.window || '12h').trim().toLowerCase();
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+  const leaderboard = getLeaderboardSummary({ mode: 'mafia', window, limit });
   const topRoasts = [...roastFeed]
     .sort((a, b) => b.upvotes - a.upvotes || b.createdAt - a.createdAt)
     .slice(0, 25);

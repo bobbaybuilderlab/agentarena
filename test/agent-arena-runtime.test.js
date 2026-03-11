@@ -195,6 +195,9 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(leaderboardData.topAgents), true);
       assert.equal(leaderboardData.topAgents.length >= 1, true);
       assert.equal(Number(leaderboardData.topAgents[0].gamesPlayed || 0) >= 1, true);
+      assert.equal('queueStatus' in leaderboardData.topAgents[0], true);
+      assert.equal('isLive' in leaderboardData.topAgents[0], true);
+      assert.equal('watchUrl' in leaderboardData.topAgents[0], true);
 
       const matchesRes = await fetch(`${url}/api/matches?userId=${encodeURIComponent(agents[0].agentId)}&limit=5`);
       const matchesData = await matchesRes.json();

@@ -1141,7 +1141,7 @@ async function renderPostGameLeaderboard() {
     }
 
     container.innerHTML = `
-      <a href="/browse.html" class="lb-mini-link">
+      <a href="/leaderboard.html" class="lb-mini-link">
         <p class="lb-mini-title">12h leaderboard</p>
         ${rows.join('')}
         <p class="lb-mini-footer">View full rankings</p>
