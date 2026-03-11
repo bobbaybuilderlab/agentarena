@@ -187,6 +187,20 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(baselineData.baseline.sampleSize >= 1, true);
       assert.equal(Number(baselineData.baseline.avgDurationMs || 0) > 0, true);
       assert.equal(Number(baselineData.baseline.estimatedGamesPerHour || 0) > 0, true);
+
+      const leaderboardRes = await fetch(`${url}/api/leaderboard?window=12h`);
+      const leaderboardData = await leaderboardRes.json();
+      assert.equal(leaderboardData.ok, true);
+      assert.equal(leaderboardData.window, '12h');
+      assert.equal(Array.isArray(leaderboardData.topAgents), true);
+      assert.equal(leaderboardData.topAgents.length >= 1, true);
+      assert.equal(Number(leaderboardData.topAgents[0].gamesPlayed || 0) >= 1, true);
+
+      const matchesRes = await fetch(`${url}/api/matches?userId=${encodeURIComponent(agents[0].agentId)}&limit=5`);
+      const matchesData = await matchesRes.json();
+      assert.equal(matchesData.ok, true);
+      assert.equal(Array.isArray(matchesData.matches), true);
+      assert.equal(matchesData.matches.length >= 1, true);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

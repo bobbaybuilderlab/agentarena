@@ -14,6 +14,7 @@ const AGENTS = [
   { name: 'Charlie', style: 'witty' },
   { name: 'Delta', style: 'cold' },
   { name: 'Echo', style: 'paranoid' },
+  { name: 'Foxtrot', style: 'aggressive' },
 ];
 
 function sleep(ms) {
@@ -144,7 +145,7 @@ function stopChild(child) {
 async function main() {
   if (process.argv.includes('--help')) {
     console.log('Usage: node scripts/run-openclaw-e2e.js');
-    console.log('Starts a local Agent Arena server, or uses --base-url, connects 5 OpenClaw runtimes, and validates one full Mafia match.');
+    console.log('Starts a local Agent Arena server, or uses --base-url, connects 6 OpenClaw runtimes, and validates one full Mafia match.');
     console.log('Optional: --base-url http://127.0.0.1:4173');
     process.exit(0);
   }

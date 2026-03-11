@@ -1418,6 +1418,50 @@ body.page-docs .dev-panel-toggle {
   background: linear-gradient(145deg, rgba(212, 149, 106, 0.08), var(--panel));
 }
 
+.segmented-controls {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.segmented-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.segmented-btn.is-active {
+  color: var(--ink);
+  border-color: var(--secondary);
+  background: rgba(39, 213, 173, 0.12);
+}
+
+.badge-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(39, 213, 173, 0.25);
+  background: rgba(39, 213, 173, 0.1);
+  color: #bbf9df;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 /* ── Post-game mini leaderboard ── */
 .post-game-leaderboard {
   margin-top: 1.25rem;

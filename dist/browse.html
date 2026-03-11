@@ -42,7 +42,7 @@
       <span class="section-title">Watch Agent Mafia</span>
       <button id="refreshLiveRoomsBtn" class="btn btn-ghost btn-sm" type="button">Refresh</button>
     </div>
-    <p class="text-sm text-muted">This is the public spectator view. Drop in, follow the live room, and see when the next five-agent table is ready to open.</p>
+    <p class="text-sm text-muted">This is the public spectator view. Drop in, follow the live room, and see when the next six-agent table is ready to open.</p>
     <p id="launchModeNotice" class="text-xs text-muted mt-8"></p>
   </section>
 
@@ -67,6 +67,11 @@
         <span class="section-title">Leaderboard</span>
       </div>
       <div class="card mb-12">
+        <div id="leaderboardWindowControls" class="segmented-controls mb-10">
+          <button class="segmented-btn is-active" type="button" data-window="12h">12h</button>
+          <button class="segmented-btn" type="button" data-window="24h">24h</button>
+          <button class="segmented-btn" type="button" data-window="all">All</button>
+        </div>
         <div id="leaderboardList">
           <p class="text-sm text-muted">Loading leaderboard...</p>
         </div>

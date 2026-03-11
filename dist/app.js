@@ -140,6 +140,7 @@ checkStatusBtn?.addEventListener('click', checkConnectionStatus);
 // Roast feed + leaderboard page
 const feedList = document.getElementById('feedList');
 const leaderboardList = document.getElementById('leaderboardList');
+const leaderboardWindowControls = document.getElementById('leaderboardWindowControls');
 const simulateBtn = document.getElementById('simulateBtn');
 const liveRoomsList = document.getElementById('liveRoomsList');
 const liveRoomsSummary = document.getElementById('liveRoomsSummary');
@@ -167,6 +168,25 @@ const dashboardMatchesMeta = document.getElementById('dashboardMatchesMeta');
 const dashboardEventsList = document.getElementById('dashboardEventsList');
 const dashboardEventsMeta = document.getElementById('dashboardEventsMeta');
 const dashboardWatchLink = document.getElementById('dashboardWatchLink');
+let currentLeaderboardWindow = '12h';
+
+function currentWindowLabel(windowKey) {
+  if (windowKey === '24h') return '24h';
+  if (windowKey === 'all') return 'all-time';
+  return '12h';
+}
+
+function formatMatchRecord(row) {
+  const wins = Number(row?.wins || 0);
+  const gamesPlayed = Number(row?.gamesPlayed || 0);
+  const winRate = Number(row?.winRate || 0);
+  return `${wins}-${Math.max(0, gamesPlayed - wins)} · ${winRate}% win rate`;
+}
+
+function renderBadges(badges = []) {
+  if (!Array.isArray(badges) || badges.length === 0) return '';
+  return `<div class="badge-row mt-8">${badges.map((badge) => `<span class="stat-badge">${escapeHtml(badge)}</span>`).join('')}</div>`;
+}
 
 function maybeOpenActiveArena(agent) {
   if (!pageIsPlay) return;
@@ -222,18 +242,26 @@ async function loadFeed() {
   }).join('') || '<p>No roasts yet. Run a round.</p>';
 }
 
-async function loadLeaderboard() {
+async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
   if (!leaderboardList) return;
-  const res = await fetch(`${API_BASE}/api/leaderboard`);
+  currentLeaderboardWindow = windowKey;
+  const res = await fetch(`${API_BASE}/api/leaderboard?window=${encodeURIComponent(windowKey)}`);
   const data = await res.json();
   const agents = data.topAgents || [];
   const connectedAgentId = getConnectedAgentId();
+  if (leaderboardWindowControls) {
+    [...leaderboardWindowControls.querySelectorAll('[data-window]')].forEach((btn) => {
+      btn.classList.toggle('is-active', btn.getAttribute('data-window') === currentLeaderboardWindow);
+    });
+  }
   leaderboardList.innerHTML = agents.slice(0, 9).map((a, idx) => `
-    <article class="${a.id === connectedAgentId ? 'leaderboard-self' : ''}">
+    <article class="${a.id === connectedAgentId ? 'leaderboard-self' : ''} ${idx < 3 ? `lb-rank-${idx + 1}` : ''}">
       <h3>#${idx + 1} ${escapeHtml(a.name)}</h3>
-      <p>MMR: ${Number(a.mmr || 0)} · Karma: ${Number(a.karma || 0)}${a.id === connectedAgentId ? ' · your agent' : ''}</p>
+      <p>${formatMatchRecord(a)}${a.id === connectedAgentId ? ' · your agent' : ''}</p>
+      <p class="text-xs text-muted">Survival ${Number(a.survivalRate || 0)}% · ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))}</p>
+      ${renderBadges(a.badges)}
     </article>
-  `).join('') || '<p>No agents yet.</p>';
+  `).join('') || `<p>No completed Mafia matches yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
   await loadCurrentAgent(agents);
 }
 
@@ -253,20 +281,22 @@ async function loadCurrentAgent(rankedAgents = null) {
 
     const agent = data.agent;
     const ranking = Array.isArray(rankedAgents) ? rankedAgents.findIndex((row) => row.id === agent.id) : -1;
+    const rankedRow = ranking >= 0 ? rankedAgents[ranking] : null;
     currentAgentCard.style.display = 'block';
     const queueStatus = String(agent.arena?.queueStatus || 'offline').replaceAll('_', ' ');
     currentAgentBody.innerHTML = `
       <h3>${escapeHtml(agent.name)}</h3>
-      <p class="text-sm text-muted">MMR ${Number(agent.mmr || 0)} · Karma ${Number(agent.karma || 0)}</p>
+      <p class="text-sm text-muted">${rankedRow ? `${formatMatchRecord(rankedRow)} · ${currentWindowLabel(currentLeaderboardWindow)} ladder` : `MMR ${Number(agent.mmr || 0)} · Karma ${Number(agent.karma || 0)}`}</p>
       <p class="text-sm text-muted">Status: ${agent.openclawConnected ? 'online in arena' : 'offline'} · ${agent.deployed ? 'deployed' : 'not deployed'}</p>
       <p class="text-sm text-muted">Queue: ${escapeHtml(queueStatus)}</p>
       <p class="text-sm text-muted">Persona: ${escapeHtml(agent.persona?.style || 'default')} · intensity ${Number(agent.persona?.intensity || 0) || 0}</p>
+      ${renderBadges(rankedRow?.badges)}
     `;
     if (currentAgentMeta) {
       currentAgentMeta.textContent = agent.arena?.activeRoomId
         ? `Live in room ${agent.arena.activeRoomId}`
         : ranking >= 0
-          ? `Public rank #${ranking + 1}`
+          ? `${currentWindowLabel(currentLeaderboardWindow)} rank #${ranking + 1}`
           : 'Public rank updating';
     }
     if (currentAgentCta) {
@@ -430,6 +460,12 @@ dashboardMatchesList?.addEventListener('click', async (event) => {
   } catch (err) {
     dashboardEventsList.innerHTML = `<p class="text-sm text-muted">Could not load room events: ${escapeHtml(err.message)}</p>`;
   }
+});
+
+leaderboardWindowControls?.addEventListener('click', async (event) => {
+  const btn = event.target.closest('[data-window]');
+  if (!btn) return;
+  await loadLeaderboard(btn.getAttribute('data-window') || '12h');
 });
 
 async function loadLiveRooms() {

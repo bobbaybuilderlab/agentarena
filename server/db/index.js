@@ -29,6 +29,7 @@ function getDb(dbPath) {
 function initDb(dbPath) {
   if (!Database) return null;
   const database = getDb(dbPath);
+  if (!database) return null;
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   database.exec(schema);
   schemaReady = true;
@@ -167,6 +168,41 @@ function getPlayerMatches(userId, limit = 10) {
   `).all(userId, cappedLimit);
 }
 
+function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit = 25 } = {}) {
+  const database = getDb();
+  if (!database) return [];
+  if (!schemaReady) initDb();
+  const cappedLimit = Math.min(Math.max(1, Number(limit) || 25), 100);
+  const params = [mode];
+  let windowFilter = '';
+
+  if (windowHours && Number(windowHours) > 0) {
+    windowFilter = "AND mr.finished_at >= datetime('now', ?)";
+    params.push(`-${Number(windowHours)} hours`);
+  }
+
+  params.push(cappedLimit);
+
+  return database.prepare(`
+    SELECT
+      COALESCE(NULLIF(mp.user_id, ''), mp.player_name) AS id,
+      MAX(mp.player_name) AS name,
+      COUNT(*) AS games_played,
+      SUM(CASE WHEN LOWER(COALESCE(mp.role, '')) = LOWER(COALESCE(mr.winner, '')) THEN 1 ELSE 0 END) AS wins,
+      SUM(CASE WHEN mp.survived = 1 THEN 1 ELSE 0 END) AS survivals,
+      ROUND(AVG(mr.duration_ms)) AS avg_duration_ms,
+      MAX(mr.finished_at) AS last_played_at
+    FROM match_players mp
+    JOIN match_results mr ON mr.id = mp.match_id
+    WHERE mp.is_bot = 0
+      AND mr.mode = ?
+      ${windowFilter}
+    GROUP BY COALESCE(NULLIF(mp.user_id, ''), mp.player_name)
+    ORDER BY wins DESC, games_played DESC, survivals DESC, last_played_at DESC
+    LIMIT ?
+  `).all(...params);
+}
+
 function getMatch(matchId) {
   const database = getDb();
   if (!database) return null;
@@ -216,6 +252,7 @@ module.exports = {
   recordMatch,
   getMatchesByUser,
   getPlayerMatches,
+  getLeaderboardEntries,
   getMatch,
   createReport,
   getReports,

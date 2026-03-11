@@ -30,7 +30,7 @@ const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('.
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
-const { initDb, recordMatch, getPlayerMatches, closeDb } = require('./server/db');
+const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, closeDb } = require('./server/db');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
@@ -97,6 +97,7 @@ const reconnectClaimTickets = new Map();
 const liveAgentRuntimes = new Map();
 const agentRuntimeSockets = new Map();
 const activeAgentMatchRooms = new Set();
+const completedMatchRecords = [];
 const arenaCanary = createCanaryMode({
   enabled: process.env.ARENA_CANARY_ENABLED !== '0',
   percent: Number(process.env.ARENA_CANARY_PERCENT || 0),
@@ -2012,7 +2013,7 @@ function recordFirstMatchCompletion(mode, roomId) {
     const store = getLobbyStore(mode);
     const room = store?.get(roomId);
     if (room) {
-      recordMatch({
+      const matchRecord = {
         id: shortId(12),
         roomId,
         mode,
@@ -2020,6 +2021,7 @@ function recordFirstMatchCompletion(mode, roomId) {
         rounds: room.round || 0,
         durationMs: room.startedAt ? Math.max(0, (room.finishedAt || Date.now()) - room.startedAt) : null,
         startedAt: room.startedAt ? new Date(room.startedAt).toISOString() : null,
+        finishedAt: room.finishedAt ? new Date(room.finishedAt).toISOString() : new Date().toISOString(),
         players: (room.players || []).map((p, i) => ({
           userId: p.userId || p.agentId || null,
           name: p.name,
@@ -2028,11 +2030,171 @@ function recordFirstMatchCompletion(mode, roomId) {
           survived: p.alive !== false,
           placement: i + 1,
         })),
-      });
+      };
+      completedMatchRecords.unshift(matchRecord);
+      if (completedMatchRecords.length > 500) completedMatchRecords.length = 500;
+      recordMatch(matchRecord);
     }
   } catch (err) {
     logStructured('error.recordMatch', { error: err.message });
   }
+}
+
+function normalizeLeaderboardWindow(rawWindow) {
+  const value = String(rawWindow || '12h').trim().toLowerCase();
+  if (value === 'all') return { key: 'all', hours: null, label: 'All time' };
+  if (value === '24h') return { key: '24h', hours: 24, label: '24 hours' };
+  return { key: '12h', hours: 12, label: '12 hours' };
+}
+
+function computeMatchWin(match) {
+  const winner = String(match?.winner || '').toLowerCase();
+  const role = String(match?.role || '').toLowerCase();
+  return Boolean(winner && role && winner === role);
+}
+
+function badgesForEntry(entry) {
+  const badges = [];
+  const gamesPlayed = Number(entry.gamesPlayed || 0);
+  const wins = Number(entry.wins || 0);
+  const winRate = Number(entry.winRate || 0);
+  const survivalRate = Number(entry.survivalRate || 0);
+
+  if (wins >= 3) badges.push('Hot Streak');
+  if (gamesPlayed >= 10) badges.push('Volume Grinder');
+  if (gamesPlayed >= 5 && winRate >= 70) badges.push('Closer');
+  if (gamesPlayed >= 5 && survivalRate >= 80) badges.push('Iron Wall');
+
+  return badges.slice(0, 3);
+}
+
+function summarizeLeaderboardEntry(entry) {
+  const gamesPlayed = Number(entry.games_played || entry.gamesPlayed || 0);
+  const wins = Number(entry.wins || 0);
+  const survivals = Number(entry.survivals || entry.survivalCount || 0);
+  const avgDurationMs = Number(entry.avg_duration_ms || entry.avgDurationMs || 0) || null;
+  const winRate = gamesPlayed ? Math.round((wins / gamesPlayed) * 100) : 0;
+  const survivalRate = gamesPlayed ? Math.round((survivals / gamesPlayed) * 100) : 0;
+
+  const summary = {
+    id: String(entry.id || '').trim() || String(entry.name || '').trim(),
+    name: String(entry.name || 'Unknown').trim() || 'Unknown',
+    gamesPlayed,
+    wins,
+    losses: Math.max(0, gamesPlayed - wins),
+    survivalRate,
+    winRate,
+    avgDurationMs,
+    lastPlayedAt: entry.last_played_at || entry.lastPlayedAt || null,
+  };
+  summary.badges = badgesForEntry(summary);
+  return summary;
+}
+
+function buildLeaderboardFromMemory({ mode = 'mafia', windowHours = null, limit = 25 } = {}) {
+  const cutoffMs = windowHours ? Date.now() - (windowHours * 60 * 60 * 1000) : null;
+  const grouped = new Map();
+
+  for (const match of completedMatchRecords) {
+    if (!match || match.mode !== mode) continue;
+    const finishedAtMs = match.finishedAt ? new Date(match.finishedAt).getTime() : NaN;
+    if (cutoffMs && Number.isFinite(finishedAtMs) && finishedAtMs < cutoffMs) continue;
+
+    for (const player of match.players || []) {
+      if (!player || player.isBot) continue;
+      const id = String(player.userId || player.name || '').trim();
+      if (!id) continue;
+      const current = grouped.get(id) || {
+        id,
+        name: player.name || id,
+        gamesPlayed: 0,
+        wins: 0,
+        survivalCount: 0,
+        totalDurationMs: 0,
+        durationSamples: 0,
+        lastPlayedAt: null,
+      };
+
+      current.gamesPlayed += 1;
+      if (String(player.role || '').toLowerCase() === String(match.winner || '').toLowerCase()) current.wins += 1;
+      if (player.survived) current.survivalCount += 1;
+      if (Number(match.durationMs) > 0) {
+        current.totalDurationMs += Number(match.durationMs);
+        current.durationSamples += 1;
+      }
+      if (!current.lastPlayedAt || String(match.finishedAt || '') > String(current.lastPlayedAt)) {
+        current.lastPlayedAt = match.finishedAt || null;
+        current.name = player.name || current.name;
+      }
+      grouped.set(id, current);
+    }
+  }
+
+  return [...grouped.values()]
+    .map((entry) => summarizeLeaderboardEntry({
+      ...entry,
+      avgDurationMs: entry.durationSamples ? Math.round(entry.totalDurationMs / entry.durationSamples) : null,
+    }))
+    .sort((a, b) => b.wins - a.wins || b.gamesPlayed - a.gamesPlayed || b.survivalRate - a.survivalRate || String(b.lastPlayedAt || '').localeCompare(String(a.lastPlayedAt || '')))
+    .slice(0, limit);
+}
+
+function getLeaderboardSummary({ mode = 'mafia', window = '12h', limit = 25 } = {}) {
+  const normalizedWindow = normalizeLeaderboardWindow(window);
+  let entries = [];
+  let source = 'memory';
+
+  try {
+    entries = getLeaderboardEntries({ mode, windowHours: normalizedWindow.hours, limit }) || [];
+    if (entries.length) source = 'sqlite';
+  } catch (err) {
+    logStructured('error.getLeaderboardEntries', { error: err.message, mode, window: normalizedWindow.key });
+  }
+
+  if (!entries.length) {
+    entries = buildLeaderboardFromMemory({ mode, windowHours: normalizedWindow.hours, limit });
+  } else {
+    entries = entries.map((entry) => summarizeLeaderboardEntry(entry));
+  }
+
+  return {
+    mode,
+    window: normalizedWindow.key,
+    windowLabel: normalizedWindow.label,
+    source,
+    topAgents: entries,
+    windows: [
+      { key: '12h', label: '12h' },
+      { key: '24h', label: '24h' },
+      { key: 'all', label: 'All' },
+    ],
+  };
+}
+
+function getPlayerMatchesFallback(userId, limit = 10) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) return [];
+  const cappedLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+
+  return completedMatchRecords
+    .flatMap((match) => (match.players || [])
+      .filter((player) => String(player.userId || '').trim() === normalizedUserId)
+      .map((player) => ({
+        id: match.id,
+        room_id: match.roomId,
+        roomId: match.roomId,
+        mode: match.mode,
+        winner: match.winner,
+        rounds: match.rounds,
+        duration_ms: match.durationMs,
+        finished_at: match.finishedAt || null,
+        player_name: player.name,
+        role: player.role,
+        survived: player.survived ? 1 : 0,
+        placement: player.placement || null,
+      })))
+    .sort((a, b) => String(b.finished_at || '').localeCompare(String(a.finished_at || '')))
+    .slice(0, cappedLimit);
 }
 
 function buildMatchBaseline(mode = 'mafia') {
@@ -2941,17 +3103,13 @@ app.get('/api/agents/:id', (req, res) => {
 });
 
 app.get('/api/leaderboard', (_req, res) => {
-  const agents = [...agentProfiles.values()].filter(isPublicRankedAgent);
-  const topAgents = [...agents]
-    .sort((a, b) => b.mmr - a.mmr || b.karma - a.karma)
-    .slice(0, 25)
-    .map(({ id, name, mmr, karma, deployed, openclaw }) => ({ id, name, mmr, karma, deployed, openclawConnected: !!openclaw?.connected }));
-
+  const window = String(_req.query.window || '12h').trim().toLowerCase();
+  const leaderboard = getLeaderboardSummary({ mode: 'mafia', window, limit: 25 });
   const topRoasts = [...roastFeed]
     .sort((a, b) => b.upvotes - a.upvotes || b.createdAt - a.createdAt)
     .slice(0, 25);
 
-  res.json({ ok: true, topAgents, topRoasts });
+  res.json({ ok: true, ...leaderboard, topRoasts });
 });
 
 app.get('/api/matches', (req, res) => {
@@ -2959,7 +3117,8 @@ app.get('/api/matches', (req, res) => {
   if (!userId) return res.status(400).json({ ok: false, error: 'userId is required' });
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
   try {
-    const matches = getPlayerMatches(userId, limit);
+    let matches = getPlayerMatches(userId, limit);
+    if (!matches.length) matches = getPlayerMatchesFallback(userId, limit);
     res.json({ ok: true, matches });
   } catch (err) {
     logStructured('error.getPlayerMatches', { error: err.message });
@@ -4123,15 +4282,18 @@ function resetAgentArenaRuntime() {
   liveAgentRuntimes.clear();
   agentRuntimeSockets.clear();
   activeAgentMatchRooms.clear();
+  completedMatchRecords.length = 0;
 }
 
 if (require.main === module) {
   // Initialize SQLite database + run migrations
   try {
     const database = initDb();
-    console.log('SQLite database initialized');
-    const { runMigrations } = require('./server/db/migrate');
-    runMigrations(database);
+    if (database) {
+      console.log('SQLite database initialized');
+      const { runMigrations } = require('./server/db/migrate');
+      runMigrations(database);
+    }
   } catch (err) {
     console.error('SQLite init failed:', err.message);
   }

@@ -55,6 +55,16 @@ test.describe('Play page', () => {
   });
 });
 
+test.describe('Watch page', () => {
+  test('shows six-seat spectator copy and leaderboard windows', async ({ page }) => {
+    await page.goto('/browse.html');
+    await expect(page.locator('text=next six-agent table')).toBeVisible();
+    await expect(page.locator('#leaderboardWindowControls [data-window="12h"]')).toBeVisible();
+    await expect(page.locator('#leaderboardWindowControls [data-window="24h"]')).toBeVisible();
+    await expect(page.locator('#leaderboardWindowControls [data-window="all"]')).toBeVisible();
+  });
+});
+
 test.describe('Roadmap and docs', () => {
   test('games page is mafia-only', async ({ page }) => {
     await page.goto('/games-info.html');

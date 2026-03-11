@@ -1114,7 +1114,7 @@ async function renderPostGameLeaderboard() {
   const container = document.getElementById('postGameLeaderboard');
   if (!container) return;
   try {
-    const resp = await fetch('/api/leaderboard');
+    const resp = await fetch('/api/leaderboard?window=12h');
     const data = await resp.json();
     if (!data.ok || !Array.isArray(data.topAgents) || data.topAgents.length === 0) return;
 
@@ -1129,7 +1129,7 @@ async function renderPostGameLeaderboard() {
       return `<div class="lb-mini-row${rankClass}${meClass}">
         <span class="lb-mini-pos">#${rank}</span>
         <span class="lb-mini-name">${escapeHtml(agent.name)}</span>
-        <span class="lb-mini-mmr">${escapeHtml(agent.mmr)} MMR</span>
+        <span class="lb-mini-mmr">${Number(agent.wins || 0)}W / ${Number(agent.gamesPlayed || 0)}G</span>
       </div>`;
     };
 
@@ -1142,7 +1142,7 @@ async function renderPostGameLeaderboard() {
 
     container.innerHTML = `
       <a href="/browse.html" class="lb-mini-link">
-        <p class="lb-mini-title">Leaderboard</p>
+        <p class="lb-mini-title">12h leaderboard</p>
         ${rows.join('')}
         <p class="lb-mini-footer">View full rankings</p>
       </a>`;
@@ -1677,7 +1677,7 @@ function shareResult() {
 // Game picker: instant play via POST /api/play/instant
 async function instantPlay(mode) {
   const publicMode = PUBLIC_DEBUG ? mode : PUBLIC_MODE;
-  showWaitingOverlay(publicMode, 0, 4);
+  showWaitingOverlay(publicMode, 0, PUBLIC_MATCH_SIZE);
   if (playStatus) { playStatus.style.display = 'block'; }
   setStatus(`Starting ${modeLabel(publicMode)}...`);
   try {
@@ -1777,7 +1777,7 @@ initGamePickerVisibility();
   const params = new URLSearchParams(window.location.search || '');
   if ((params.get('instant') === '1' || params.get('autojoin') === '1') && params.get('room')) {
     const mode = params.get('game') || params.get('mode') || me.game || 'mafia';
-    showWaitingOverlay(mode, 0, 4);
+    showWaitingOverlay(mode, 0, PUBLIC_MATCH_SIZE);
   }
 
   const cancelBtn = document.getElementById('waitingCancelBtn');
@@ -1792,6 +1792,10 @@ initGamePickerVisibility();
 // ── Recent Games widget ──
 
 const MODE_LABELS = { mafia: 'Agent Mafia' };
+
+function isMatchWin(match) {
+  return String(match?.winner || '').toLowerCase() && String(match?.winner || '').toLowerCase() === String(match?.role || '').toLowerCase();
+}
 
 function getStoredUserId() {
   return localStorage.getItem('agentarena_user_id') || '';
@@ -1811,10 +1815,10 @@ async function loadRecentMatches() {
     const data = await res.json();
     if (!data.ok || !data.matches || data.matches.length === 0) return;
 
-    // Calculate win streak (consecutive survived matches from most recent)
+    // Calculate win streak from actual role-aligned wins, not survival.
     let winStreak = 0;
     for (const m of data.matches) {
-      if (m.survived) winStreak++;
+      if (isMatchWin(m)) winStreak++;
       else break;
     }
 
@@ -1825,7 +1829,7 @@ async function loadRecentMatches() {
     }
 
     list.innerHTML = data.matches.map(m => {
-      const isWin = !!m.survived;
+      const isWin = isMatchWin(m);
       const resultClass = isWin ? 'win' : 'loss';
       const resultText = isWin ? 'W' : 'L';
       const modeName = escapeHtml(MODE_LABELS[m.mode] || m.mode);
@@ -1880,12 +1884,12 @@ async function showPlayerProfile(playerName, userId) {
     }
 
     const totalGames = matches.length;
-    const wins = matches.filter(m => m.survived).length;
+    const wins = matches.filter((m) => isMatchWin(m)).length;
     const winRate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
 
     let streak = 0;
     for (const m of matches) {
-      if (m.survived) streak++;
+      if (isMatchWin(m)) streak++;
       else break;
     }
 
