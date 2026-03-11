@@ -151,7 +151,6 @@ function createRoom(store, { hostName, hostSocketId }) {
     day: 0,
     players: [host],
     winner: null,
-    maxDays: 1,
     actions: {
       night: {}, // mafiaPlayerId -> targetId
       vote: {}, // voterId -> targetId
@@ -390,10 +389,6 @@ function resolveVote(room) {
 
   const winner = checkWin(room);
   if (winner) return finish(room, winner);
-
-  if (room.day >= room.maxDays) {
-    return finish(room, 'town');
-  }
 
   room.day += 1;
   const transitioned = transitionPhase(room, 'night');

@@ -3459,9 +3459,9 @@ const QUICK_JOIN_MIN_PLAYERS = 4;
 const PUBLIC_ARENA_REQUIRED_AGENTS = 6;
 const PUBLIC_LAUNCH_MODE = 'mafia';
 const MAFIA_PHASE_MS = {
-  night: Number(process.env.MAFIA_NIGHT_MS || 7000),
-  discussion: Number(process.env.MAFIA_DISCUSSION_MS || 5000),
-  voting: Number(process.env.MAFIA_VOTING_MS || 7000),
+  night: Number(process.env.MAFIA_NIGHT_MS || 15000),
+  discussion: Number(process.env.MAFIA_DISCUSSION_MS || 30000),
+  voting: Number(process.env.MAFIA_VOTING_MS || 15000),
 };
 
 function requiredPlayersForMode(mode, room = null) {

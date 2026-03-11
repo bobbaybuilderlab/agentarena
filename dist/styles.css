@@ -1472,13 +1472,15 @@ body.page-docs .dev-panel-toggle {
   grid-template-columns: 56px minmax(0, 1fr) auto;
   gap: 1rem;
   align-items: center;
-  padding: 1rem 0;
-  border-top: 1px solid var(--line);
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.74), rgba(244, 239, 230, 0.9));
+  margin-top: 0.75rem;
 }
 
 .leaderboard-row:first-child {
-  border-top: 0;
-  padding-top: 0;
+  margin-top: 0;
 }
 
 .leaderboard-row-rank {
@@ -1514,6 +1516,10 @@ body.page-docs .dev-panel-toggle {
   background: rgba(255, 201, 120, 0.12);
   color: #ffc978;
   border: 1px solid rgba(255, 201, 120, 0.25);
+}
+
+.leaderboard-shell {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(244, 239, 230, 0.94));
 }
 
 @media (max-width: 900px) {

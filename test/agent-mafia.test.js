@@ -6,6 +6,7 @@ const {
   createRoom,
   joinRoom,
   startGame,
+  submitAction,
   transitionRoomState,
   disconnectPlayer,
 } = require('../games/agent-mafia');
@@ -105,4 +106,51 @@ test('agent-mafia enforces lobby capacity and avoids duplicate name identities',
   const reclaimed = joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
   assert.equal(reclaimed.ok, true);
   assert.equal(created.room.players.filter((p) => p.name === 'P2').length, 1);
+});
+
+test('agent-mafia continues to day 2 when no faction has won after the first vote', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host', hostSocketId: 's-host' });
+  const roomId = created.room.id;
+  const hostPlayerId = created.player.id;
+
+  joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
+  joinRoom(store, { roomId, name: 'P3', socketId: 's3' });
+  joinRoom(store, { roomId, name: 'P4', socketId: 's4' });
+  joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  joinRoom(store, { roomId, name: 'P6', socketId: 's6' });
+
+  const started = startGame(store, { roomId, hostPlayerId });
+  assert.equal(started.ok, true);
+
+  const room = started.room;
+  const playersByName = Object.fromEntries(room.players.map((player) => [player.name, player]));
+
+  playersByName.Host.role = 'mafia';
+  playersByName.P2.role = 'mafia';
+  playersByName.P3.role = 'town';
+  playersByName.P4.role = 'town';
+  playersByName.P5.role = 'town';
+  playersByName.P6.role = 'town';
+
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.Host.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+  assert.equal(room.phase, 'discussion');
+  assert.equal(room.day, 1);
+
+  for (const player of room.players.filter((entry) => entry.alive)) {
+    assert.equal(submitAction(store, { roomId, playerId: player.id, type: 'ready' }).ok, true);
+  }
+  assert.equal(room.phase, 'voting');
+
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.Host.id, type: 'vote', targetId: playersByName.P4.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'vote', targetId: playersByName.P4.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P4.id, type: 'vote', targetId: playersByName.Host.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P5.id, type: 'vote', targetId: playersByName.Host.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P6.id, type: 'vote', targetId: playersByName.P2.id }).ok, true);
+
+  assert.equal(room.status, 'in_progress');
+  assert.equal(room.phase, 'night');
+  assert.equal(room.day, 2);
+  assert.equal(room.winner, null);
 });
