@@ -30,7 +30,7 @@ const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('.
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
-const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, closeDb } = require('./server/db');
+const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, getMatchBaselineSummary, closeDb } = require('./server/db');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
@@ -2219,32 +2219,50 @@ function getPlayerMatchesFallback(userId, limit = 10) {
 }
 
 function buildMatchBaseline(mode = 'mafia') {
-  const store = getLobbyStore(mode);
-  const finishedDurations = [...(store?.values?.() || [])]
-    .filter((room) => room?.startedAt && room?.finishedAt && room.finishedAt >= room.startedAt)
-    .map((room) => ({
-      roomId: room.id,
-      durationMs: room.finishedAt - room.startedAt,
-      startedAt: room.startedAt,
-      finishedAt: room.finishedAt,
-    }))
-    .sort((a, b) => b.finishedAt - a.finishedAt);
+  let baseline = null;
+  try {
+    baseline = getMatchBaselineSummary({ mode });
+  } catch (err) {
+    logStructured('error.getMatchBaselineSummary', { error: err.message, mode });
+  }
 
-  const durations = finishedDurations.map((entry) => entry.durationMs).filter((value) => value > 0);
-  const avgDurationMs = durations.length
-    ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
-    : null;
+  if (!baseline) {
+    const finishedMatches = completedMatchRecords
+      .filter((match) => match?.mode === mode && Number(match.durationMs) > 0)
+      .map((match) => ({
+        roomId: match.roomId,
+        durationMs: Number(match.durationMs),
+        finishedAt: match.finishedAt ? new Date(match.finishedAt).getTime() : NaN,
+      }))
+      .sort((a, b) => b.finishedAt - a.finishedAt);
+
+    const durations = finishedMatches.map((entry) => entry.durationMs).filter((value) => value > 0);
+    const avgDurationMs = durations.length
+      ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
+      : null;
+
+    baseline = {
+      sampleSize: durations.length,
+      avgDurationMs,
+      fastestDurationMs: durations.length ? Math.min(...durations) : null,
+      slowestDurationMs: durations.length ? Math.max(...durations) : null,
+      latestCompletedRoomId: finishedMatches[0]?.roomId || null,
+      latestCompletedAt: Number.isFinite(finishedMatches[0]?.finishedAt)
+        ? new Date(finishedMatches[0].finishedAt).toISOString()
+        : null,
+    };
+  }
 
   return {
     mode,
-    sampleSize: durations.length,
-    avgDurationMs,
-    fastestDurationMs: durations.length ? Math.min(...durations) : null,
-    slowestDurationMs: durations.length ? Math.max(...durations) : null,
-    estimatedGamesPerHour: avgDurationMs ? Number((3600000 / avgDurationMs).toFixed(1)) : null,
-    estimatedGamesPer12Hours: avgDurationMs ? Number(((12 * 3600000) / avgDurationMs).toFixed(1)) : null,
-    latestCompletedRoomId: finishedDurations[0]?.roomId || null,
-    latestCompletedAt: finishedDurations[0]?.finishedAt ? new Date(finishedDurations[0].finishedAt).toISOString() : null,
+    sampleSize: baseline.sampleSize || 0,
+    avgDurationMs: baseline.avgDurationMs || null,
+    fastestDurationMs: baseline.fastestDurationMs || null,
+    slowestDurationMs: baseline.slowestDurationMs || null,
+    estimatedGamesPerHour: baseline.avgDurationMs ? Number((3600000 / baseline.avgDurationMs).toFixed(1)) : null,
+    estimatedGamesPer12Hours: baseline.avgDurationMs ? Number(((12 * 3600000) / baseline.avgDurationMs).toFixed(1)) : null,
+    latestCompletedRoomId: baseline.latestCompletedRoomId || null,
+    latestCompletedAt: baseline.latestCompletedAt || null,
   };
 }
 
@@ -2619,8 +2637,48 @@ function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
   if (sock) sock.join(`mafia:${room.id}`);
 }
 
+function clearPublicArenaSeatRuntime(agentId, nextStatus = 'reserved') {
+  const runtime = getAgentRuntime(agentId);
+  if (!runtime) return null;
+  return upsertAgentRuntime(agentId, {
+    status: runtime.connected ? nextStatus : 'offline',
+    currentRoomId: null,
+    currentPlayerId: null,
+  });
+}
+
+function rollbackPublicArenaMafiaRoom(room, agentIds = []) {
+  if (room?.id) {
+    roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    mafiaRooms.delete(room.id);
+  }
+  for (const agentId of agentIds) {
+    clearPublicArenaSeatRuntime(agentId, 'reserved');
+  }
+}
+
+function validatePublicArenaBatch(agents) {
+  if (!Array.isArray(agents) || agents.length !== PUBLIC_ARENA_REQUIRED_AGENTS) {
+    return { ok: false, error: 'invalid agent batch size' };
+  }
+
+  const seenNames = new Set();
+  for (const agent of agents) {
+    if (!agent?.id) return { ok: false, error: 'missing agent id' };
+    if (seenNames.has(agent.name)) return { ok: false, error: 'duplicate agent name in batch' };
+    seenNames.add(agent.name);
+    const runtime = getAgentRuntime(agent.id);
+    if (!runtime?.connected || !runtime.socketId) {
+      return { ok: false, error: `agent runtime unavailable: ${agent.id}` };
+    }
+  }
+
+  return { ok: true };
+}
+
 function createPublicArenaMafiaRoom(agents) {
-  if (!Array.isArray(agents) || agents.length < PUBLIC_ARENA_REQUIRED_AGENTS) return null;
+  const validation = validatePublicArenaBatch(agents);
+  if (!validation.ok) return null;
 
   const [hostAgent, ...others] = agents;
   const hostRuntime = getAgentRuntime(hostAgent.id);
@@ -2633,21 +2691,36 @@ function createPublicArenaMafiaRoom(agents) {
   if (!created.ok) return null;
 
   const room = created.room;
+  const attachedAgentIds = [];
   room.publicArena = true;
   room.autoMatch = true;
   room.liveAgentPromptKey = null;
   attachLiveAgentToMafiaSeat(room, created.player, hostAgent, hostRuntime);
+  attachedAgentIds.push(hostAgent.id);
 
   for (const agent of others) {
     const runtime = getAgentRuntime(agent.id);
-    if (!runtime?.connected || !runtime.socketId) return null;
+    if (!runtime?.connected || !runtime.socketId) {
+      rollbackPublicArenaMafiaRoom(room, attachedAgentIds);
+      return null;
+    }
     const joined = mafiaGame.joinRoom(mafiaRooms, {
       roomId: room.id,
       name: agent.name,
       socketId: runtime.socketId,
     });
-    if (!joined.ok) return null;
+    if (!joined.ok) {
+      rollbackPublicArenaMafiaRoom(room, attachedAgentIds);
+      return null;
+    }
     attachLiveAgentToMafiaSeat(room, joined.player, agent, runtime);
+    attachedAgentIds.push(agent.id);
+  }
+
+  const started = mafiaGame.startGame(mafiaRooms, { roomId: room.id, hostPlayerId: room.hostPlayerId });
+  if (!started.ok) {
+    rollbackPublicArenaMafiaRoom(room, attachedAgentIds);
+    return null;
   }
 
   logRoomEvent('mafia', room, 'ROOM_CREATED', {
@@ -2657,9 +2730,6 @@ function createPublicArenaMafiaRoom(agents) {
     agents: agents.map((agent) => agent.id),
   });
   emitMafiaRoom(room);
-
-  const started = mafiaGame.startGame(mafiaRooms, { roomId: room.id, hostPlayerId: room.hostPlayerId });
-  if (!started.ok) return null;
   activeAgentMatchRooms.add(room.id);
   logRoomEvent('mafia', room, 'GAME_STARTED', {
     status: room.status,
@@ -2683,6 +2753,10 @@ async function processPublicArenaQueue() {
       batch.forEach((agent) => setAgentRuntimeStatus(agent.id, 'reserved'));
       const room = createPublicArenaMafiaRoom(batch);
       if (!room) {
+        logStructured('mafia.publicArena.batch_failed', {
+          agentIds: batch.map((agent) => agent.id),
+          connectedAgents: idleAgents.length,
+        });
         batch.forEach((agent) => clearAgentRuntimeAssignment(agent.id, 'idle'));
         break;
       }
@@ -4376,6 +4450,8 @@ module.exports = {
   roomEvents,
   arenaCanary,
   processPublicArenaQueue,
+  createPublicArenaMafiaRoom,
+  buildMatchBaseline,
   clearAllGameTimers,
   resetPlayTelemetry,
   seedPlayTelemetry,

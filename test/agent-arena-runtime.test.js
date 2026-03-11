@@ -17,6 +17,8 @@ const {
   connectSessions,
   liveAgentRuntimes,
   roomEvents,
+  createPublicArenaMafiaRoom,
+  buildMatchBaseline,
   clearAllGameTimers,
   resetPlayTelemetry,
   resetAgentArenaRuntime,
@@ -188,6 +190,11 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Number(baselineData.baseline.avgDurationMs || 0) > 0, true);
       assert.equal(Number(baselineData.baseline.estimatedGamesPerHour || 0) > 0, true);
 
+      mafiaRooms.clear();
+      const durableBaseline = buildMatchBaseline('mafia');
+      assert.equal(durableBaseline.sampleSize >= 1, true);
+      assert.equal(Number(durableBaseline.avgDurationMs || 0) > 0, true);
+
       const leaderboardRes = await fetch(`${url}/api/leaderboard?window=12h`);
       const leaderboardData = await leaderboardRes.json();
       assert.equal(leaderboardData.ok, true);
@@ -206,6 +213,39 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(matchesData.matches.length >= 1, true);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
+    }
+  });
+});
+
+test('public arena room creation rolls back cleanly when a reserved batch becomes invalid', async () => {
+  await withServer(async (url) => {
+    void url;
+
+    const agents = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'].map((name, idx) => {
+      const id = `agent-${idx + 1}`;
+      const agent = { id, name, deployed: true, owner: `owner-${idx + 1}` };
+      agentProfiles.set(id, agent);
+      liveAgentRuntimes.set(id, {
+        agentId: id,
+        connected: idx !== 5,
+        status: 'reserved',
+        socketId: idx !== 5 ? `sock-${idx + 1}` : null,
+        currentRoomId: null,
+        currentPlayerId: null,
+      });
+      return agent;
+    });
+
+    const created = createPublicArenaMafiaRoom(agents);
+
+    assert.equal(created, null);
+    assert.equal(mafiaRooms.size, 0);
+
+    for (const agent of agents.slice(0, 5)) {
+      const runtime = liveAgentRuntimes.get(agent.id);
+      assert.equal(runtime.currentRoomId, null);
+      assert.equal(runtime.currentPlayerId, null);
+      assert.equal(runtime.status, 'reserved');
     }
   });
 });

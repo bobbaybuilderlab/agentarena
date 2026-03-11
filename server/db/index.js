@@ -106,13 +106,13 @@ function getSessionByToken(token) {
 
 // ── Match operations ──
 
-function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, players }) {
+function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, finishedAt, players }) {
   const database = getDb();
   if (!database) return { id, roomId, mode };
   if (!schemaReady) initDb();
   const insertMatch = database.prepare(`
-    INSERT INTO match_results (id, room_id, mode, winner, rounds, duration_ms, started_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO match_results (id, room_id, mode, winner, rounds, duration_ms, started_at, finished_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertPlayer = database.prepare(`
     INSERT INTO match_players (match_id, user_id, player_name, role, is_bot, survived, placement)
@@ -120,7 +120,7 @@ function recordMatch({ id, roomId, mode, winner, rounds, durationMs, startedAt, 
   `);
 
   const transaction = database.transaction(() => {
-    insertMatch.run(id, roomId, mode, winner, rounds, durationMs || null, startedAt || null);
+    insertMatch.run(id, roomId, mode, winner, rounds, durationMs || null, startedAt || null, finishedAt || null);
     for (const p of players) {
       insertPlayer.run(id, p.userId || null, p.name, p.role || null, p.isBot ? 1 : 0, p.survived ? 1 : 0, p.placement || null);
     }
@@ -203,6 +203,46 @@ function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit = 25 
   `).all(...params);
 }
 
+function getMatchBaselineSummary({ mode = 'mafia' } = {}) {
+  const database = getDb();
+  if (!database) return null;
+  if (!schemaReady) initDb();
+
+  const aggregate = database.prepare(`
+    SELECT
+      COUNT(*) AS sample_size,
+      ROUND(AVG(duration_ms)) AS avg_duration_ms,
+      MIN(duration_ms) AS fastest_duration_ms,
+      MAX(duration_ms) AS slowest_duration_ms,
+      MAX(finished_at) AS latest_completed_at
+    FROM match_results
+    WHERE mode = ?
+      AND duration_ms IS NOT NULL
+      AND duration_ms > 0
+  `).get(mode);
+
+  if (!aggregate || !Number(aggregate.sample_size || 0)) return null;
+
+  const latest = database.prepare(`
+    SELECT room_id, finished_at
+    FROM match_results
+    WHERE mode = ?
+      AND duration_ms IS NOT NULL
+      AND duration_ms > 0
+    ORDER BY finished_at DESC
+    LIMIT 1
+  `).get(mode);
+
+  return {
+    sampleSize: Number(aggregate.sample_size || 0),
+    avgDurationMs: Number(aggregate.avg_duration_ms || 0) || null,
+    fastestDurationMs: Number(aggregate.fastest_duration_ms || 0) || null,
+    slowestDurationMs: Number(aggregate.slowest_duration_ms || 0) || null,
+    latestCompletedRoomId: latest?.room_id || null,
+    latestCompletedAt: latest?.finished_at || aggregate.latest_completed_at || null,
+  };
+}
+
 function getMatch(matchId) {
   const database = getDb();
   if (!database) return null;
@@ -253,6 +293,7 @@ module.exports = {
   getMatchesByUser,
   getPlayerMatches,
   getLeaderboardEntries,
+  getMatchBaselineSummary,
   getMatch,
   createReport,
   getReports,

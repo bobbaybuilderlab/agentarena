@@ -7,6 +7,7 @@ const {
   joinRoom,
   startGame,
   submitAction,
+  addLobbyBots,
   transitionRoomState,
   disconnectPlayer,
 } = require('../games/agent-mafia');
@@ -54,6 +55,29 @@ test('agent-mafia start requires host and minimum players', () => {
   const nonHost = startGame(store, { roomId: created.room.id, hostPlayerId: 'not-host' });
   assert.equal(nonHost.ok, false);
   assert.equal(nonHost.error.code, 'HOST_ONLY');
+});
+
+test('agent-mafia caps lobby bot fill at six seats and rejects oversized rooms', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host', hostSocketId: 's-host' });
+  const roomId = created.room.id;
+
+  assert.equal(addLobbyBots(store, { roomId, count: 10 }).ok, true);
+  assert.equal(created.room.players.length, 6);
+  assert.equal(joinRoom(store, { roomId, name: 'P7', socketId: 's7' }).ok, false);
+
+  created.room.players.push({
+    id: 'OVERSIZE1',
+    name: 'Overflow',
+    socketId: null,
+    isConnected: true,
+    alive: true,
+    role: null,
+  });
+
+  const oversized = startGame(store, { roomId, hostPlayerId: created.player.id });
+  assert.equal(oversized.ok, false);
+  assert.equal(oversized.error.code, 'TOO_MANY_PLAYERS');
 });
 
 test('agent-mafia transitionRoomState rejects lobby -> voting', () => {

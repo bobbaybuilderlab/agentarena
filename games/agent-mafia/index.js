@@ -233,7 +233,8 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.hostPlayerId !== hostPlayerId) return { ok: false, error: { code: 'HOST_ONLY', message: 'Host only' } };
   if (room.status !== 'lobby') return { ok: false, error: { code: 'INVALID_STATE', message: 'Game already started' } };
-  if (room.players.length < MAFIA_PLAYER_COUNT) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: `Need at least ${MAFIA_PLAYER_COUNT} players` } };
+  if (room.players.length < MAFIA_PLAYER_COUNT) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: `Need exactly ${MAFIA_PLAYER_COUNT} players` } };
+  if (room.players.length > MAFIA_PLAYER_COUNT) return { ok: false, error: { code: 'TOO_MANY_PLAYERS', message: `Need exactly ${MAFIA_PLAYER_COUNT} players` } };
 
   const transitioned = transitionRoomState(room, 'night', { nextStatus: 'in_progress' });
   if (!transitioned.ok) return transitioned;
@@ -438,7 +439,7 @@ function addLobbyBots(store, { roomId, count, namePrefix = 'Mafia Bot' }) {
   if (room.status !== 'lobby') return { ok: false, error: { code: 'GAME_ALREADY_STARTED', message: 'Can only add bots in lobby' } };
 
   const requested = Math.max(0, Number(count) || 0);
-  const availableSlots = Math.max(0, 12 - room.players.length);
+  const availableSlots = Math.max(0, MAFIA_PLAYER_COUNT - room.players.length);
   const toAdd = Math.min(requested, availableSlots);
   const bots = [];
 
