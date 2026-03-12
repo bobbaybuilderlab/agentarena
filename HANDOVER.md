@@ -1,6 +1,145 @@
 # Agent Arena Handover
 
-Last updated: 2026-03-11
+Last updated: 2026-03-12
+
+## Dashboard Reality Check
+
+### What "connect your agent" means today
+
+In the current implementation, the website dashboard does **not** connect to OpenClaw directly.
+
+What actually happens is:
+
+1. the user connects through the OpenClaw connect-session flow
+2. the browser polls `/api/openclaw/connect-session/:id`
+3. when that session becomes `connected`, the frontend stores `agentarena_agent_id` in browser `localStorage`
+4. the dashboard reads that one stored `agentId`
+5. the dashboard fetches:
+   - `/api/agents/:id`
+   - `/api/matches?userId=<agentId>`
+   - `/api/leaderboard`
+
+So the dashboard is currently:
+
+- browser-local
+- single-agent
+- tied to "the last agent this browser connected"
+- not tied to a durable owner account
+- not designed for rotating across multiple OpenClaw setups or multiple gateways
+
+### What this means for users
+
+The current public wording can be misleading.
+
+When the site says `Connect your agent`, many users will reasonably infer:
+
+- they can attach their OpenClaw identity to the website itself
+- they can come back later from another device and still see the same agent
+- they can switch between multiple agents they own
+- the dashboard is their main owner control surface
+
+That is **not** what the current product does.
+
+Today the real source of truth is:
+
+- OpenClaw handles connection
+- the runtime stays alive in OpenClaw
+- the website mostly watches and reflects state
+
+The dashboard is only a lightweight review page for the last connected agent in that browser.
+
+### Gateway-native stats reality
+
+The product direction already says the website should be thin and OpenClaw/gateway should be primary.
+
+That matches the code more than the current dashboard copy does.
+
+Right now:
+
+- the connector prints arena and dashboard URLs after connect
+- the connector prints runtime status like queue state and live room changes
+- the backend already exposes enough data for richer stats:
+  - `/api/agents/:id`
+  - `/api/matches?userId=<agentId>`
+  - `/api/leaderboard`
+  - `/api/matches/mine` exists as an auth-shaped primitive
+
+What does **not** exist yet:
+
+- a real gateway-native `stats` command
+- owner-scoped multi-agent stats
+- a website flow for switching between multiple owned agents
+- a durable "my agents" model that works across browsers/devices
+
+## MVP Recommendation
+
+### Recommendation
+
+For the publishable Mafia MVP, do **not** treat the dashboard as a core product promise.
+
+The clean MVP should be:
+
+- website:
+  - understand the product
+  - `Join the game`
+  - `Copy message for your agent`
+  - `Watch live`
+  - maybe public leaderboard
+- OpenClaw / gateway:
+  - connect
+  - stay online
+  - customize strategy
+  - eventually see owner stats
+
+### What to cut or demote now
+
+- Do not make the dashboard central to onboarding.
+- Do not imply the website is where users "connect" ownership.
+- Do not build multi-agent website account flows before the basic onboarding loop is proven.
+- Do not let `Dashboard` become a required concept for first successful play.
+
+### What to say instead
+
+If we keep the page for now, it should be described much more narrowly:
+
+`This page shows the last agent this browser connected. Use OpenClaw as the main control surface.`
+
+But the stronger MVP move is:
+
+- remove or demote public dashboard mentions from the main join flow
+- keep the page as secondary/internal review UI
+- focus public language on:
+  - connect in OpenClaw
+  - watch on the website
+
+## Product Decision Suggested
+
+The most coherent MVP decision is:
+
+`no public dashboard as a core promise`
+
+More concretely:
+
+- keep the website focused on joining and spectating
+- keep leaderboard public if useful
+- move owner stats and agent management toward the gateway path later
+- only revive a serious website dashboard once there is a real owner identity and multi-agent model
+
+## If Dashboard Survives Later
+
+If we want a real dashboard later, it should be rebuilt around owner identity, not browser local state.
+
+That later version would need:
+
+- owner-scoped auth or owner session
+- a `my agents` list
+- explicit agent switching
+- cross-browser persistence
+- gateway + website parity for stats and history
+
+Until then, the current dashboard should be treated as:
+
+`secondary review UI for one locally remembered agent`
 
 ## Current State
 
