@@ -2,6 +2,30 @@ const runtimeConfig = window.__RUNTIME_CONFIG__ || {};
 const BACKEND_URL = runtimeConfig.SOCKET_URL || runtimeConfig.API_URL || window.location.origin;
 const socket = io(BACKEND_URL);
 
+const STORAGE_KEYS = {
+  userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
+  muted: ['clawofdeceit_muted', 'agentarena_muted'],
+  authToken: ['clawofdeceit_auth_token', 'agentarena_auth_token'],
+};
+
+function getStoredValue(keyList) {
+  for (const key of keyList) {
+    const value = localStorage.getItem(key);
+    if (!value) continue;
+    if (key !== keyList[0]) localStorage.setItem(keyList[0], value);
+    return value;
+  }
+  return '';
+}
+
+function setStoredValue(keyList, value) {
+  if (value == null || value === '') {
+    localStorage.removeItem(keyList[0]);
+    return;
+  }
+  localStorage.setItem(keyList[0], String(value));
+}
+
 const gameMode = document.getElementById('gameMode');
 const playerName = document.getElementById('playerName');
 const roomIdInput = document.getElementById('roomId');
@@ -792,6 +816,15 @@ function formatMafiaFeedEvent(state, event) {
   if (!event) return null;
   const at = event.at ? new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 
+  if (event.type === 'DISCUSSION_MESSAGE') {
+    const speaker = event.actorName || formatPlayerName(state, event.actorId);
+    return {
+      kicker: 'Table talk',
+      title: speaker || 'Unknown agent',
+      body: String(event.text || '').trim() || 'A public read just landed on the table.',
+      at,
+    };
+  }
   if (event.type === 'GAME_STARTED') {
     return { kicker: 'Match start', title: `Day ${event.day || 1} begins`, body: 'Roles are locked and the first night is underway.', at };
   }
@@ -1024,7 +1057,7 @@ function renderSpectatorReadability(state) {
         <p class="text-sm text-muted">${escapeHtml(item.body)}</p>
         <p class="text-xs text-muted">${escapeHtml(item.at)}</p>
       </article>`);
-  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted">Live room events will appear here.</p>';
+  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted">Public transcript lines will appear here.</p>';
 }
 
 function suggestedRefinement(result) {
@@ -1663,7 +1696,7 @@ function shareResult() {
   fetch('/api/track/share', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: modeKey }) }).catch(() => {});
 
   if (navigator.share) {
-    navigator.share({ title: 'Agent Arena Match', text, url: shareUrl }).catch(() => {});
+    navigator.share({ title: 'Claw of Deceit Match', text, url: shareUrl }).catch(() => {});
   } else if (navigator.clipboard) {
     const shareText = `${text}\n${shareUrl}`;
     navigator.clipboard.writeText(shareText).then(() => {
@@ -1797,7 +1830,7 @@ function isMatchWin(match) {
 }
 
 function getStoredUserId() {
-  return localStorage.getItem('agentarena_user_id') || '';
+  return getStoredValue(STORAGE_KEYS.userId);
 }
 
 async function loadRecentMatches() {
@@ -1951,10 +1984,10 @@ function sfxElimination() { playTone(220, 0.3, 'sawtooth', 0.15); setTimeout(() 
 function sfxWin() { playTone(523, 0.15); setTimeout(() => playTone(659, 0.15), 150); setTimeout(() => playTone(784, 0.15), 300); setTimeout(() => playTone(1047, 0.3), 450); }
 
 // Mute toggle
-soundMuted = localStorage.getItem('agentarena_muted') === '1';
+soundMuted = getStoredValue(STORAGE_KEYS.muted) === '1';
 document.getElementById('muteToggle')?.addEventListener('click', () => {
   soundMuted = !soundMuted;
-  localStorage.setItem('agentarena_muted', soundMuted ? '1' : '0');
+  setStoredValue(STORAGE_KEYS.muted, soundMuted ? '1' : '0');
   const btn = document.getElementById('muteToggle');
   if (btn) btn.textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
 });
@@ -2018,11 +2051,11 @@ document.getElementById('tutorialOverlay')?.addEventListener('click', (e) => {
 });
 
 // ── Auth flow ──
-const AUTH_TOKEN_KEY = 'agentarena_auth_token';
-
-function getAuthToken() { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; }
-function setAuthToken(token) { localStorage.setItem(AUTH_TOKEN_KEY, token); }
-function clearAuthToken() { localStorage.removeItem(AUTH_TOKEN_KEY); }
+function getAuthToken() { return getStoredValue(STORAGE_KEYS.authToken); }
+function setAuthToken(token) { setStoredValue(STORAGE_KEYS.authToken, token); }
+function clearAuthToken() {
+  STORAGE_KEYS.authToken.forEach((key) => localStorage.removeItem(key));
+}
 
 async function checkAuth() {
   const token = getAuthToken();
@@ -2044,7 +2077,7 @@ async function checkAuth() {
         profileBadge.title = `Signed in as ${data.user.email || 'anonymous'}`;
       }
       // Sync userId for match history
-      if (data.user.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      if (data.user.id) setStoredValue(STORAGE_KEYS.userId, data.user.id);
       return data.user;
     }
   } catch (_) {}
@@ -2081,7 +2114,7 @@ document.getElementById('signInForm')?.addEventListener('submit', async (e) => {
     const data = await res.json();
     if (data.ok) {
       setAuthToken(data.session.token);
-      if (data.user?.id) localStorage.setItem('agentarena_user_id', data.user.id);
+      if (data.user?.id) setStoredValue(STORAGE_KEYS.userId, data.user.id);
       document.getElementById('signInModal')?.close();
       checkAuth();
       return;

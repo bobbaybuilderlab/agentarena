@@ -1,16 +1,44 @@
 const runtime = window.__RUNTIME_CONFIG__ || {};
 const API_BASE = runtime.API_URL || window.location.origin;
 
+const STORAGE_KEYS = {
+  agentId: ['clawofdeceit_agent_id', 'agentarena_agent_id'],
+  sessionToken: ['clawofdeceit_session_token', 'agentarena_session_token'],
+  userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
+  connectSessionId: ['clawofdeceit_connect_session_id', 'agentarena_connect_session_id'],
+  connectAccessToken: ['clawofdeceit_connect_access_token', 'agentarena_connect_access_token'],
+  hasGeneratedCommand: ['clawofdeceit_has_generated_command', 'agentarena_has_generated_command'],
+  viewedWatch: ['clawofdeceit_viewed_watch', 'agentarena_viewed_arena'],
+};
+
+function getStoredValue(keyList) {
+  for (const key of keyList) {
+    const value = localStorage.getItem(key);
+    if (!value) continue;
+    if (key !== keyList[0]) localStorage.setItem(keyList[0], value);
+    return value;
+  }
+  return '';
+}
+
+function setStoredValue(keyList, value) {
+  if (value == null || value === '') {
+    localStorage.removeItem(keyList[0]);
+    return;
+  }
+  localStorage.setItem(keyList[0], String(value));
+}
+
 function getConnectedAgentId() {
-  return localStorage.getItem('agentarena_agent_id') || '';
+  return getStoredValue(STORAGE_KEYS.agentId);
 }
 
 function getSessionToken() {
-  return localStorage.getItem('agentarena_session_token') || '';
+  return getStoredValue(STORAGE_KEYS.sessionToken);
 }
 
 function getUserId() {
-  return localStorage.getItem('agentarena_user_id') || '';
+  return getStoredValue(STORAGE_KEYS.userId);
 }
 
 function escapeHtml(value) {
@@ -35,8 +63,8 @@ async function ensureSession() {
     });
     const data = await res.json();
     if (data.ok && data.session) {
-      localStorage.setItem('agentarena_session_token', data.session.token);
-      if (data.session.userId) localStorage.setItem('agentarena_user_id', data.session.userId);
+      setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
+      if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
     }
   } catch (_err) { /* silent fail -- don't block page load */ }
 }
@@ -58,10 +86,10 @@ const watchLiveBtn = document.getElementById('watchLiveBtn');
 const shareOnXBtn = document.getElementById('shareOnXBtn');
 const shareRow = document.getElementById('shareRow');
 
-let connectSessionId = localStorage.getItem('agentarena_connect_session_id') || null;
+let connectSessionId = getStoredValue(STORAGE_KEYS.connectSessionId) || null;
 let connectCommand = '';
 let connectExpiresAt = null;
-let connectAccessToken = localStorage.getItem('agentarena_connect_access_token') || '';
+let connectAccessToken = getStoredValue(STORAGE_KEYS.connectAccessToken) || '';
 let statusPoll = null;
 
 function getOnboarding(connect) {
@@ -80,7 +108,7 @@ function updateShareState(connect) {
   const watchUrl = connect?.watchUrl ? `${window.location.origin}${connect.watchUrl}` : `${window.location.origin}/browse.html`;
   watchLiveBtn.href = connect?.watchUrl || '/browse.html';
   const agentName = connect?.agentName || 'my agent';
-  const text = `I just connected ${agentName} to Agent Arena. Watch the Mafia games live: ${watchUrl}`;
+  const text = `I just connected ${agentName} to Claw of Deceit. Watch the Mafia games live: ${watchUrl}`;
   shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
   shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
 }
@@ -110,9 +138,9 @@ generateCmdBtn?.addEventListener('click', async () => {
       expiresAtEl.textContent = `Expires in ~${Math.ceil(sec / 60)} min`;
     }
     cliBox.style.display = 'block';
-    localStorage.setItem('agentarena_has_generated_command', '1');
-    localStorage.setItem('agentarena_connect_session_id', connectSessionId);
-    localStorage.setItem('agentarena_connect_access_token', connectAccessToken);
+    setStoredValue(STORAGE_KEYS.hasGeneratedCommand, '1');
+    setStoredValue(STORAGE_KEYS.connectSessionId, connectSessionId);
+    setStoredValue(STORAGE_KEYS.connectAccessToken, connectAccessToken);
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
     statusEl.textContent = 'Message ready. Send it to your OpenClaw agent; connection auto-detect is active.';
@@ -147,7 +175,8 @@ async function checkConnectionStatus() {
     }
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
-      if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
+      if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
+      syncArenaEntryButton();
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
@@ -193,23 +222,9 @@ const pulseTitle = document.getElementById('pulseTitle');
 const pulseCopy = document.getElementById('pulseCopy');
 const pulseJoinBtn = document.getElementById('pulseJoinBtn');
 const pulseMeta = document.getElementById('pulseMeta');
-const currentAgentCard = document.getElementById('currentAgentCard');
-const currentAgentBody = document.getElementById('currentAgentBody');
-const currentAgentMeta = document.getElementById('currentAgentMeta');
-const currentAgentCta = document.getElementById('currentAgentCta');
-const launchModeNotice = document.getElementById('launchModeNotice');
-const arenaEntryStatus = document.getElementById('arenaEntryStatus');
-const pageIsPlay = document.body.classList.contains('page-play');
+const randomLiveRoomBtn = document.getElementById('randomLiveRoomBtn');
+const arenaEntryStatus = document.getElementById('playStatus');
 const pageIsLeaderboard = document.body.classList.contains('page-leaderboard');
-const dashboardShell = document.getElementById('dashboardShell');
-const dashboardEmptyState = document.getElementById('dashboardEmptyState');
-const dashboardStatusBody = document.getElementById('dashboardStatusBody');
-const dashboardPersonaBody = document.getElementById('dashboardPersonaBody');
-const dashboardMatchesList = document.getElementById('dashboardMatchesList');
-const dashboardMatchesMeta = document.getElementById('dashboardMatchesMeta');
-const dashboardEventsList = document.getElementById('dashboardEventsList');
-const dashboardEventsMeta = document.getElementById('dashboardEventsMeta');
-const dashboardWatchLink = document.getElementById('dashboardWatchLink');
 let currentLeaderboardWindow = '12h';
 
 function currentWindowLabel(windowKey) {
@@ -250,7 +265,7 @@ function renderLeaderboardEntries(agents, connectedAgentId) {
         <div class="leaderboard-row-rank">#${idx + 1}</div>
         <div class="leaderboard-row-main">
           <div class="leaderboard-row-head">
-            <h3>${escapeHtml(agent.name)}${agent.id === connectedAgentId ? ' <span class="text-xs text-muted">your agent</span>' : ''}</h3>
+            <h3>${escapeHtml(agent.name)}</h3>
             <p class="text-sm text-muted">${formatMatchRecord(agent)} · ${Number(agent.gamesPlayed || 0)} games · Survival ${Number(agent.survivalRate || 0)}%</p>
           </div>
           ${renderBadges(agent.badges)}
@@ -266,7 +281,7 @@ function renderLeaderboardEntries(agents, connectedAgentId) {
   return agents.slice(0, limit).map((agent, idx) => `
     <article class="${agent.id === connectedAgentId ? 'leaderboard-self' : ''} ${idx < 3 ? `lb-rank-${idx + 1}` : ''}">
       <h3>#${idx + 1} ${escapeHtml(agent.name)}</h3>
-      <p>${formatMatchRecord(agent)}${agent.id === connectedAgentId ? ' · your agent' : ''}</p>
+      <p>${formatMatchRecord(agent)}</p>
       <p class="text-xs text-muted">Survival ${Number(agent.survivalRate || 0)}% · ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))}</p>
       ${renderBadges(agent.badges)}
       ${renderLeaderboardStatus(agent)}
@@ -274,33 +289,24 @@ function renderLeaderboardEntries(agents, connectedAgentId) {
   `).join('');
 }
 
-function maybeOpenActiveArena(agent) {
-  if (!pageIsPlay) return;
-  const activeRoomId = agent?.arena?.activeRoomId;
-  if (!activeRoomId) return;
-  const nextUrl = `/play.html?mode=mafia&room=${encodeURIComponent(activeRoomId)}&spectate=1`;
-  const currentUrl = `${window.location.pathname}${window.location.search}`;
-  if (currentUrl === nextUrl) return;
-  window.location.href = nextUrl;
-}
 function refreshFirstWinChecklist() {
   const stepGenerate = document.getElementById('stepGenerate');
   const stepConnect = document.getElementById('stepConnect');
   const stepJoin = document.getElementById('stepJoin');
   if (!stepGenerate && !stepConnect && !stepJoin) return;
 
-  const hasGenerated = Boolean(connectSessionId || localStorage.getItem('agentarena_has_generated_command') === '1');
+  const hasGenerated = Boolean(connectSessionId || getStoredValue(STORAGE_KEYS.hasGeneratedCommand) === '1');
   const hasConnected = Boolean(getConnectedAgentId());
-  const hasViewedArena = localStorage.getItem('agentarena_viewed_arena') === '1';
+  const hasViewedArena = getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
 
   function mark(el, done, label) {
     if (!el) return;
     el.textContent = `${done ? '✅' : '⬜'} ${label}`;
     el.classList.toggle('done', done);
   }
-  mark(stepGenerate, hasGenerated, 'Generate your secure CLI command');
-  mark(stepConnect, hasConnected, 'Connect your agent');
-  mark(stepJoin, hasViewedArena, 'Open the live arena');
+  mark(stepGenerate, hasGenerated, 'Copy message for your agent');
+  mark(stepConnect, hasConnected, 'Send it to OpenClaw');
+  mark(stepJoin, hasViewedArena, 'Open the live watch');
 }
 
 async function loadFeed() {
@@ -313,7 +319,7 @@ async function loadFeed() {
     const safeTextBody = escapeHtml(item.text);
     const safeUpvotes = Number(item.upvotes || 0);
     const safeId = encodeURIComponent(String(item.id || ''));
-    const shareText = encodeURIComponent(`🔥 Agent Arena roast by ${item.agentName}: "${item.text}"\n\n▲ ${safeUpvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
+    const shareText = encodeURIComponent(`🔥 Claw of Deceit roast by ${item.agentName}: "${item.text}"\n\n▲ ${safeUpvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
     return `
     <article>
       <h3>${safeAgentName}</h3>
@@ -355,55 +361,6 @@ async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
         : 'No ranked agents are seated live right now.';
     }
   }
-  await loadCurrentAgent(agents);
-}
-
-async function loadCurrentAgent(rankedAgents = null) {
-  if (!currentAgentCard || !currentAgentBody) return;
-
-  const agentId = getConnectedAgentId();
-  if (!agentId) {
-    currentAgentCard.style.display = 'none';
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE}/api/agents/${encodeURIComponent(agentId)}`);
-    const data = await res.json();
-    if (!data?.ok || !data.agent) throw new Error('agent not found');
-
-    const agent = data.agent;
-    const ranking = Array.isArray(rankedAgents) ? rankedAgents.findIndex((row) => row.id === agent.id) : -1;
-    const rankedRow = ranking >= 0 ? rankedAgents[ranking] : null;
-    currentAgentCard.style.display = 'block';
-    const queueStatus = String(agent.arena?.queueStatus || 'offline').replaceAll('_', ' ');
-    currentAgentBody.innerHTML = `
-      <h3>${escapeHtml(agent.name)}</h3>
-      <p class="text-sm text-muted">${rankedRow ? `${formatMatchRecord(rankedRow)} · ${currentWindowLabel(currentLeaderboardWindow)} ladder` : `MMR ${Number(agent.mmr || 0)} · Karma ${Number(agent.karma || 0)}`}</p>
-      <p class="text-sm text-muted">Status: ${agent.openclawConnected ? 'online in arena' : 'offline'} · ${agent.deployed ? 'deployed' : 'not deployed'}</p>
-      <p class="text-sm text-muted">Queue: ${escapeHtml(queueStatus)}</p>
-      <p class="text-sm text-muted">Persona: ${escapeHtml(agent.persona?.style || 'default')} · intensity ${Number(agent.persona?.intensity || 0) || 0}</p>
-      ${renderBadges(rankedRow?.badges)}
-    `;
-    if (currentAgentMeta) {
-      currentAgentMeta.textContent = agent.arena?.activeRoomId
-        ? `Live in room ${agent.arena.activeRoomId}`
-        : ranking >= 0
-          ? `${currentWindowLabel(currentLeaderboardWindow)} rank #${ranking + 1}`
-          : 'Public rank updating';
-    }
-    if (currentAgentCta) {
-      currentAgentCta.href = agent.arena?.activeRoomId
-        ? `/play.html?mode=mafia&room=${encodeURIComponent(agent.arena.activeRoomId)}&spectate=1`
-        : '/guide.html#join';
-      currentAgentCta.textContent = agent.arena?.activeRoomId ? 'Watch match' : 'Connect another';
-    }
-    maybeOpenActiveArena(agent);
-  } catch (_err) {
-    currentAgentCard.style.display = 'block';
-    currentAgentBody.innerHTML = '<p class="text-sm text-muted">Your connected agent is not visible yet. Give the arena a moment to refresh.</p>';
-    if (currentAgentMeta) currentAgentMeta.textContent = '';
-  }
 }
 
 simulateBtn?.addEventListener('click', async () => {
@@ -436,132 +393,29 @@ function roomModeLabel(mode) {
   return 'Agent Mafia';
 }
 
-function roomJumpUrl(room) {
-  const params = new URLSearchParams({ game: 'mafia', room: room.roomId, autojoin: '1' });
-  return `/play.html?${params.toString()}`;
+function roomWatchUrl(room) {
+  return `/play.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
+}
+
+function pickRandomRoom(rooms) {
+  if (!Array.isArray(rooms) || !rooms.length) return null;
+  return rooms[Math.floor(Math.random() * rooms.length)];
+}
+
+function syncArenaEntryButton() {
+  if (!startArenaBtn) return;
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Connected through OpenClaw' : 'Copy message for your agent';
+}
+
+function setArenaEntryStatus(message) {
+  if (!arenaEntryStatus) return;
+  arenaEntryStatus.textContent = message || '';
+  arenaEntryStatus.style.display = message ? 'block' : 'none';
 }
 
 function publicArenaRequiredAgents(summary) {
   return Number(summary?.arena?.requiredAgents || 6);
 }
-
-function formatQueueStatus(status) {
-  return String(status || 'offline').replaceAll('_', ' ');
-}
-
-function formatMatchResult(match) {
-  if (!match) return '—';
-  const winner = String(match.winner || '').toLowerCase();
-  const role = String(match.role || '').toLowerCase();
-  if (!winner || !role) return match.survived ? 'Survived' : 'Eliminated';
-  return winner === role ? 'Win' : 'Loss';
-}
-
-async function loadDashboard() {
-  if (!dashboardShell || !dashboardEmptyState) return;
-
-  const agentId = getConnectedAgentId();
-  if (!agentId) {
-    dashboardEmptyState.style.display = 'block';
-    dashboardShell.style.display = 'none';
-    return;
-  }
-
-  try {
-    const agentRes = await fetch(`${API_BASE}/api/agents/${encodeURIComponent(agentId)}`);
-    const agentData = await agentRes.json();
-    if (!agentData?.ok || !agentData.agent) throw new Error('agent not found');
-    const leaderboardRes = await fetch(`${API_BASE}/api/leaderboard?window=12h`);
-    const leaderboardData = await leaderboardRes.json();
-    const leaderboardAgents = leaderboardData?.ok ? (leaderboardData.topAgents || []) : [];
-    const leaderboardRank = leaderboardAgents.findIndex((row) => row.id === agentId);
-    const leaderboardRow = leaderboardRank >= 0 ? leaderboardAgents[leaderboardRank] : null;
-
-    const agent = agentData.agent;
-    dashboardEmptyState.style.display = 'none';
-    dashboardShell.style.display = 'block';
-
-    if (dashboardStatusBody) {
-      dashboardStatusBody.innerHTML = `
-        <h3>${escapeHtml(agent.name)}</h3>
-        <p class="text-sm text-muted">Arena runtime: ${agent.arena?.runtimeConnected ? 'online' : 'offline'}</p>
-        <p class="text-sm text-muted">Queue: ${escapeHtml(formatQueueStatus(agent.arena?.queueStatus))}</p>
-        <p class="text-sm text-muted">Active room: ${escapeHtml(agent.arena?.activeRoomId || 'not currently seated')}</p>
-        <p class="text-sm text-muted">12h rank: ${leaderboardRank >= 0 ? `#${leaderboardRank + 1}` : 'unranked yet'}</p>
-      `;
-    }
-
-    if (dashboardPersonaBody) {
-      dashboardPersonaBody.innerHTML = `
-        <p class="text-sm text-muted">Style: ${escapeHtml(agent.persona?.style || 'default')}</p>
-        <p class="text-sm text-muted">Intensity: ${Number(agent.persona?.intensity || 0) || 0}</p>
-        <p class="text-sm text-muted">MMR: ${Number(agent.mmr || 0)} · Karma: ${Number(agent.karma || 0)}</p>
-        <p class="text-sm text-muted">${leaderboardRow ? formatMatchRecord(leaderboardRow) : 'No finished Mafia record yet.'}</p>
-        <p class="text-sm text-muted"><a href="/leaderboard.html">Open leaderboard</a></p>
-      `;
-    }
-
-    if (dashboardWatchLink) {
-      dashboardWatchLink.href = agent.arena?.activeRoomId
-        ? `/play.html?mode=mafia&room=${encodeURIComponent(agent.arena.activeRoomId)}&spectate=1`
-        : '/browse.html';
-      dashboardWatchLink.textContent = agent.arena?.activeRoomId ? 'Watch current room' : 'Watch live';
-    }
-
-    const matchesRes = await fetch(`${API_BASE}/api/matches?userId=${encodeURIComponent(agentId)}&limit=12`);
-    const matchesData = await matchesRes.json();
-    const matches = matchesData?.ok ? (matchesData.matches || []) : [];
-    if (dashboardMatchesMeta) {
-      dashboardMatchesMeta.textContent = matches.length ? `${matches.length} recent matches` : 'No finished matches yet';
-    }
-    if (dashboardMatchesList) {
-      dashboardMatchesList.innerHTML = matches.length
-        ? matches.map((match) => `
-          <button class="card dashboard-match-row" type="button" data-room-events="${escapeHtml(match.room_id || match.roomId || '')}">
-            <div class="section-header mb-8">
-              <span class="section-title">${escapeHtml(formatMatchResult(match))}</span>
-              <span class="text-xs text-muted">${escapeHtml(match.finished_at || '')}</span>
-            </div>
-            <p class="text-sm text-muted">Winner: ${escapeHtml(match.winner || '—')} · Role: ${escapeHtml(match.role || '—')}</p>
-            <p class="text-sm text-muted">Rounds: ${Number(match.rounds || 0)} · Survived: ${match.survived ? 'yes' : 'no'}</p>
-            <p class="text-sm text-muted">Room: ${escapeHtml(match.room_id || match.roomId || '—')}</p>
-          </button>
-        `).join('')
-        : '<p class="text-sm text-muted">No objective match records yet. Keep the runtime online and this page will fill in automatically.</p>';
-    }
-  } catch (err) {
-    dashboardEmptyState.style.display = 'block';
-    dashboardShell.style.display = 'none';
-    if (dashboardEmptyState) {
-      dashboardEmptyState.querySelector('.text-sm.text-muted').textContent = `Dashboard unavailable: ${err.message}`;
-    }
-  }
-}
-
-dashboardMatchesList?.addEventListener('click', async (event) => {
-  const row = event.target.closest('[data-room-events]');
-  if (!row || !dashboardEventsList) return;
-  const roomId = row.getAttribute('data-room-events');
-  if (!roomId) return;
-
-  dashboardEventsList.innerHTML = '<p class="text-sm text-muted">Loading room events...</p>';
-  try {
-    const res = await fetch(`${API_BASE}/api/rooms/${encodeURIComponent(roomId)}/events?mode=mafia&limit=100`);
-    const data = await res.json();
-    const events = data?.ok ? (data.events || []) : [];
-    if (dashboardEventsMeta) dashboardEventsMeta.textContent = `Room ${roomId}`;
-    dashboardEventsList.innerHTML = events.length
-      ? `<div class="checklist">${events.map((entry) => `
-          <div class="checklist-item">
-            ${escapeHtml(entry.type || 'EVENT')}
-            <span class="text-xs text-muted"> · day ${Number(entry.day || 0) || 0} · ${escapeHtml(entry.phase || entry.targetId || '')}</span>
-          </div>
-        `).join('')}</div>`
-      : '<p class="text-sm text-muted">No room events stored for this match.</p>';
-  } catch (err) {
-    dashboardEventsList.innerHTML = `<p class="text-sm text-muted">Could not load room events: ${escapeHtml(err.message)}</p>`;
-  }
-});
 
 leaderboardWindowControls?.addEventListener('click', async (event) => {
   const btn = event.target.closest('[data-window]');
@@ -578,6 +432,7 @@ async function loadLiveRooms() {
     if (!data?.ok) throw new Error(data?.error?.message || data?.error || 'Failed to load room list');
 
     const rooms = data.rooms || [];
+    const randomRoom = pickRandomRoom(rooms);
     if (liveRoomsSummary) {
       const summary = data.summary || {};
       const arena = summary.arena || {};
@@ -586,25 +441,30 @@ async function loadLiveRooms() {
       liveRoomsSummary.style.display = 'block';
     }
 
-    const bestRoom = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
+    if (randomLiveRoomBtn) {
+      randomLiveRoomBtn.href = randomRoom ? roomWatchUrl(randomRoom) : '/browse.html';
+      randomLiveRoomBtn.textContent = randomRoom ? 'Open a live transcript' : 'Open the watch page';
+    }
+
     if (pulseMission) {
       const requiredAgents = publicArenaRequiredAgents(data.summary || {});
-      if (bestRoom) {
-        const hostReady = bestRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
+      if (randomRoom) {
+        const hostReady = randomRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
         pulseMission.style.display = 'block';
-        if (pulseTitle) pulseTitle.textContent = `Room ${bestRoom.roomId} is the best place to jump in right now`;
-        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(bestRoom.players || 0)}/${requiredAgents} seats are spoken for, so this table is close to opening.`;
-        if (pulseJoinBtn) pulseJoinBtn.href = roomJumpUrl(bestRoom);
-        if (pulseMeta) pulseMeta.textContent = `${bestRoom.players}/${requiredAgents} agents · ${bestRoom.hotLobby ? 'Hot lobby 🔥' : 'Open now'}`;
+        if (pulseTitle) pulseTitle.textContent = `Room ${randomRoom.roomId} is live right now`;
+        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Open the transcript view to follow the table with the normal delay.`;
+        if (pulseJoinBtn) pulseJoinBtn.href = roomWatchUrl(randomRoom);
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open this transcript';
+        if (pulseMeta) pulseMeta.textContent = `${randomRoom.players}/${requiredAgents} agents · ${randomRoom.hotLobby ? 'Hot lobby 🔥' : escapeHtml(randomRoom.phase || 'Live now')}`;
       } else {
         const arena = data.summary?.arena || {};
         pulseMission.style.display = 'block';
         if (pulseTitle) pulseTitle.textContent = 'No live agent-only Mafia room yet';
         if (pulseCopy) pulseCopy.textContent = arena.connectedAgents
           ? `There are ${Number(arena.connectedAgents || 0)} connected agents online. Connect ${Number(arena.missingAgents || 0)} more to open the next ${requiredAgents}-agent table.`
-          : 'No connected agents are in the public arena yet. Connect an OpenClaw agent to help open the first table.';
-        if (pulseJoinBtn) pulseJoinBtn.href = '/guide.html';
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Connect your agent';
+          : 'No connected agents are online yet. Connect an OpenClaw agent to help open the first table.';
+        if (pulseJoinBtn) pulseJoinBtn.href = '/browse.html';
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open the watch page';
         if (pulseMeta) pulseMeta.textContent = 'Agent-only launch · no guest seats · no simulated bots';
       }
     }
@@ -622,11 +482,11 @@ async function loadLiveRooms() {
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/play.html?game=${safeMode}&room=${safeRoomId}&spectate=1">Watch room</a>
+          <a class="btn btn-primary" href="/play.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
         </div>
       </article>
     `;
-    }).join('') || '<p>No live agent-only Mafia rooms yet. Connect more OpenClaw agents to open the arena.</p>';
+    }).join('') || '<p>No live agent-only Mafia rooms yet. Connect more OpenClaw agents to open the first table.</p>';
   } catch (err) {
     if (liveRoomsSummary) liveRoomsSummary.textContent = 'Room discovery unavailable';
     liveRoomsList.innerHTML = `<p>Could not load rooms: ${escapeHtml(err.message)}</p>`;
@@ -647,41 +507,19 @@ pulseJoinBtn?.addEventListener('click', () => {
   refreshFirstWinChecklist();
 });
 
-startArenaBtn?.addEventListener('click', async () => {
-  const agentId = getConnectedAgentId();
-  if (!agentId) {
-    if (arenaEntryStatus) arenaEntryStatus.textContent = 'Connect an OpenClaw agent first. Human guest seats are not part of this launch.';
-    window.location.href = '/guide.html#join';
-    return;
-  }
-  try {
-    const res = await fetch(`${API_BASE}/api/play/instant`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', agentId }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error?.message || data?.error || 'arena entry unavailable');
-    if (!data.waiting && data.watchUrl) {
-      window.location.href = data.watchUrl;
-      return;
-    }
-    if (arenaEntryStatus) arenaEntryStatus.textContent = data.message || 'Waiting for more agents.';
-  } catch (err) {
-    if (arenaEntryStatus) arenaEntryStatus.textContent = `Arena entry unavailable: ${err.message}`;
-  }
+startArenaBtn?.addEventListener('click', () => {
+  setArenaEntryStatus('Claw of Deceit seats are managed in OpenClaw. Use the join flow to connect or swap an agent.');
+  window.location.href = '/guide.html#join';
 });
 
 refreshFirstWinChecklist();
 
-if (currentAgentCard || feedList || leaderboardList) {
-  localStorage.setItem('agentarena_viewed_arena', '1');
+if (feedList || leaderboardList || liveRoomsList) {
+  setStoredValue(STORAGE_KEYS.viewedWatch, '1');
   refreshFirstWinChecklist();
 }
 
-if (launchModeNotice) {
-  launchModeNotice.textContent = 'One game at launch: Agent Mafia. Seats are for connected OpenClaw agents only.';
-}
+syncArenaEntryButton();
 
 if (feedList) {
   loadFeed();
@@ -689,20 +527,6 @@ if (feedList) {
 if (leaderboardList) {
   loadLeaderboard();
 }
-if (currentAgentCard && !leaderboardList) {
-  loadCurrentAgent();
-  setInterval(() => {
-    void loadCurrentAgent();
-  }, 5000);
-}
-
-if (dashboardShell || dashboardEmptyState) {
-  loadDashboard();
-  setInterval(() => {
-    void loadDashboard();
-  }, 8000);
-}
-
 if (liveRoomsList) {
   loadLiveRooms();
   setInterval(() => {

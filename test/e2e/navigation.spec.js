@@ -5,7 +5,6 @@ const PAGES = [
   { path: '/play.html', name: 'play' },
   { path: '/browse.html', name: 'browse' },
   { path: '/leaderboard.html', name: 'leaderboard' },
-  { path: '/dashboard.html', name: 'dashboard' },
   { path: '/guide.html', name: 'guide' },
   { path: '/games-info.html', name: 'games-info' },
 ];
@@ -23,7 +22,7 @@ test.describe('Public navigation', () => {
 
     test(`${entry.name} has an agent-first primary CTA`, async ({ page }) => {
       await page.goto(entry.path);
-      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Connect your agent|Watch live|Back to Arena/);
+      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Copy message/);
     });
   }
 });
@@ -31,11 +30,10 @@ test.describe('Public navigation', () => {
 test.describe('Homepage', () => {
   test('focuses on Agent Mafia and agent onboarding', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1')).toContainText('Watch agents lie, accuse, and expose the Mafia');
+    await expect(page.locator('h1')).toContainText('Send your OpenClaw agent into a live room of lies');
     await expect(page.locator('#liveRoomsList')).toBeVisible();
-    await expect(page.locator('text=Live agent deception')).toBeVisible();
-    await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Connect your agent');
-    await expect(page.locator('.mvp-hero .mvp-copy')).toContainText('six agents bluff');
+    await expect(page.locator('text=Public social deduction')).toBeVisible();
+    await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Copy message for your agent');
     await expect(page.locator('text=Six connected agents enter the room')).toBeVisible();
   });
 
@@ -47,20 +45,21 @@ test.describe('Homepage', () => {
 });
 
 test.describe('Play page', () => {
-  test('is the live owner arena page', async ({ page }) => {
+  test('is the live transcript page', async ({ page }) => {
     await page.goto('/play.html');
     await expect(page.locator('#startArenaBtn')).toBeVisible();
-    await expect(page.locator('h1')).toContainText('Your live Agent Mafia control room');
-    await expect(page.locator('text=Every public seat belongs to a connected OpenClaw agent')).toBeVisible();
+    await expect(page.locator('h1')).toContainText('Follow a live Claw of Deceit table');
+    await expect(page.locator('text=Public transcript')).toBeVisible();
     await expect(page.locator('#joinBtn')).toHaveCount(0);
     await expect(page.locator('#quickMatchBtn')).toHaveCount(0);
+    await expect(page.locator('#rematchBtn')).toHaveCount(0);
   });
 });
 
 test.describe('Watch page', () => {
-  test('shows six-seat spectator copy and a rankings CTA', async ({ page }) => {
+  test('shows transcript-first spectator copy and a rankings CTA', async ({ page }) => {
     await page.goto('/browse.html');
-    await expect(page.locator('text=next six-agent table')).toBeVisible();
+    await expect(page.locator('text=public transcript')).toBeVisible();
     await expect(page.locator('a[href="/leaderboard.html"]').filter({ hasText: 'Open leaderboard' })).toBeVisible();
   });
 });
@@ -68,7 +67,7 @@ test.describe('Watch page', () => {
 test.describe('Leaderboard page', () => {
   test('has a dedicated current-winners view', async ({ page }) => {
     await page.goto('/leaderboard.html');
-    await expect(page.locator('h1')).toContainText('Who is winning Agent Mafia right now?');
+    await expect(page.locator('h1')).toContainText('Who is winning in Claw of Deceit right now?');
     await expect(page.locator('#leaderboardWindowControls [data-window="12h"].is-active')).toBeVisible();
     await expect(page.locator('text=completed Mafia matches')).toBeVisible();
   });
@@ -88,20 +87,15 @@ test.describe('Roadmap and docs', () => {
     await page.goto('/guide.html');
     await expect(page.locator('#join')).toBeVisible();
     await expect(page.locator('#generateCmdBtn')).toBeVisible();
-    await expect(page.locator('#quickstart code').filter({ hasText: '--decision-cmd' }).first()).toBeVisible();
-    await expect(page.locator('text=What Agent Arena handles')).toBeVisible();
-    await expect(page.locator('details')).toHaveCount(0);
+    await expect(page.locator('text=What Claw of Deceit handles')).toBeVisible();
+    await expect(page.locator('details')).toHaveCount(1);
   });
 });
 
 test.describe('Dashboard', () => {
-  test('shows the owner dashboard empty state before an agent is connected', async ({ page }) => {
+  test('redirects legacy dashboard traffic to the join flow', async ({ page }) => {
     await page.goto('/dashboard.html');
-    await expect(page.locator('h1')).toContainText('Track your agent');
-    await expect(page.locator('text=Use this after matches, not during them')).toBeVisible();
-    await expect(page.locator('#dashboardEmptyState')).toBeVisible();
-    await expect(page.locator('#dashboardEmptyState')).toContainText('No agent connected yet');
-    await expect(page.locator('#dashboardShell')).toBeHidden();
+    await expect(page).toHaveURL(/\/guide\.html#join$/);
   });
 });
 

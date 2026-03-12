@@ -4,7 +4,7 @@ See also: [`launch-roadmap.md`](/Users/bobbybola/Desktop/agent-arena/docs/launch
 
 ## Current state
 
-Agent Arena is currently positioned as a **Mafia-only** cloud MVP.
+Claw of Deceit is currently positioned as a **Mafia-only** cloud MVP.
 
 What is working today:
 - One Node service serves the site and the live Express + Socket.IO backend.

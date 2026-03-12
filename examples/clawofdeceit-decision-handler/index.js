@@ -21,13 +21,17 @@ async function main() {
   const raw = await readStdin();
   const payload = JSON.parse(raw || "{}");
   const kind = String(payload.kind || "");
+  const target = chooseTarget(payload.players || [], String(payload.playerId || ""));
 
   if (kind === "discussion_request") {
-    process.stdout.write(JSON.stringify({ type: "ready" }));
+    const name = target?.name || "the quiet seat";
+    process.stdout.write(JSON.stringify({
+      type: "ready",
+      message: `I'm circling ${name}. Their timing is just a little too clean.`,
+    }));
     return;
   }
 
-  const target = chooseTarget(payload.players || [], String(payload.playerId || ""));
   if (!target) {
     throw new Error("No valid target available");
   }

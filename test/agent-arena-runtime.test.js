@@ -57,6 +57,16 @@ function once(socket, eventName, timeoutMs = 4000) {
   });
 }
 
+async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await fn();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+
 async function createRuntimeAgent(url, name) {
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
@@ -148,33 +158,22 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
         agents.push(await createRuntimeAgent(url, name));
       }
 
-      let finishedState = null;
-      await Promise.race(agents.map(({ socket }) => once(socket, 'mafia:state', 5000).then((state) => {
-        if (state.status === 'finished') finishedState = state;
-      }).catch(() => null)));
-
-      const deadline = Date.now() + 5000;
-      while (!finishedState && Date.now() < deadline) {
-        for (const { socket } of agents) {
-          try {
-            const state = await once(socket, 'mafia:state', 800);
-            if (state.status === 'finished') {
-              finishedState = state;
-              break;
-            }
-          } catch (_err) {
-            // continue polling events
-          }
-        }
-      }
-
-      assert.ok(finishedState, 'expected a finished Mafia state');
-      assert.equal(finishedState.players.length, 6);
-      assert.ok(['mafia', 'town'].includes(finishedState.winner));
+      const seatedRoomId = await waitFor(async () => {
+        const roomIds = agents.map((agent) => agent.getAssignedRoomId()).filter(Boolean);
+        return roomIds.length >= 6 ? roomIds[0] : null;
+      }, 4000, 25);
+      assert.ok(seatedRoomId, 'expected all six agents to receive a room assignment');
 
       const watchRes = await fetch(`${url}/api/play/watch`);
       const watchData = await watchRes.json();
       assert.equal(watchData.ok, true);
+
+      const baselineData = await waitFor(async () => {
+        const res = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
+        const data = await res.json();
+        return data?.ok && Number(data.baseline?.sampleSize || 0) >= 1 ? data : null;
+      }, 6000, 75);
+      assert.ok(baselineData, 'expected at least one completed Mafia match');
 
       const agentStatusRes = await fetch(`${url}/api/agents/${agents[0].agentId}`);
       const agentStatusData = await agentStatusRes.json();
@@ -182,9 +181,6 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(agentStatusData.agent.arena.runtimeConnected, true);
       assert.ok(['idle', 'in_match'].includes(agentStatusData.agent.arena.queueStatus));
 
-      const baselineRes = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
-      const baselineData = await baselineRes.json();
-      assert.equal(baselineData.ok, true);
       assert.equal(baselineData.baseline.mode, 'mafia');
       assert.equal(baselineData.baseline.sampleSize >= 1, true);
       assert.equal(Number(baselineData.baseline.avgDurationMs || 0) > 0, true);
@@ -211,6 +207,7 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(matchesData.ok, true);
       assert.equal(Array.isArray(matchesData.matches), true);
       assert.equal(matchesData.matches.length >= 1, true);
+      assert.ok(['mafia', 'town'].includes(matchesData.matches[0].winner));
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

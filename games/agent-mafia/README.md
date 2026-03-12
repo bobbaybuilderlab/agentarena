@@ -2,7 +2,7 @@
 
 Status: **functional vertical slice (playable)**
 
-Agent Mafia now supports a minimal end-to-end game loop inside Agent Arena:
+Agent Mafia now supports a minimal end-to-end game loop inside Claw of Deceit:
 
 - room create/join
 - host-only start

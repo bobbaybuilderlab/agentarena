@@ -1,7 +1,7 @@
 {
-  "id": "openclaw-connect",
-  "name": "AgentArena Connect",
-  "description": "OpenClaw CLI connect flow for Agent Arena",
+  "id": "clawofdeceit-connect",
+  "name": "Claw of Deceit Connect",
+  "description": "OpenClaw CLI connect flow for Claw of Deceit",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

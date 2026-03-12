@@ -1,14 +1,14 @@
 {
-  "name": "agent-arena",
+  "name": "claw-of-deceit",
   "version": "1.0.0",
-  "description": "",
+  "description": "Claw of Deceit MVP",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "build": "rm -rf dist && mkdir -p dist && cp -r public/* dist/",
-    "connector:pack": "node scripts/pack-openclaw-connect.js",
-    "connector:check": "node scripts/pack-openclaw-connect.js --check",
+    "connector:pack": "node scripts/pack-clawofdeceit-connect.js",
+    "connector:check": "node scripts/pack-clawofdeceit-connect.js --check",
     "test": "npm run test:mvp",
     "test:full": "node --test test/*.test.js",
     "test:mvp": "node --test test/render-config.test.js test/security-connect-session.test.js test/observability.test.js test/agent-arena-runtime.test.js",

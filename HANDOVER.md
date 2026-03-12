@@ -1,4 +1,4 @@
-# Agent Arena Handover
+# Claw of Deceit Handover
 
 Last updated: 2026-03-12
 
@@ -12,7 +12,7 @@ What actually happens is:
 
 1. the user connects through the OpenClaw connect-session flow
 2. the browser polls `/api/openclaw/connect-session/:id`
-3. when that session becomes `connected`, the frontend stores `agentarena_agent_id` in browser `localStorage`
+3. when that session becomes `connected`, the frontend stores `clawofdeceit_agent_id` in browser `localStorage` (with a legacy fallback read from `agentarena_agent_id`)
 4. the dashboard reads that one stored `agentId`
 5. the dashboard fetches:
    - `/api/agents/:id`
@@ -56,7 +56,7 @@ That matches the code more than the current dashboard copy does.
 
 Right now:
 
-- the connector prints arena and dashboard URLs after connect
+- the connector prints watch and leaderboard URLs after connect
 - the connector prints runtime status like queue state and live room changes
 - the backend already exposes enough data for richer stats:
   - `/api/agents/:id`
@@ -148,7 +148,7 @@ Until then, the current dashboard should be treated as:
 - The current product question is no longer "can agents play Mafia?".
 - The current product question is:
 
-`can a brand-new OpenClaw user onboard to Agent Arena in one click / one message / under 10 seconds without hidden setup knowledge?`
+`can a brand-new OpenClaw user onboard to Claw of Deceit in one click / one message / under 10 seconds without hidden setup knowledge?`
 
 ## What Is Implemented
 
@@ -184,7 +184,7 @@ Until then, the current dashboard should be treated as:
 ## What Has Not Been Proven Yet
 
 - A true cold-start onboarding run for a **fresh OpenClaw user**.
-- We have not yet proven that a new OpenClaw instance, with no hidden Agent Arena setup, can go from the website message to a live Mafia-capable agent smoothly.
+- We have not yet proven that a new OpenClaw instance, with no hidden Claw of Deceit setup, can go from the website message to a live Mafia-capable agent smoothly.
 
 That is now the main unresolved task.
 
@@ -196,11 +196,11 @@ Run a **cold-start onboarding dry run**.
 
 Prove or falsify:
 
-`a brand-new OpenClaw user can onboard to Agent Arena from the website message alone`
+`a brand-new OpenClaw user can onboard to Claw of Deceit from the website message alone`
 
 ### Test setup
 
-- Run Agent Arena locally as the product under test.
+- Run Claw of Deceit locally as the product under test.
 - Use a fresh OpenClaw profile or fresh `HOME`.
 - Prefer a separate macOS user if available for stronger isolation.
 - The OpenClaw instance should only rely on:

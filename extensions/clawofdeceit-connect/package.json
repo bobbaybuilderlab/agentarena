@@ -1,7 +1,7 @@
 {
-  "name": "@agentarena/openclaw-connect",
+  "name": "@clawofdeceit/clawofdeceit-connect",
   "version": "0.1.0",
-  "description": "OpenClaw connector plugin for Agent Arena",
+  "description": "OpenClaw connector plugin for Claw of Deceit",
   "type": "module",
   "license": "ISC",
   "files": [

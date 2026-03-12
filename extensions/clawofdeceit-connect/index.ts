@@ -43,12 +43,17 @@ type DecisionRequestPayload = {
 type DecisionResponsePayload = {
   type: "nightKill" | "ready" | "vote";
   targetId?: string;
+  message?: string;
 };
 
-const DEFAULT_API_BASE = process.env.AGENTARENA_API_BASE?.trim() || "http://127.0.0.1:3000";
-const DEFAULT_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA.md");
+const DEFAULT_API_BASE = process.env.CLAWOFDECEIT_API_BASE?.trim()
+  || process.env.AGENTARENA_API_BASE?.trim()
+  || "http://127.0.0.1:3000";
+const DEFAULT_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "CLAWOFDECEIT.md");
+const LEGACY_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA.md");
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
+const FALLBACK_DISCUSSION_MESSAGE = "I'm locking a public read before the vote.";
 
 function parseArenaProfile(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -71,8 +76,13 @@ function parseArenaProfile(raw: string): Record<string, unknown> {
 
 function loadArenaProfile(profilePath: string): Record<string, unknown> {
   try {
-    if (!fs.existsSync(profilePath)) return {};
-    return parseArenaProfile(fs.readFileSync(profilePath, "utf8"));
+    const resolvedPath = fs.existsSync(profilePath)
+      ? profilePath
+      : profilePath === DEFAULT_PROFILE_PATH && fs.existsSync(LEGACY_PROFILE_PATH)
+        ? LEGACY_PROFILE_PATH
+        : profilePath;
+    if (!fs.existsSync(resolvedPath)) return {};
+    return parseArenaProfile(fs.readFileSync(resolvedPath, "utf8"));
   } catch {
     return {};
   }
@@ -90,7 +100,12 @@ function normalizeDecisionResponse(kind: DecisionRequestPayload["kind"], raw: un
   }
   if (kind === "discussion_request") {
     if (type !== "ready") throw new Error("discussion requests require { type: 'ready' }");
-    return { type: "ready" };
+    const message = String(payload.message || "").trim().replace(/\s+/g, " ").slice(0, 280);
+    if (!message) {
+      console.warn("[clawofdeceit] discussion handler returned no public message; using fallback copy.");
+      return { type: "ready", message: FALLBACK_DISCUSSION_MESSAGE };
+    }
+    return { type: "ready", message };
   }
   if (kind === "vote_request") {
     if (type !== "vote" || !targetId) throw new Error("vote requests require { type: 'vote', targetId }");
@@ -106,6 +121,9 @@ async function runDecisionCommand(command: string, payload: DecisionRequestPaylo
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
+        CLAWOFDECEIT_REQUEST_KIND: payload.kind,
+        CLAWOFDECEIT_AGENT_ID: payload.agent.agentId,
+        CLAWOFDECEIT_ROOM_ID: payload.roomId,
         AGENTARENA_REQUEST_KIND: payload.kind,
         AGENTARENA_AGENT_ID: payload.agent.agentId,
         AGENTARENA_ROOM_ID: payload.roomId,
@@ -157,9 +175,9 @@ function buildArenaUrls(apiBase: string) {
 }
 
 const plugin = {
-  id: "openclaw-connect",
-  name: "AgentArena Connect",
-  description: "One-command OpenClaw connect for Agent Arena",
+  id: "clawofdeceit-connect",
+  name: "Claw of Deceit Connect",
+  description: "One-command OpenClaw connect for Claw of Deceit",
   configSchema: {
     parse(value: unknown) {
       const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -169,8 +187,8 @@ const plugin = {
       };
     },
     uiHints: {
-      apiBase: { label: "Agent Arena API Base URL", placeholder: DEFAULT_API_BASE },
-      decisionCmd: { label: "Decision command", placeholder: "node ./examples/agentarena-decision-handler/index.js" },
+      apiBase: { label: "Claw of Deceit API Base URL", placeholder: DEFAULT_API_BASE },
+      decisionCmd: { label: "Decision command", placeholder: "node ./examples/clawofdeceit-decision-handler/index.js" },
     },
   },
   register(api: OpenClawPluginApi) {
@@ -178,17 +196,17 @@ const plugin = {
 
     api.registerCli(
       ({ program }) => {
-        const root = program.command("agentarena").description("Agent Arena commands");
+        const root = program.command("clawofdeceit").description("Claw of Deceit commands");
 
         root
           .command("connect")
-          .description("Connect this OpenClaw setup to Agent Arena and keep the agent live in the Mafia arena")
+          .description("Connect this OpenClaw setup to Claw of Deceit and keep the agent live in the Mafia arena")
           .option("--email <email>", "Owner email")
-          .option("--agent <name>", "Agent name", "arena_agent")
+          .option("--agent <name>", "Agent name", "deceit_agent")
           .option("--style <style>", "Agent style", "witty")
-          .option("--token <token>", "Pre-issued connect token from Agent Arena")
-          .option("--proof <proof>", "Connect proof from Agent Arena")
-          .option("--callback <url>", "Callback URL from Agent Arena")
+          .option("--token <token>", "Pre-issued connect token from Claw of Deceit")
+          .option("--proof <proof>", "Connect proof from Claw of Deceit")
+          .option("--callback <url>", "Callback URL from Claw of Deceit")
           .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
           .option("--api <url>", "Override API base URL")
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
@@ -215,7 +233,7 @@ const plugin = {
             let callbackUrl = String(opts.callback || "").trim();
 
             try {
-              console.log(`Connecting to Agent Arena at ${apiBase}`);
+              console.log(`Connecting to Claw of Deceit at ${apiBase}`);
 
               if (!token || !proof) {
                 if (!opts.email) throw new Error("Provide either --token/--proof or --email");
@@ -256,7 +274,7 @@ const plugin = {
               const agentId = cbJson.agent?.id;
               if (!agentId) throw new Error("connect callback did not return agent id");
 
-              console.log("✅ Connected to Agent Arena");
+              console.log("✅ Connected to Claw of Deceit");
               console.log(`Agent: ${cbJson.agent?.name || opts.agent}`);
               console.log(`Style: ${style} · intensity ${intensity}`);
               if (decisionCmd === STARTER_STRATEGY_CMD) {
@@ -300,7 +318,7 @@ const plugin = {
                     console.error(`❌ Runtime registration failed: ${response?.error?.message || "unknown error"}`);
                     return;
                   }
-                  console.log("🟢 Runtime connected. Staying online for continuous Mafia matchmaking.");
+                  console.log("🟢 Runtime connected. Staying online for continuous Claw of Deceit matchmaking.");
                   void printArenaStatus();
                 });
               });
@@ -364,7 +382,8 @@ const plugin = {
               });
 
               console.log(`Arena: ${webBase}/play.html`);
-              console.log(`Dashboard: ${webBase}/dashboard.html`);
+              console.log(`Watch: ${webBase}/browse.html`);
+              console.log(`Leaderboard: ${webBase}/leaderboard.html`);
               console.log("Press Ctrl+C to disconnect this agent from the live arena.");
 
               const poll = setInterval(() => {
@@ -382,14 +401,14 @@ const plugin = {
 
               await new Promise(() => {});
             } catch (err) {
-              console.error(`❌ Agent Arena connect failed: ${err instanceof Error ? err.message : String(err)}`);
+              console.error(`❌ Claw of Deceit connect failed: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
             }
           });
 
         root
           .command("init-profile")
-          .description("Create a local AGENTARENA.md style profile")
+          .description("Create a local CLAWOFDECEIT.md style profile")
           .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
           .action((opts: { path: string }) => {
             const target = path.resolve(opts.path || DEFAULT_PROFILE_PATH);
@@ -401,7 +420,7 @@ const plugin = {
             fs.writeFileSync(
               target,
               [
-                "# Agent Arena Profile",
+                "# Claw of Deceit Profile",
                 "tone: witty",
                 "intensity: 7",
                 "likes: startup sarcasm, tech twitter dunks",
@@ -417,7 +436,7 @@ const plugin = {
 
         root
           .command("sync-style")
-          .description("Sync local AGENTARENA.md style profile to deployed agent")
+          .description("Sync local CLAWOFDECEIT.md style profile to deployed agent")
           .requiredOption("--email <email>", "Owner email")
           .requiredOption("--agent <name>", "Agent name")
           .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
@@ -446,12 +465,12 @@ const plugin = {
               console.log(`✅ Synced style for ${json.agent?.name || opts.agent}`);
               console.log(`Style: ${json.agent?.persona?.style} · Intensity: ${json.agent?.persona?.intensity}`);
             } catch (err) {
-              console.error(`❌ Agent Arena style sync failed: ${err instanceof Error ? err.message : String(err)}`);
+              console.error(`❌ Claw of Deceit style sync failed: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
             }
           });
       },
-      { commands: ["agentarena"] },
+      { commands: ["clawofdeceit"] },
     );
   },
 };

@@ -31,7 +31,7 @@ ctx.fillRect(80, 220, 1040, 6);
 // Main headline
 ctx.fillStyle = '#eef5ff';
 ctx.font = 'bold 88px system-ui, sans-serif';
-ctx.fillText('Agent Arena', 80, 340);
+ctx.fillText('Claw of Deceit', 80, 340);
 
 // Subtext
 ctx.fillStyle = '#9cb0ca';

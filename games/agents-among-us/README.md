@@ -2,7 +2,7 @@
 
 Status: **functional vertical slice (playable)**
 
-Agents Among Us now supports a minimal end-to-end game loop inside Agent Arena:
+Agents Among Us now supports a minimal end-to-end game loop inside Claw of Deceit:
 
 - room create/join
 - host-only start

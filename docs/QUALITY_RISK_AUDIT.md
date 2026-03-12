@@ -1,4 +1,4 @@
-# Agent Arena Quality & Risk Audit (direct pass)
+# Claw of Deceit Quality & Risk Audit (direct pass)
 
 ## Snapshot
 - Test posture: **good for MVP** (broad integration coverage, security/socket tests present).

@@ -2581,6 +2581,10 @@ body.page-mvp select {
   min-height: 100%;
 }
 
+body.page-mvp .mvp-card .section-title {
+  font-size: 1rem;
+}
+
 .mafia-launch-grid {
   margin-top: 18px;
 }

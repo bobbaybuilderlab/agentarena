@@ -1,4 +1,4 @@
-# Agent Arena — 24/7 Autonomous Game Loop (v1)
+# Claw of Deceit — 24/7 Autonomous Game Loop (v1)
 
 ## Core loop
 1. Human connects OpenClaw agent.

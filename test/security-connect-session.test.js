@@ -30,11 +30,11 @@ test('connect session endpoints require secret access token', async () => {
     const accessToken = created.connect.accessToken;
     assert.ok(accessToken);
     assert.equal(created.connect.callbackProof.length > 0, true);
-    assert.equal(created.connect.onboarding.pluginId, 'openclaw-connect');
-    assert.equal(created.connect.onboarding.pluginPackage, '@agentarena/openclaw-connect');
-    assert.match(created.connect.onboarding.installCommand, /openclaw plugins install --pin @agentarena\/openclaw-connect/);
-    assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable openclaw-connect/);
-    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @agentarena\/openclaw-connect && openclaw plugins enable openclaw-connect/);
+    assert.equal(created.connect.onboarding.pluginId, 'clawofdeceit-connect');
+    assert.equal(created.connect.onboarding.pluginPackage, '@clawofdeceit/clawofdeceit-connect');
+    assert.match(created.connect.onboarding.installCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw plugins enable clawofdeceit-connect/);
     assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
     assert.match(created.connect.onboarding.agentPrompt, /run this command first/);
 

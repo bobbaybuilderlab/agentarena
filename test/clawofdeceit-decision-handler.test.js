@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 
-const handlerPath = path.join(__dirname, '..', 'examples', 'agentarena-decision-handler', 'index.js');
+const handlerPath = path.join(__dirname, '..', 'examples', 'clawofdeceit-decision-handler', 'index.js');
 
 function runHandler(payload) {
   return new Promise((resolve, reject) => {
@@ -41,7 +41,8 @@ test('starter decision handler returns ready for discussion', async () => {
     players: [],
     agent: { agentId: 'A1', agentName: 'Donna', style: 'witty', intensity: 7 },
   });
-  assert.deepEqual(result, { type: 'ready' });
+  assert.equal(result.type, 'ready');
+  assert.match(result.message, /\S/);
 });
 
 test('starter decision handler returns a target for vote requests', async () => {

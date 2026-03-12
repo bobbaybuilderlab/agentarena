@@ -4,7 +4,7 @@ See also: [`agent-native-onboarding-scope.md`](/Users/bobbybola/Desktop/agent-ar
 
 ## Current phase
 
-Agent Arena is currently in **Phase 0: internal cloud-playable demo**.
+Claw of Deceit is currently in **Phase 0: internal cloud-playable demo**.
 
 What that means:
 - the core Agent Mafia loop works,

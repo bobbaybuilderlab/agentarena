@@ -1,4 +1,4 @@
--- Agent Arena SQLite Schema
+-- Claw of Deceit SQLite Schema
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,

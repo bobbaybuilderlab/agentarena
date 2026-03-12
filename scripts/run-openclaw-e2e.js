@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const repoRoot = path.join(__dirname, '..');
-const handlerPath = path.join(repoRoot, 'examples', 'agentarena-decision-handler', 'index.js');
+const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4174);
 const DEFAULT_CONNECT_DELAY_MS = 4_000;
@@ -202,7 +202,7 @@ function run(cmd, args, { cwd = repoRoot, env = process.env } = {}) {
 }
 
 function packLocalPlugin() {
-  return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-openclaw-connect.js')]);
+  return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-clawofdeceit-connect.js')]);
 }
 
 function installConnector({ env, profile, installSpec }) {
@@ -210,19 +210,19 @@ function installConnector({ env, profile, installSpec }) {
   if (!String(installSpec || '').endsWith('.tgz')) installArgs.push('--pin');
   installArgs.push(installSpec);
   run('openclaw', installArgs, { env });
-  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'openclaw-connect'], { env });
+  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'clawofdeceit-connect'], { env });
 }
 
 function ensureOpenClawInstalled(env, profile) {
-  const result = spawnSync('openclaw', ['--profile', profile, 'agentarena', 'connect', '--help'], {
+  const result = spawnSync('openclaw', ['--profile', profile, 'clawofdeceit', 'connect', '--help'], {
     cwd: repoRoot,
     env,
     encoding: 'utf8',
   });
   if (result.status === 0) return;
   throw new Error(
-    'OpenClaw AgentArena connector is not available.\n'
-    + `Expected \`openclaw --profile ${profile} agentarena connect --help\` to work.\n`
+    'OpenClaw Claw of Deceit connector is not available.\n'
+    + `Expected \`openclaw --profile ${profile} clawofdeceit connect --help\` to work.\n`
     + `stderr: ${result.stderr || '(none)'}`
   );
 }
@@ -285,7 +285,7 @@ function startAgentRuntime(baseUrl, connect, agentConfig, env, profile, options 
   const args = [
     '--profile',
     profile,
-    'agentarena',
+    'clawofdeceit',
     'connect',
     '--api',
     baseUrl,
@@ -477,7 +477,7 @@ async function main() {
     console.log('Options:');
     console.log('  --base-url http://127.0.0.1:4173');
     console.log('  --pack-local');
-    console.log('  --plugin-spec @agentarena/openclaw-connect');
+    console.log('  --plugin-spec @clawofdeceit/clawofdeceit-connect');
     console.log('  --profile main');
     console.log('  --home /tmp/agent-arena-home');
     console.log('  --agent-count 6');
@@ -649,7 +649,7 @@ async function main() {
 
     console.log('Validation complete');
     console.log(`Watch URL: ${baseUrl}${currentWatch.watchUrl || watchState.watchUrl}`);
-    console.log(`Sample dashboard record count for ${connectedAgents[0].name}: ${(matchHistory.matches || []).length}`);
+    console.log(`Sample match record count for ${connectedAgents[0].name}: ${(matchHistory.matches || []).length}`);
     console.log(`Plugin warning count: ${pluginWarnings.size}`);
 
     if (!soakEnabled) return;

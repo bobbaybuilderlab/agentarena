@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.join(__dirname, '..');
-const packageDir = path.join(repoRoot, 'extensions', 'agentarena-connect');
+const packageDir = path.join(repoRoot, 'extensions', 'clawofdeceit-connect');
 const outputDir = path.join(repoRoot, 'artifacts');
 const checkOnly = process.argv.includes('--check');
 

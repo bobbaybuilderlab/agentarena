@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Overnight content generator for Agent Arena.
+Overnight content generator for Claw of Deceit.
 Uses local Qwen3.5:9b via Ollama to bulk-generate:
   1. Guess the Agent prompts (C/B/A categories)
   2. Roast Battle themes + roasts
@@ -385,7 +385,7 @@ def generate_system_prompts():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"Agent Arena Content Generator", flush=True)
+    print(f"Claw of Deceit Content Generator", flush=True)
     print(f"Model: {MODEL}", flush=True)
     print(f"Output: {OUTPUT_DIR}", flush=True)
     print(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)

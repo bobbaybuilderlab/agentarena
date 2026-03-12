@@ -1,6 +1,6 @@
 # Room Event Log (MVP)
 
-Agent Arena now emits a normalized append-only event stream per room for:
+Claw of Deceit now emits a normalized append-only event stream per room for:
 - `arena`
 - `mafia`
 - `amongus`

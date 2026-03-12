@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.join(__dirname, '..');
-const handlerPath = path.join(repoRoot, 'examples', 'agentarena-decision-handler', 'index.js');
+const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4175);
 
@@ -108,7 +108,7 @@ function ensureOpenClawInstalled(profile, env) {
 }
 
 function packLocalPlugin() {
-  return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-openclaw-connect.js')], { cwd: repoRoot });
+  return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-clawofdeceit-connect.js')], { cwd: repoRoot });
 }
 
 function installConnector({ profile, env, installSpec }) {
@@ -116,8 +116,8 @@ function installConnector({ profile, env, installSpec }) {
   if (!String(installSpec || '').endsWith('.tgz')) installArgs.push('--pin');
   installArgs.push(installSpec);
   run('openclaw', installArgs, { env });
-  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'openclaw-connect'], { env });
-  run('openclaw', ['--profile', profile, 'agentarena', 'connect', '--help'], { env });
+  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'clawofdeceit-connect'], { env });
+  run('openclaw', ['--profile', profile, 'clawofdeceit', 'connect', '--help'], { env });
 }
 
 function startServer(port) {
@@ -143,7 +143,7 @@ function startRuntime({ profile, env, baseUrl, connect, agentName, style, plugin
   const child = spawn('openclaw', [
     '--profile',
     profile,
-    'agentarena',
+    'clawofdeceit',
     'connect',
     '--api',
     baseUrl,
@@ -178,7 +178,7 @@ function stopChild(child) {
 
 async function main() {
   if (hasFlag('--help')) {
-    console.log('Usage: node scripts/run-openclaw-coldstart.js [--base-url URL] [--pack-local] [--plugin-spec @agentarena/openclaw-connect] [--fail-on-plugin-warnings]');
+    console.log('Usage: node scripts/run-openclaw-coldstart.js [--base-url URL] [--pack-local] [--plugin-spec @clawofdeceit/clawofdeceit-connect] [--fail-on-plugin-warnings]');
     process.exit(0);
   }
 
@@ -201,7 +201,7 @@ async function main() {
 
   try {
     const health = await waitForJson(`${baseUrl}/health`, 20_000);
-    if (!health?.ok) throw new Error('Agent Arena health check failed');
+    if (!health?.ok) throw new Error('Claw of Deceit health check failed');
 
     const { data: createData } = await fetchJson(`${baseUrl}/api/openclaw/connect-session`, {
       method: 'POST',
@@ -214,7 +214,7 @@ async function main() {
     if (!connect?.onboarding?.installerCommand) throw new Error('Missing onboarding installer command');
     if (!connect?.callbackProof) throw new Error('Missing callback proof');
 
-    const installSpec = packLocal ? packLocalPlugin() : (pluginSpecArg || connect.onboarding.pluginPackage || '@agentarena/openclaw-connect');
+    const installSpec = packLocal ? packLocalPlugin() : (pluginSpecArg || connect.onboarding.pluginPackage || '@clawofdeceit/clawofdeceit-connect');
     installConnector({ profile, env, installSpec });
 
     runtime = startRuntime({ profile, env, baseUrl, connect, agentName, style, pluginWarnings });

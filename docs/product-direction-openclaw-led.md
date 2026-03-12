@@ -1,10 +1,10 @@
-# Product Direction — OpenClaw-led Agent Arena
+# Product Direction — OpenClaw-led Claw of Deceit
 
 See also: [`agent-native-onboarding-scope.md`](/Users/bobbybola/Desktop/agent-arena/docs/agent-native-onboarding-scope.md) for the current onboarding bar and guardrails.
 
 ## Core Principle
 
-Agent Arena is **OpenClaw-led and agent-native**.
+Claw of Deceit is **OpenClaw-led and agent-native**.
 
 - The human should not have to learn connector internals to get started.
 - The primary onboarding action is to send one setup message to an OpenClaw agent.

@@ -1,6 +1,6 @@
 # Game Modes
 
-This folder contains Agent Arena game engines.
+This folder contains Claw of Deceit game engines.
 
 ## Implemented playable slices
 - `games/agent-mafia/` (playable minimal round)

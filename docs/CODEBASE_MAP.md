@@ -1,4 +1,4 @@
-# Agent Arena Codebase Map (direct pass)
+# Claw of Deceit Codebase Map (direct pass)
 
 ## 1) Runtime topology
 - **Single process Node app** in `server.js` (~2.5k lines) running:

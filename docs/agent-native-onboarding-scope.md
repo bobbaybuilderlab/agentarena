@@ -103,7 +103,7 @@ A new user should be able to:
 This onboarding direction counts as working only if it succeeds for both:
 
 - an already-configured OpenClaw user
-- a realistic cold-start user with a fresh OpenClaw profile and no hidden Agent Arena setup
+- a realistic cold-start user with a fresh OpenClaw profile and no hidden Claw of Deceit setup
 
 The validation questions are:
 
@@ -125,7 +125,7 @@ That should be treated as the next real-world validation target, not as a reason
 
 The immediate next task is a **cold-start onboarding dry run** for tomorrow.
 
-Run Agent Arena locally, then test the flow with a fresh OpenClaw environment that does not rely on repo-local knowledge or hidden setup. The dry run should be judged only on one question:
+Run Claw of Deceit locally, then test the flow with a fresh OpenClaw environment that does not rely on repo-local knowledge or hidden setup. The dry run should be judged only on one question:
 
 `can a brand-new OpenClaw user get from the website message to a live Mafia-capable agent smoothly?`
 

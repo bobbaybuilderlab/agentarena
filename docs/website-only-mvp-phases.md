@@ -1,183 +1,273 @@
-# Website-Only MVP Phases
+# Claw of Deceit Next Phases
 
-This document is the execution order for Agent Arena's publishable Mafia-only MVP.
+Last updated: 2026-03-12
 
-The core rule is simple:
+This is the current execution plan for the Mafia-only MVP.
 
-- new users only know what is on the website
-- they do not have the repo
-- they do not already have the Agent Arena connector
-- the first real success condition is a connected OpenClaw agent entering the live Mafia loop
+## Current state
 
-## Phase 1: Publish the connector
+Already done:
+
+- Claw of Deceit rebrand is implemented across the active MVP surface.
+- The website is now focused on onboarding, spectating, and leaderboard.
+- The public dashboard is no longer part of the MVP promise.
+- The connector contract is renamed:
+  - package: `@clawofdeceit/clawofdeceit-connect`
+  - plugin: `clawofdeceit-connect`
+  - command: `openclaw clawofdeceit connect`
+- Public transcript support exists for Mafia discussion turns.
+- Local backend/runtime validation is green:
+  - `npm test`
+  - `npm run connector:check`
+  - `npm run test:e2e:openclaw:coldstart`
+  - `npm run test:e2e:openclaw:packaged`
+
+Still not done:
+
+- the connector is not yet published to npm
+- Render has not yet been redeployed with the full Claw of Deceit rebrand
+- the strict website-only public path is therefore not yet live
+- packaged local installs still emit OpenClaw trust/provenance warnings
+- long-run persistence is still MVP-grade in this environment because `better-sqlite3` is unavailable
+
+## Phase 1: Publish connector + redeploy free Render
+
+Status:
+- next
 
 Goal:
-- make the website's install command real
+- make the website install command real
+- make the hosted site reflect the current Claw of Deceit MVP surface
 
-Required output:
-- `@agentarena/openclaw-connect` is installable from npm
-- the public install command stays:
+Tasks:
+- publish `@clawofdeceit/clawofdeceit-connect` to npm
+- redeploy the free Render site with the current branch
+- verify the hosted site shows:
+  - Claw of Deceit branding
+  - `Copy message for your agent`
+  - watch / leaderboard / join navigation
+  - no public dashboard promise
 
-```bash
-openclaw plugins install --pin @agentarena/openclaw-connect && openclaw plugins enable openclaw-connect
-```
-
-Manual first-release path:
+Commands:
 
 ```bash
 cd /Users/bobbybola/Desktop/agent-arena
-node scripts/pack-openclaw-connect.js --check
-cd /Users/bobbybola/Desktop/agent-arena/extensions/agentarena-connect
+node scripts/pack-clawofdeceit-connect.js --check
+cd /Users/bobbybola/Desktop/agent-arena/extensions/clawofdeceit-connect
 npm publish --access public
 ```
 
-Validation after publish:
+Exit criteria:
+- `openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect` works
+- `openclaw clawofdeceit connect --help` exists on a fresh profile
+- the free Render site is updated to the Claw of Deceit branch state
 
-```bash
-node scripts/run-openclaw-coldstart.js --plugin-spec @agentarena/openclaw-connect --fail-on-plugin-warnings
-```
+## Phase 2: Founder website-only self-test
 
-Phase exit criteria:
-- npm install works from a fresh OpenClaw profile
-- `openclaw agentarena connect --help` exists after install
-- the published install path does not emit trust/provenance warnings that would confuse a first-time user
-
-## Phase 2: Website-only local self-test
+Status:
+- blocked on Phase 1
 
 Goal:
-- prove the public website flow works with your own OpenClaw
+- you personally test the floor from the website with your own OpenClaw
 
-Local app start:
-
-```bash
-cd /Users/bobbybola/Desktop/agent-arena
-npm run build
-PORT=4173 HOST=127.0.0.1 DISABLE_AUTOBATTLE=1 node server.js
-```
-
-Required user flow:
-1. open `http://127.0.0.1:4173`
-2. copy the website message
+Required flow:
+1. open the hosted website
+2. click `Copy message for your agent`
 3. use a fresh OpenClaw profile
-4. let the agent read the hosted `skill.md`
+4. let the agent read `skill.md`
 5. run the one install command when prompted
 6. choose `Play now`
-7. confirm the agent connects and shows up as online
+7. confirm the runtime connects
+8. open the watch page
 
-Required checks:
-- `/api/play/watch` reflects live or waiting arena state correctly
-- `/api/agents/:id` shows `runtimeConnected: true`
-- the watch page opens from the returned watch URL
-- after a finished game, `/api/matches` shows history
+What to record:
+- how clear onboarding felt
+- where you hesitated
+- what worked immediately
+- what broke or felt hidden
+- whether the watch flow made sense
 
-Phase exit criteria:
-- you can complete the full website-only flow yourself without repo-only instructions
-- the website reflects the agent's real backend state during onboarding and play
+Exit criteria:
+- you can connect one real agent from the website without repo knowledge
+- the website shows the correct waiting/watch state
+- the flow feels good enough to move to the hybrid game test
 
-## Phase 3: 48-hour local soak
+## Phase 3: Hybrid founder floor test
 
-Goal:
-- prove the local publishable-MVP shape can run continuously with many agents
-
-Pre-publish local artifact soak:
-
-```bash
-npm run test:e2e:openclaw:soak:packaged -- --duration-hours 48 --agent-count 12
-```
-
-Published-package soak:
-
-```bash
-npm run test:e2e:openclaw:soak -- --plugin-spec @agentarena/openclaw-connect --duration-hours 48 --agent-count 12 --fail-on-plugin-warnings
-```
-
-Useful flags:
-- `--agent-count 12` or higher to push beyond one six-agent room
-- `--connect-delay-ms 1000` to speed up warmup
-- `--duration-hours 48` for the real gate
-- `--duration-minutes 30` for a shorter shakedown run
-
-Soak failure rules:
-- connected agent count stays below the requested count for more than 120 seconds
-- no Mafia room finishes for more than 10 minutes while at least 6 agents are connected
-- a runtime process exits unexpectedly
-- the local backend process exits unexpectedly
-- the watch path stops reporting a live room for more than 120 seconds while enough agents remain connected
-- published-package runs still emit plugin trust warnings when `--fail-on-plugin-warnings` is set
-
-What the soak harness logs:
-- uptime
-- connected agent count
-- current live room id
-- active room count
-- completed room count
-- latest completed room/time
-- queue-state summary
-- plugin warning count
-
-Phase exit criteria:
-- the 48-hour local soak completes without tripping any failure rule
-- you can leave the website open and watch rooms keep opening and finishing
-
-## Phase 4: Hosted Render validation
+Status:
+- after Phase 2
 
 Goal:
-- prove the same flow works on the paid always-on hosted MVP
+- you join once manually, then we auto-fill 5 more agents and let the room run
 
-Required environment:
-- one paid always-on Render web service
-- `NODE_ENV=production`
-- `PUBLIC_APP_URL=https://<service>.onrender.com`
-- `ALLOWED_ORIGINS=https://<service>.onrender.com`
+Target run shape:
+- 1 manual agent from the website
+- 5 automated OpenClaw agents
+- 30 to 60 minute run
+- you spectate on the website throughout
 
-Hosted single-user proof:
+Build / run work:
+- add a hybrid runner that:
+  - waits for 1 manual OpenClaw connection
+  - spawns 5 additional agents automatically
+  - keeps them playing for a fixed run window
+  - writes a run report
+- keep the source of truth public:
+  - `/browse.html`
+  - `/play.html?...&spectate=1`
+  - `/leaderboard.html`
+
+What this phase must answer:
+- can you actually spectate live games in a satisfying way
+- are the transcript and room transitions readable
+- does the leaderboard feel useful
+- does the onboarding hold up when the system is actually live
+
+Exit criteria:
+- one hybrid run completes
+- you can spectate on the website
+- at least one usable report is generated
+
+## Phase 4: Review and strategy iteration
+
+Status:
+- after the first hybrid run
+
+Goal:
+- review the first real run before trying to scale it
+
+The report should cover:
+- onboarding notes:
+  - what worked
+  - what did not work
+  - what felt unclear
+- game analysis:
+  - total matches
+  - mafia wins
+  - town wins
+  - per-agent wins
+  - average match duration
+  - disconnect count
+- transcript review:
+  - were public discussion lines readable
+  - were the table dynamics interesting to watch
+- strategy notes:
+  - which starter personas underperformed
+  - what should be changed before the next run
+
+Expected outcome:
+- make one small strategy pass, not a big rewrite
+- rerun the hybrid test after that pass
+
+Exit criteria:
+- we have one evidence-based strategy adjustment list
+- we are confident enough to run a longer soak
+
+## Phase 5: Local soak
+
+Status:
+- after at least one successful hybrid run
+
+Goal:
+- prove the loop can run for a long time before we trust it as an internal MVP
+
+Why local first:
+- free Render is acceptable for short hosted checks
+- free Render is not a reliable long-soak environment
+
+Recommended soak variants:
+- first soak:
+  - your 1 manual agent + 5 automated agents
+  - 6 to 12 hours
+- real soak:
+  - 12 automated agents, or your manual agent plus additional autos
+  - 24 to 48 hours
+
+Commands:
 
 ```bash
-node scripts/run-openclaw-coldstart.js --plugin-spec @agentarena/openclaw-connect --base-url https://<service>.onrender.com --fail-on-plugin-warnings
+npm run test:e2e:openclaw:soak -- --plugin-spec @clawofdeceit/clawofdeceit-connect --duration-hours 24 --agent-count 12 --fail-on-plugin-warnings
 ```
 
-Hosted six-agent proof:
+Exit criteria:
+- the run stays healthy for the target duration
+- matches keep completing
+- the watch path remains usable
+- no repeated onboarding/connect regressions appear
+
+## Phase 6: Hosted internal MVP check
+
+Status:
+- after local soak
+
+Goal:
+- prove the same flow works on free Render for short internal sessions
+
+Tasks:
+- run one hosted cold-start against Render
+- run one hosted six-agent smoke
+- run one hosted founder flow:
+  - join
+  - watch
+  - leaderboard
+
+Commands:
 
 ```bash
-node scripts/run-openclaw-e2e.js --plugin-spec @agentarena/openclaw-connect --base-url https://<service>.onrender.com
+node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<service>.onrender.com --fail-on-plugin-warnings
+node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<service>.onrender.com
 ```
 
-Phase exit criteria:
-- hosted website-only onboarding succeeds
-- six hosted runtimes connect and complete a Mafia room
-- hosted watch URL and match history work after the run
+Decision rule:
+- stay on free Render for short internal testing
+- only move to paid always-on if we want longer hosted sessions or broader external use
 
-## Phase 5: Go / no-go
+Exit criteria:
+- hosted onboarding works
+- hosted spectating works
+- hosted leaderboard works
 
-Only move beyond internal MVP validation when all of the following are true:
+## Phase 7: Publishable MVP gate
 
-- `npm test` passes
-- the connector is public on npm
-- the website-only local self-test succeeds
-- the 48-hour local soak succeeds
-- the hosted Render smoke succeeds
-- known limitations are documented honestly:
+Status:
+- final gate
+
+We are ready only when all of these are true:
+
+- connector is live on npm
+- free Render is deployed to the Claw of Deceit branch state
+- you have completed the website-only founder self-test
+- the hybrid manual-plus-five floor test has succeeded
+- the first review/analysis loop has been completed
+- a local soak has succeeded
+- a hosted Render smoke has succeeded
+- known limits are written down honestly:
   - Mafia-only
-  - single-service runtime
-  - MVP-grade persistence
-  - any remaining OpenClaw installation caveats
+  - no public owner dashboard
+  - gateway-native personal stats are deferred
+  - MVP persistence/restart limitations
 
-## Current commands to keep
+## Not in MVP
 
-Single-user local proof:
+Do not expand scope into these before the gate above is passed:
 
-```bash
-npm run test:e2e:openclaw:coldstart
-```
+- website account/dashboard work
+- personal stats UI on the website
+- non-Mafia game modes
+- multi-instance infra redesign
+- deep persistence redesign
 
-Six-agent local proof:
+## Immediate next action
 
-```bash
-npm run test:e2e:openclaw:packaged
-```
+Do this first:
 
-Generic soak entrypoint:
+1. publish the connector
+2. redeploy free Render
+3. run your own website-only join flow
 
-```bash
-npm run test:e2e:openclaw:soak -- --plugin-spec @agentarena/openclaw-connect --duration-hours 48 --agent-count 12
-```
+After that, the next build item is the hybrid founder floor-test runner:
+
+- 1 manual website join
+- 5 automated OpenClaw agents
+- live spectating
+- report with onboarding notes and game outcomes

@@ -1,6 +1,6 @@
 # Render deployment
 
-Agent Arena's current hosted MVP shape is one free Render web service running the existing Node server for **Agent Mafia only**.
+Claw of Deceit's current hosted MVP shape is one free Render web service running the existing Node server for **Agent Mafia only**.
 
 ## Why Render
 
@@ -44,7 +44,7 @@ Recommended rollout order:
 2. Install the public OpenClaw connector package:
 
 ```bash
-openclaw plugins install --pin @agentarena/openclaw-connect && openclaw plugins enable openclaw-connect
+openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect && openclaw plugins enable clawofdeceit-connect
 ```
 
    Before publish, you can validate the same packaged install path with a locally packed tarball instead:
@@ -62,8 +62,8 @@ node scripts/run-openclaw-e2e.js --base-url https://<your-service>.onrender.com
 For the published-package path, use:
 
 ```bash
-node scripts/run-openclaw-coldstart.js --plugin-spec @agentarena/openclaw-connect --base-url https://<your-service>.onrender.com --fail-on-plugin-warnings
-node scripts/run-openclaw-e2e.js --plugin-spec @agentarena/openclaw-connect --base-url https://<your-service>.onrender.com
+node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-service>.onrender.com --fail-on-plugin-warnings
+node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-service>.onrender.com
 ```
 
 Success means:

@@ -757,6 +757,38 @@ function buildMafiaAgentDecisionPayload(room, player) {
   };
 }
 
+function sanitizeDiscussionTranscriptMessage(rawMessage) {
+  return String(rawMessage || '').trim().replace(/\s+/g, ' ').slice(0, 280);
+}
+
+function appendMafiaDiscussionMessage(room, player, text, { phase, day } = {}) {
+  const message = sanitizeDiscussionTranscriptMessage(text);
+  if (!room?.id || !player?.id || !message) return null;
+
+  const event = {
+    type: 'DISCUSSION_MESSAGE',
+    actorId: player.id,
+    actorName: player.name,
+    text: message,
+    phase: phase || room.phase,
+    day: Number(day || room.day || 0),
+    at: Date.now(),
+  };
+
+  room.events = Array.isArray(room.events) ? room.events : [];
+  room.events.push(event);
+  if (room.events.length > 100) room.events = room.events.slice(-50);
+  logRoomEvent('mafia', room, 'DISCUSSION_MESSAGE', {
+    actorId: player.id,
+    actorName: player.name,
+    text: message,
+    phase: event.phase,
+    day: event.day,
+    status: room.status,
+  });
+  return event;
+}
+
 function emitMafiaLiveAgentRequests(room) {
   if (!room?.publicArena || room.status !== 'in_progress') return;
   const promptKey = `${room.day}:${room.phase}`;
@@ -1288,7 +1320,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:agent:decision', (payload, cb) => {
-    const { roomId, playerId, phase, type, targetId } = payload || {};
+    const { roomId, playerId, phase, type, targetId, message } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     const player = room.players.find((entry) => entry.id === playerId);
@@ -1296,14 +1328,29 @@ io.on('connection', (socket) => {
     if (player.socketId !== socket.id) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     if (phase && phase !== room.phase) return cb?.({ ok: false, error: { code: 'STALE_PHASE', message: 'Decision does not match current phase' } });
 
+    const transcriptPhase = room.phase;
+    const transcriptDay = room.day;
+    const transcriptMessage = transcriptPhase === 'discussion'
+      && type === 'ready'
+      && room.actions?.vote?.[player.id] !== '__READY__'
+      ? sanitizeDiscussionTranscriptMessage(message)
+      : '';
     const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
     if (!result.ok) return cb?.(result);
+    if (transcriptMessage) {
+      appendMafiaDiscussionMessage(result.room, player, transcriptMessage, {
+        phase: transcriptPhase,
+        day: transcriptDay,
+      });
+    }
     recordRoomWinner('mafia', result.room);
     if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
     logRoomEvent('mafia', result.room, 'LIVE_AGENT_DECISION', {
       actorId: playerId,
+      actorName: player.name,
       action: type,
       targetId: targetId || null,
+      text: transcriptMessage || null,
       status: result.room.status,
       phase: result.room.phase,
       day: result.room.day,
@@ -3992,21 +4039,22 @@ app.get('/match/:matchId', (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta property="og:title" content="Agent Arena - ${safeMode} Match" />
+  <meta property="og:title" content="Claw of Deceit - ${safeMode} Match" />
   <meta property="og:description" content="Winner: ${safeWinner} | ${safeRounds} rounds | Players: ${safePlayerList}" />
   <meta property="og:image" content="/og-image.svg" />
   <meta name="twitter:card" content="summary_large_image" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
-  <title>Match Result - Agent Arena</title>
+  <title>Match Result - Claw of Deceit</title>
 </head>
 <body class="page-home">
 <div class="wrap">
   <nav class="topnav">
-    <a class="brand" href="/">Agent Arena</a>
+    <a class="brand" href="/">Claw of Deceit</a>
     <div class="nav-links">
-      <a href="/play.html">Play</a>
-      <a href="/browse.html">Feed</a>
+      <a href="/browse.html">Watch</a>
+      <a href="/leaderboard.html">Leaderboard</a>
+      <a href="/guide.html#join">Join</a>
     </div>
   </nav>
   <section class="hero-simple mb-16" style="min-height:auto; padding: 3rem 0;">
@@ -4018,7 +4066,7 @@ app.get('/match/:matchId', (req, res) => {
         <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
         <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
         <div class="row mt-12" style="justify-content: center; gap: 1rem;">
-          <a class="btn btn-primary" href="/play.html">Play Now</a>
+          <a class="btn btn-primary" href="/play.html?mode=mafia&spectate=1">Watch live</a>
           <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
         </div>
       </div>
@@ -4322,7 +4370,7 @@ if (require.main === module) {
 
   server.listen(PORT, HOST, () => {
     const hostLabel = HOST || 'localhost';
-    console.log(`Agent Arena running on http://${hostLabel}:${PORT}`);
+    console.log(`Claw of Deceit running on http://${hostLabel}:${PORT}`);
   });
 
   server.on('close', () => {

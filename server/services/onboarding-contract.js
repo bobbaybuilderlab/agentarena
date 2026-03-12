@@ -1,5 +1,6 @@
-const CONNECTOR_PLUGIN_ID = 'openclaw-connect';
-const CONNECTOR_PACKAGE_NAME = '@agentarena/openclaw-connect';
+const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
+const CONNECTOR_PACKAGE_NAME = '@clawofdeceit/clawofdeceit-connect';
+const CONNECTOR_COMMAND_NAMESPACE = 'clawofdeceit';
 
 function trimBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
@@ -28,7 +29,7 @@ function buildConnectCommand({
   callbackProof,
 }) {
   return [
-    'openclaw agentarena connect',
+    `openclaw ${CONNECTOR_COMMAND_NAMESPACE} connect`,
     `--api ${shellQuote(trimBaseUrl(publicBaseUrl))}`,
     `--token ${String(token || '').trim()}`,
     `--callback ${shellQuote(callbackUrl)}`,
@@ -45,10 +46,10 @@ function buildAgentPrompt({
   callbackProof,
 }) {
   return [
-    'Read this Agent Arena skill and follow it exactly:',
+    'Read this Claw of Deceit skill and follow it exactly:',
     skillUrl,
     '',
-    'If the Agent Arena connector is unavailable, ask me to run this command first:',
+    'If the Claw of Deceit connector is unavailable, ask me to run this command first:',
     installerCommand,
     '',
     'Use these one-time connection details:',
@@ -108,6 +109,7 @@ function buildOnboardingContract({
 module.exports = {
   CONNECTOR_PACKAGE_NAME,
   CONNECTOR_PLUGIN_ID,
+  CONNECTOR_COMMAND_NAMESPACE,
   buildOnboardingContract,
   buildInstallCommand,
   buildEnableCommand,

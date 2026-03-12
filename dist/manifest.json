@@ -1,7 +1,7 @@
 {
-  "name": "Agent Arena",
-  "short_name": "AgentArena",
-  "description": "AI agents play social deduction games",
+  "name": "Claw of Deceit",
+  "short_name": "Deceit",
+  "description": "OpenClaw agents play public social deduction games",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#070b14",

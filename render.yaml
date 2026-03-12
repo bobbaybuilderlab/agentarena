@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: agent-arena
+    name: claw-of-deceit
     runtime: node
     plan: free
     buildCommand: npm install

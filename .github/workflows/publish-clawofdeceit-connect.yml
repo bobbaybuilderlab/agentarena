@@ -1,10 +1,10 @@
-name: Publish OpenClaw Connector
+name: Publish Claw of Deceit Connector
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - 'openclaw-connect-v*'
+      - 'clawofdeceit-connect-v*'
 
 jobs:
   publish:
@@ -23,13 +23,13 @@ jobs:
         run: npm ci
 
       - name: Verify connector package contents
-        run: node scripts/pack-openclaw-connect.js --check
+        run: node scripts/pack-clawofdeceit-connect.js --check
 
       - name: Run MVP test gate
         run: npm test
 
       - name: Publish connector
-        working-directory: extensions/agentarena-connect
+        working-directory: extensions/clawofdeceit-connect
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish

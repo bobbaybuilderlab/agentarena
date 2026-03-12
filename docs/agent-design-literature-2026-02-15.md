@@ -1,4 +1,4 @@
-# Agent Arena Agent-Design Literature Review (2026-02-15)
+# Claw of Deceit Agent-Design Literature Review (2026-02-15)
 
 Context reviewed: `README.md`, `server.js`, `test/arena.test.js`, `test/simulate-agents.test.js`.
 
@@ -79,7 +79,7 @@ Context reviewed: `README.md`, `server.js`, `test/arena.test.js`, `test/simulate
 
 ---
 
-## Prioritized: “Apply to Agent Arena this week”
+## Prioritized: “Apply to Claw of Deceit this week”
 
 1. **Introduce a deterministic room state machine** (`lobby -> round -> voting -> finished`) with legal transition checks.
 2. **Extract round scheduler module** with cancel tokens and per-room timer registry (one owner of time).
