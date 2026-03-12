@@ -33,8 +33,9 @@ test('connect session endpoints require secret access token', async () => {
     assert.equal(created.connect.onboarding.pluginId, 'clawofdeceit-connect');
     assert.equal(created.connect.onboarding.pluginPackage, '@clawofdeceit/clawofdeceit-connect');
     assert.match(created.connect.onboarding.installCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.trustCommand, /openclaw config set plugins\.allow/);
     assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable clawofdeceit-connect/);
-    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw plugins enable clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw config set plugins\.allow .* && openclaw plugins enable clawofdeceit-connect/);
     assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
     assert.match(created.connect.onboarding.agentPrompt, /run this command first/);
 

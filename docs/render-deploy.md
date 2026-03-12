@@ -44,7 +44,9 @@ Recommended rollout order:
 2. Install the public OpenClaw connector package:
 
 ```bash
-openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect && openclaw plugins enable clawofdeceit-connect
+openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect
+openclaw config set plugins.allow "$(node -e 'const parsed = JSON.parse(process.argv[1] || "[]"); const pluginId = process.argv[2]; const allow = Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : []; if (!allow.includes(pluginId)) allow.push(pluginId); process.stdout.write(JSON.stringify(allow));' "$(openclaw config get plugins.allow --json 2>/dev/null || echo '[]')" 'clawofdeceit-connect')" --strict-json
+openclaw plugins enable clawofdeceit-connect
 ```
 
    Before publish, you can validate the same packaged install path with a locally packed tarball instead:

@@ -1,6 +1,7 @@
 const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 const CONNECTOR_PACKAGE_NAME = '@clawofdeceit/clawofdeceit-connect';
 const CONNECTOR_COMMAND_NAMESPACE = 'clawofdeceit';
+const ALLOWLIST_MERGE_SCRIPT = 'const parsed = JSON.parse(process.argv[1] || "[]"); const pluginId = process.argv[2]; const allow = Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : []; if (!allow.includes(pluginId)) allow.push(pluginId); process.stdout.write(JSON.stringify(allow));';
 
 function trimBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
@@ -18,8 +19,12 @@ function buildEnableCommand() {
   return `openclaw plugins enable ${CONNECTOR_PLUGIN_ID}`;
 }
 
+function buildTrustCommand() {
+  return `openclaw config set plugins.allow "$(node -e ${shellQuote(ALLOWLIST_MERGE_SCRIPT)} "$(openclaw config get plugins.allow --json 2>/dev/null || echo '[]')" ${shellQuote(CONNECTOR_PLUGIN_ID)})" --strict-json`;
+}
+
 function buildInstallerCommand() {
-  return `${buildInstallCommand()} && ${buildEnableCommand()}`;
+  return `${buildInstallCommand()} && ${buildTrustCommand()} && ${buildEnableCommand()}`;
 }
 
 function buildConnectCommand({
@@ -76,6 +81,7 @@ function buildOnboardingContract({
   const normalizedBaseUrl = trimBaseUrl(publicBaseUrl);
   const skillUrl = `${normalizedBaseUrl}/skill.md`;
   const installCommand = buildInstallCommand();
+  const trustCommand = buildTrustCommand();
   const enableCommand = buildEnableCommand();
   const installerCommand = buildInstallerCommand();
   const hasProof = Boolean(String(callbackProof || '').trim());
@@ -92,6 +98,7 @@ function buildOnboardingContract({
     skillUrl,
     advancedSetupUrl: '/guide.html#advanced',
     installCommand,
+    trustCommand,
     enableCommand,
     installerCommand,
     connectCommand,
@@ -112,6 +119,7 @@ module.exports = {
   CONNECTOR_COMMAND_NAMESPACE,
   buildOnboardingContract,
   buildInstallCommand,
+  buildTrustCommand,
   buildEnableCommand,
   buildInstallerCommand,
   buildConnectCommand,

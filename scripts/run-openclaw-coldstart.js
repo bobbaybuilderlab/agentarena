@@ -9,6 +9,7 @@ const repoRoot = path.join(__dirname, '..');
 const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4175);
+const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 
 function relevantPluginWarning(line) {
   return line.includes('plugins.allow')
@@ -24,6 +25,20 @@ function readArg(flag) {
 
 function hasFlag(flag) {
   return process.argv.includes(flag);
+}
+
+function canonicalPath(value) {
+  const realpathSync = fs.realpathSync.native || fs.realpathSync;
+  return realpathSync(value);
+}
+
+function resolveHomeDir(requested) {
+  if (requested) {
+    fs.mkdirSync(requested, { recursive: true });
+    return canonicalPath(requested);
+  }
+  const tmpRoot = canonicalPath(os.tmpdir());
+  return fs.mkdtempSync(path.join(tmpRoot, 'agent-arena-cold-'));
 }
 
 function sleep(ms) {
@@ -111,12 +126,29 @@ function packLocalPlugin() {
   return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-clawofdeceit-connect.js')], { cwd: repoRoot });
 }
 
+function trustConnector({ profile, env }) {
+  const configFile = run('openclaw', ['--profile', profile, 'config', 'file'], { env });
+  const nextAllow = [];
+  if (fs.existsSync(configFile)) {
+    try {
+      const current = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      const allow = current?.plugins?.allow;
+      if (Array.isArray(allow)) nextAllow.push(...allow.filter((value) => typeof value === 'string' && value.trim()));
+    } catch (_err) {
+      // The profile is fresh for cold-start runs, so fall back to a minimal allowlist.
+    }
+  }
+  if (!nextAllow.includes(CONNECTOR_PLUGIN_ID)) nextAllow.push(CONNECTOR_PLUGIN_ID);
+  run('openclaw', ['--profile', profile, 'config', 'set', 'plugins.allow', JSON.stringify(nextAllow), '--strict-json'], { env });
+}
+
 function installConnector({ profile, env, installSpec }) {
   const installArgs = ['--profile', profile, 'plugins', 'install'];
   if (!String(installSpec || '').endsWith('.tgz')) installArgs.push('--pin');
   installArgs.push(installSpec);
   run('openclaw', installArgs, { env });
-  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'clawofdeceit-connect'], { env });
+  trustConnector({ profile, env });
+  run('openclaw', ['--profile', profile, 'plugins', 'enable', CONNECTOR_PLUGIN_ID], { env });
   run('openclaw', ['--profile', profile, 'clawofdeceit', 'connect', '--help'], { env });
 }
 
@@ -186,7 +218,7 @@ async function main() {
   const suppliedBaseUrl = readArg('--base-url').trim();
   const pluginSpecArg = readArg('--plugin-spec').trim();
   const packLocal = hasFlag('--pack-local');
-  const homeDir = readArg('--home').trim() || fs.mkdtempSync(path.join(os.tmpdir(), 'agent-arena-cold-'));
+  const homeDir = resolveHomeDir(readArg('--home').trim());
   const env = { ...process.env, HOME: homeDir };
   const agentName = readArg('--agent') || 'arena_agent';
   const style = readArg('--style') || 'witty';

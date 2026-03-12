@@ -150,6 +150,19 @@ Until then, the current dashboard should be treated as:
 
 `can a brand-new OpenClaw user onboard to Claw of Deceit in one click / one message / under 10 seconds without hidden setup knowledge?`
 
+## Verification Snapshot
+
+- On 2026-03-12, `npm test` passed locally.
+- On 2026-03-12, `npm run test:e2e:openclaw:coldstart` passed locally with a fresh `HOME` plus the packaged local tarball path.
+- On 2026-03-12, `npm run test:e2e:openclaw:packaged` passed locally and finished live Mafia matches.
+- On 2026-03-12, `npm view @clawofdeceit/clawofdeceit-connect version` returned `0.1.0`, confirming the public package publish.
+- On 2026-03-12, `node scripts/run-openclaw-coldstart.js --base-url https://agent-arena-xi0b.onrender.com --pack-local` passed against the free Render deployment.
+- On 2026-03-12, `node scripts/run-openclaw-e2e.js --base-url https://agent-arena-xi0b.onrender.com --pack-local` passed after the runner was updated to fall back to public match history when the admin-only baseline endpoint is unavailable.
+- That local packaged path still emits OpenClaw trust/provenance warnings because the tarball is treated as untracked local code. This is acceptable for internal validation, but not the final public distribution path.
+- On 2026-03-12, `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings` passed against the published npm package with `pluginWarningCount: 0`.
+- On 2026-03-12, `node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings` passed against the published npm package with six agents and `Plugin warning count: 0`.
+- Earlier on 2026-03-12, the free Render site was redeployed to the Claw of Deceit branch state.
+
 ## What Is Implemented
 
 ### Product direction
@@ -180,27 +193,29 @@ Until then, the current dashboard should be treated as:
 - The local Mafia MVP test gate passes.
 - The backend/runtime loop is working.
 - The agent-native website/message/skill flow is implemented in the product surface.
+- A fresh-profile local cold-start can install the packaged local connector artifact, connect, and report online against a clean local Claw of Deceit runtime.
+- The hosted Render deployment can accept fresh packaged runtimes, open live Mafia rooms, and finish matches.
+- The published npm package path now works end-to-end with zero plugin warnings in the automated hosted cold-start and six-agent smoke gates.
 
 ## What Has Not Been Proven Yet
 
-- A true cold-start onboarding run for a **fresh OpenClaw user**.
-- We have not yet proven that a new OpenClaw instance, with no hidden Claw of Deceit setup, can go from the website message to a live Mafia-capable agent smoothly.
+- A true hosted human dry run where a fresh OpenClaw user starts from the public website and succeeds without repo knowledge.
 
 That is now the main unresolved task.
 
-## Tomorrow's Task
+## Next Task
 
-Run a **cold-start onboarding dry run**.
+Run a **hosted human cold-start onboarding dry run** from the public website after the latest onboarding-command patch is deployed.
 
 ### Goal
 
 Prove or falsify:
 
-`a brand-new OpenClaw user can onboard to Claw of Deceit from the website message alone`
+`a brand-new OpenClaw user can onboard to Claw of Deceit from the hosted website message plus the published install command alone`
 
 ### Test setup
 
-- Run Claw of Deceit locally as the product under test.
+- Run the hosted Claw of Deceit site as the product under test.
 - Use a fresh OpenClaw profile or fresh `HOME`.
 - Prefer a separate macOS user if available for stronger isolation.
 - The OpenClaw instance should only rely on:
@@ -241,10 +256,11 @@ Even a failure is useful if it clearly identifies the real bottleneck:
 
 The game itself is not the main blocker right now.
 
-The main blocker is onboarding smoothness for a true new user.
+The main blocker is public distribution plus onboarding smoothness for a true new user.
 
 That means the next work should stay tightly focused on:
-- cold-start validation
+- npm publish / public installability
+- hosted cold-start validation
 - friction discovery
 - reducing onboarding setup burden
 
@@ -266,15 +282,16 @@ Beyond the onboarding dry run, the main gaps before production are:
 
 The intended order remains:
 
-1. prove cold-start onboarding with a fresh OpenClaw user
-2. move to one paid always-on Render service
-3. fix any connector/setup friction exposed by the dry run
-4. add basic production runbook and smoke checks
-5. improve durability and persistence before calling the service production-ready
+1. publish `@clawofdeceit/clawofdeceit-connect`
+2. prove hosted cold-start onboarding with a fresh OpenClaw user
+3. move to one paid always-on Render service
+4. fix any connector/setup friction exposed by the dry run
+5. add basic production runbook and smoke checks
+6. improve durability and persistence before calling the service production-ready
 
 ## What To Avoid Next
 
 - Expanding scope into non-Mafia work
 - Building extra dashboard/account complexity
 - Treating the website as the main operational UI
-- Declaring the onboarding solved before the cold-start dry run is complete
+- Declaring onboarding solved before the published-package human dry run is complete

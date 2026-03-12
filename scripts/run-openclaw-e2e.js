@@ -15,6 +15,7 @@ const DEFAULT_HEARTBEAT_MS = 60_000;
 const DEFAULT_DISCONNECT_GRACE_MS = 120_000;
 const DEFAULT_STALL_THRESHOLD_MS = 600_000;
 const OPENCLAW_PROFILE = process.env.OPENCLAW_PROFILE || 'main';
+const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 const BASE_AGENTS = [
   { name: 'Alpha', style: 'cautious' },
   { name: 'Bravo', style: 'chaotic' },
@@ -43,6 +44,21 @@ function readNumberArg(flag, fallback) {
   if (!raw) return fallback;
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function canonicalPath(value) {
+  const realpathSync = fs.realpathSync.native || fs.realpathSync;
+  return realpathSync(value);
+}
+
+function resolveHomeDir(requested, needsTempHome) {
+  if (requested) {
+    fs.mkdirSync(requested, { recursive: true });
+    return canonicalPath(requested);
+  }
+  if (!needsTempHome) return '';
+  const tmpRoot = canonicalPath(os.tmpdir());
+  return fs.mkdtempSync(path.join(tmpRoot, 'agent-arena-packaged-'));
 }
 
 function toEpochMs(value) {
@@ -155,6 +171,71 @@ async function fetchMatchBaseline(baseUrl) {
   };
 }
 
+function summarizeMatchRecords(matches) {
+  const items = Array.isArray(matches) ? matches : [];
+  const latest = items[0] || null;
+  const finishedAt = latest?.finished_at || latest?.finishedAt || null;
+  return {
+    sampleSize: items.length,
+    latestCompletedAt: finishedAt,
+    latestCompletedAtMs: toEpochMs(finishedAt),
+    latestCompletedRoomId: latest?.room_id || latest?.roomId || null,
+    estimatedGamesPerHour: null,
+  };
+}
+
+async function fetchPlayerMatchSummary(baseUrl, agentId, limit = 50) {
+  const data = await fetchJson(
+    `${baseUrl}/api/matches?userId=${encodeURIComponent(agentId)}&limit=${Math.max(1, Math.min(limit, 50))}`,
+    undefined,
+    `match history for ${agentId}`
+  );
+  return summarizeMatchRecords(data?.matches || []);
+}
+
+function isOpsEndpointUnavailable(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('401')
+    || message.includes('403')
+    || message.includes('OPS_ADMIN_TOKEN')
+    || message.toLowerCase().includes('unauthorized');
+}
+
+async function resolveCompletionTracker(baseUrl) {
+  try {
+    const baseline = await fetchMatchBaseline(baseUrl);
+    return {
+      mode: 'ops-baseline',
+      baseline,
+      description: '/api/ops/match-baseline',
+    };
+  } catch (err) {
+    if (!isOpsEndpointUnavailable(err)) throw err;
+    console.log('Falling back to public match history because /api/ops/match-baseline is not available.');
+    return {
+      mode: 'public-match-history',
+      baseline: null,
+      description: '/api/matches?userId=<agentId>',
+    };
+  }
+}
+
+async function fetchCompletionSummary(baseUrl, tracker, agentId) {
+  if (tracker?.mode === 'public-match-history') {
+    if (!agentId) {
+      return {
+        sampleSize: 0,
+        latestCompletedAt: null,
+        latestCompletedAtMs: 0,
+        latestCompletedRoomId: null,
+        estimatedGamesPerHour: null,
+      };
+    }
+    return fetchPlayerMatchSummary(baseUrl, agentId);
+  }
+  return fetchMatchBaseline(baseUrl);
+}
+
 async function fetchAgentState(baseUrl, agentId) {
   const data = await fetchJson(`${baseUrl}/api/agents/${encodeURIComponent(agentId)}`, undefined, `agent ${agentId}`);
   const arena = data?.agent?.arena || {};
@@ -205,12 +286,29 @@ function packLocalPlugin() {
   return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-clawofdeceit-connect.js')]);
 }
 
+function trustConnector({ env, profile }) {
+  const configFile = run('openclaw', ['--profile', profile, 'config', 'file'], { env });
+  const nextAllow = [];
+  if (fs.existsSync(configFile)) {
+    try {
+      const current = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      const allow = current?.plugins?.allow;
+      if (Array.isArray(allow)) nextAllow.push(...allow.filter((value) => typeof value === 'string' && value.trim()));
+    } catch (_err) {
+      // Fresh E2E profiles can safely rebuild the allowlist from config state.
+    }
+  }
+  if (!nextAllow.includes(CONNECTOR_PLUGIN_ID)) nextAllow.push(CONNECTOR_PLUGIN_ID);
+  run('openclaw', ['--profile', profile, 'config', 'set', 'plugins.allow', JSON.stringify(nextAllow), '--strict-json'], { env });
+}
+
 function installConnector({ env, profile, installSpec }) {
   const installArgs = ['--profile', profile, 'plugins', 'install'];
   if (!String(installSpec || '').endsWith('.tgz')) installArgs.push('--pin');
   installArgs.push(installSpec);
   run('openclaw', installArgs, { env });
-  run('openclaw', ['--profile', profile, 'plugins', 'enable', 'clawofdeceit-connect'], { env });
+  trustConnector({ env, profile });
+  run('openclaw', ['--profile', profile, 'plugins', 'enable', CONNECTOR_PLUGIN_ID], { env });
 }
 
 function ensureOpenClawInstalled(env, profile) {
@@ -329,10 +427,11 @@ function summarizeQueueCounts(states) {
     .join(', ');
 }
 
-async function collectSoakSnapshot(baseUrl, connectedAgents) {
+async function collectSoakSnapshot(baseUrl, connectedAgents, tracker) {
+  const progressAgentId = connectedAgents[0]?.agentId || '';
   const [watch, baseline, states] = await Promise.all([
     fetchWatchState(baseUrl),
-    fetchMatchBaseline(baseUrl),
+    fetchCompletionSummary(baseUrl, tracker, progressAgentId),
     Promise.all(connectedAgents.map((agent) => fetchAgentState(baseUrl, agent.agentId))),
   ]);
   const connectedCount = states.filter((entry) => entry.runtimeConnected).length;
@@ -360,6 +459,7 @@ async function runSoakLoop({
   baseUrl,
   connectedAgents,
   expectedAgentCount,
+  completionTracker,
   durationMs,
   heartbeatMs,
   monitorPollMs,
@@ -393,7 +493,7 @@ async function runSoakLoop({
 
     let snapshot;
     try {
-      snapshot = await collectSoakSnapshot(baseUrl, connectedAgents);
+      snapshot = await collectSoakSnapshot(baseUrl, connectedAgents, completionTracker);
       fetchErrorSince = null;
     } catch (err) {
       if (!fetchErrorSince) fetchErrorSince = Date.now();
@@ -498,7 +598,7 @@ async function main() {
   const packLocal = hasFlag('--pack-local');
   const pluginSpecArg = readArg('--plugin-spec').trim();
   const suppliedBaseUrl = readArg('--base-url').trim();
-  const homeDir = readArg('--home').trim() || ((packLocal || pluginSpecArg) ? fs.mkdtempSync(path.join(os.tmpdir(), 'agent-arena-packaged-')) : '');
+  const homeDir = resolveHomeDir(readArg('--home').trim(), packLocal || pluginSpecArg);
   const env = homeDir ? { ...process.env, HOME: homeDir } : { ...process.env };
   const port = readNumberArg('--port', DEFAULT_PORT);
   const connectDelayMs = readNumberArg('--connect-delay-ms', DEFAULT_CONNECT_DELAY_MS);
@@ -561,7 +661,8 @@ async function main() {
     await waitForJson(`${baseUrl}/health`, 15_000);
     console.log(`${suppliedBaseUrl ? 'Using existing' : 'Local'} arena at ${baseUrl}`);
 
-    const baselineBefore = await fetchMatchBaseline(baseUrl);
+    const completionTracker = await resolveCompletionTracker(baseUrl);
+    let baselineBefore = completionTracker.baseline;
     const connectedAgents = [];
 
     for (const agentConfig of agentConfigs) {
@@ -615,6 +716,10 @@ async function main() {
 
     maybeFailOnPluginWarnings(pluginWarnings);
 
+    if (!baselineBefore) {
+      baselineBefore = await fetchCompletionSummary(baseUrl, completionTracker, connectedAgents[0]?.agentId || '');
+    }
+
     const watchState = await waitFor(async () => {
       const data = await fetchWatchState(baseUrl);
       return data?.ok && data.found ? data : null;
@@ -623,7 +728,7 @@ async function main() {
     console.log(`Live room opened: ${watchState.roomId}`);
 
     const firstCompletion = await waitFor(async () => {
-      const baseline = await fetchMatchBaseline(baseUrl);
+      const baseline = await fetchCompletionSummary(baseUrl, completionTracker, connectedAgents[0]?.agentId || '');
       if (baseline.sampleSize > baselineBefore.sampleSize) return baseline;
       if (baseline.latestCompletedAt && baseline.latestCompletedAt !== baselineBefore.latestCompletedAt) return baseline;
       return null;
@@ -651,6 +756,7 @@ async function main() {
     console.log(`Watch URL: ${baseUrl}${currentWatch.watchUrl || watchState.watchUrl}`);
     console.log(`Sample match record count for ${connectedAgents[0].name}: ${(matchHistory.matches || []).length}`);
     console.log(`Plugin warning count: ${pluginWarnings.size}`);
+    console.log(`Completion source: ${completionTracker.description}`);
 
     if (!soakEnabled) return;
 
@@ -658,6 +764,7 @@ async function main() {
       baseUrl,
       connectedAgents,
       expectedAgentCount: agentConfigs.length,
+      completionTracker,
       durationMs,
       heartbeatMs,
       monitorPollMs,

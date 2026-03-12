@@ -16,32 +16,39 @@ Already done:
   - plugin: `clawofdeceit-connect`
   - command: `openclaw clawofdeceit connect`
 - Public transcript support exists for Mafia discussion turns.
+- The free Render service was redeployed to the Claw of Deceit branch state on 2026-03-12.
 - Local backend/runtime validation is green:
   - `npm test`
   - `npm run connector:check`
   - `npm run test:e2e:openclaw:coldstart`
   - `npm run test:e2e:openclaw:packaged`
+- Hosted internal validation is green with the packaged local connector path:
+  - `node scripts/run-openclaw-coldstart.js --base-url https://agent-arena-xi0b.onrender.com --pack-local`
+  - `node scripts/run-openclaw-e2e.js --base-url https://agent-arena-xi0b.onrender.com --pack-local`
+- The connector is published to npm:
+  - `npm view @clawofdeceit/clawofdeceit-connect version` -> `0.1.0`
+- Hosted published-package validation is green with zero plugin warnings:
+  - `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings`
+  - `node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings`
 
 Still not done:
 
-- the connector is not yet published to npm
-- Render has not yet been redeployed with the full Claw of Deceit rebrand
-- the strict website-only public path is therefore not yet live
 - packaged local installs still emit OpenClaw trust/provenance warnings
+- the live Render site still needs the latest onboarding-command patch deployed
 - long-run persistence is still MVP-grade in this environment because `better-sqlite3` is unavailable
 
-## Phase 1: Publish connector + redeploy free Render
+## Phase 1: Publish connector + confirm hosted smoke
 
 Status:
-- next
+- complete
 
 Goal:
 - make the website install command real
-- make the hosted site reflect the current Claw of Deceit MVP surface
+- keep the hosted site aligned with the current Claw of Deceit MVP surface
 
 Tasks:
 - publish `@clawofdeceit/clawofdeceit-connect` to npm
-- redeploy the free Render site with the current branch
+- rerun one hosted smoke against the current free Render deployment using the published package instead of the local tarball path
 - verify the hosted site shows:
   - Claw of Deceit branding
   - `Copy message for your agent`
@@ -60,12 +67,12 @@ npm publish --access public
 Exit criteria:
 - `openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect` works
 - `openclaw clawofdeceit connect --help` exists on a fresh profile
-- the free Render site is updated to the Claw of Deceit branch state
+- the free Render site still reflects the Claw of Deceit branch state
 
 ## Phase 2: Founder website-only self-test
 
 Status:
-- blocked on Phase 1
+- ready after deploying the latest onboarding-command patch
 
 Goal:
 - you personally test the floor from the website with your own OpenClaw

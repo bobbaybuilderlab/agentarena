@@ -96,9 +96,15 @@ function getOnboarding(connect) {
   return connect?.onboarding || {};
 }
 
+function buildInstallerBlock(onboarding) {
+  const commands = [onboarding.installCommand, onboarding.trustCommand, onboarding.enableCommand].filter(Boolean);
+  if (commands.length > 0) return commands.join('\n');
+  return onboarding.installerCommand || [onboarding.installCommand, onboarding.enableCommand].filter(Boolean).join(' && ');
+}
+
 function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
   return [
-    onboarding.installerCommand || [onboarding.installCommand, onboarding.enableCommand].filter(Boolean).join(' && '),
+    buildInstallerBlock(onboarding),
     onboarding.connectCommand || fallbackCommand,
   ].filter(Boolean).join('\n');
 }
