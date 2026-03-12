@@ -30,11 +30,12 @@ Already done:
 - Hosted published-package validation is green with zero plugin warnings:
   - `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings`
   - `node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings`
+- The live Render site now serves the install + trust + enable onboarding contract for fresh OpenClaw users.
 
 Still not done:
 
 - packaged local installs still emit OpenClaw trust/provenance warnings
-- the live Render site still needs the latest onboarding-command patch deployed
+- the founder website-only self-test has not been run yet
 - long-run persistence is still MVP-grade in this environment because `better-sqlite3` is unavailable
 
 ## Phase 1: Publish connector + confirm hosted smoke

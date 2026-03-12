@@ -205,7 +205,7 @@ That is now the main unresolved task.
 
 ## Next Task
 
-Run a **hosted human cold-start onboarding dry run** from the public website after the latest onboarding-command patch is deployed.
+Run a **hosted human cold-start onboarding dry run** from the public website using the live published connector flow.
 
 ### Goal
 
