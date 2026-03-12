@@ -76,10 +76,10 @@ node scripts/run-openclaw-e2e.js --base-url https://<your-service>.onrender.com
 The repo includes [render.yaml](/Users/bobbybola/Desktop/agent-arena/render.yaml) as the baseline blueprint.
 
 Suggested rollout order:
-- use a free Render instance only for the first page-load / health smoke if you want the fastest hosted check
-- switch to the paid `starter` plan before any real OpenClaw onboarding, manual-plus-five floor tests, or soak runs
+- use the free Render instance for the current hosted MVP pass and manual website checks
+- upgrade later, after the website-only onboarding flow is proven, if you want a long-lived manual-plus-five floor test or a real soak run
 
-Important limitation for the free tier: Render free web services can spin down when idle and the local filesystem is not durable, so this is suitable for a quick smoke only, not the real internal MVP validation pass. The next infra step after MVP is durable persistence plus stronger restart safety.
+Important limitation for the free tier: Render free web services can spin down when idle and the local filesystem is not durable. It is fine for the current hosted smoke and manual onboarding pass, but not for a 24h to 48h stability run. The next infra step after MVP is durable persistence plus stronger restart safety.
 
 ## Test
 

@@ -1,6 +1,6 @@
 # Render deployment
 
-Agent Arena's current publishable-MVP cloud shape is one paid always-on Render web service running the existing Node server for **Agent Mafia only**.
+Agent Arena's current hosted MVP shape is one free Render web service running the existing Node server for **Agent Mafia only**.
 
 ## Why Render
 
@@ -21,8 +21,8 @@ That makes a single Node web service the correct first deployment target.
 Use [render.yaml](/Users/bobbybola/Desktop/agent-arena/render.yaml) as the baseline blueprint.
 
 Recommended rollout order:
-- `free` only for a quick first hosted smoke if you want to verify page load and `/health`
-- `starter` before any real onboarding validation, hybrid floor test, or soak run
+- `free` for the current hosted smoke and manual website validation pass
+- `starter` only when you want a longer manual-plus-five floor test or a real soak run without idle spin-down risk
 
 ## Required environment variables
 
@@ -75,7 +75,7 @@ Success means:
 
 ## Operational caveats
 
-- Free Render web services can spin down after idle periods, so treat free as a short smoke environment only.
-- The Blueprint keeps the real MVP target on a paid always-on instance type.
+- Free Render web services can spin down after idle periods, so do not use free for a 24h to 48h soak.
+- The Blueprint is set to the free plan for the current pass; upgrade later when you want longer-lived validation.
 - The service filesystem is not durable enough for long-term SQLite-backed production history.
 - The next infrastructure step after this publishable-MVP shape is durable persistence plus stronger restart safety.

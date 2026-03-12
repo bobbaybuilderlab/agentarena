@@ -148,6 +148,7 @@ async function checkConnectionStatus() {
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
+      syncArenaEntryButton();
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
@@ -197,8 +198,8 @@ const currentAgentCard = document.getElementById('currentAgentCard');
 const currentAgentBody = document.getElementById('currentAgentBody');
 const currentAgentMeta = document.getElementById('currentAgentMeta');
 const currentAgentCta = document.getElementById('currentAgentCta');
-const launchModeNotice = document.getElementById('launchModeNotice');
-const arenaEntryStatus = document.getElementById('arenaEntryStatus');
+const randomLiveRoomBtn = document.getElementById('randomLiveRoomBtn');
+const arenaEntryStatus = document.getElementById('playStatus');
 const pageIsPlay = document.body.classList.contains('page-play');
 const pageIsLeaderboard = document.body.classList.contains('page-leaderboard');
 const dashboardShell = document.getElementById('dashboardShell');
@@ -364,6 +365,7 @@ async function loadCurrentAgent(rankedAgents = null) {
   const agentId = getConnectedAgentId();
   if (!agentId) {
     currentAgentCard.style.display = 'none';
+    syncArenaEntryButton();
     return;
   }
 
@@ -395,14 +397,16 @@ async function loadCurrentAgent(rankedAgents = null) {
     if (currentAgentCta) {
       currentAgentCta.href = agent.arena?.activeRoomId
         ? `/play.html?mode=mafia&room=${encodeURIComponent(agent.arena.activeRoomId)}&spectate=1`
-        : '/guide.html#join';
-      currentAgentCta.textContent = agent.arena?.activeRoomId ? 'Watch match' : 'Connect another';
+        : '/dashboard.html';
+      currentAgentCta.textContent = agent.arena?.activeRoomId ? 'Watch match' : 'Open dashboard';
     }
+    syncArenaEntryButton();
     maybeOpenActiveArena(agent);
   } catch (_err) {
     currentAgentCard.style.display = 'block';
     currentAgentBody.innerHTML = '<p class="text-sm text-muted">Your connected agent is not visible yet. Give the arena a moment to refresh.</p>';
     if (currentAgentMeta) currentAgentMeta.textContent = '';
+    syncArenaEntryButton();
   }
 }
 
@@ -436,9 +440,24 @@ function roomModeLabel(mode) {
   return 'Agent Mafia';
 }
 
-function roomJumpUrl(room) {
-  const params = new URLSearchParams({ game: 'mafia', room: room.roomId, autojoin: '1' });
-  return `/play.html?${params.toString()}`;
+function roomWatchUrl(room) {
+  return `/play.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
+}
+
+function pickRandomRoom(rooms) {
+  if (!Array.isArray(rooms) || !rooms.length) return null;
+  return rooms[Math.floor(Math.random() * rooms.length)];
+}
+
+function syncArenaEntryButton() {
+  if (!startArenaBtn) return;
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Connected' : 'Connect agent';
+}
+
+function setArenaEntryStatus(message) {
+  if (!arenaEntryStatus) return;
+  arenaEntryStatus.textContent = message || '';
+  arenaEntryStatus.style.display = message ? 'block' : 'none';
 }
 
 function publicArenaRequiredAgents(summary) {
@@ -578,6 +597,7 @@ async function loadLiveRooms() {
     if (!data?.ok) throw new Error(data?.error?.message || data?.error || 'Failed to load room list');
 
     const rooms = data.rooms || [];
+    const randomRoom = pickRandomRoom(rooms);
     if (liveRoomsSummary) {
       const summary = data.summary || {};
       const arena = summary.arena || {};
@@ -586,16 +606,21 @@ async function loadLiveRooms() {
       liveRoomsSummary.style.display = 'block';
     }
 
-    const bestRoom = [...rooms].sort((a, b) => (b.matchQuality?.score || 0) - (a.matchQuality?.score || 0))[0];
+    if (randomLiveRoomBtn) {
+      randomLiveRoomBtn.href = randomRoom ? roomWatchUrl(randomRoom) : '/browse.html';
+      randomLiveRoomBtn.textContent = randomRoom ? 'Open a random game' : 'Open spectator dashboard';
+    }
+
     if (pulseMission) {
       const requiredAgents = publicArenaRequiredAgents(data.summary || {});
-      if (bestRoom) {
-        const hostReady = bestRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
+      if (randomRoom) {
+        const hostReady = randomRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
         pulseMission.style.display = 'block';
-        if (pulseTitle) pulseTitle.textContent = `Room ${bestRoom.roomId} is the best place to jump in right now`;
-        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(bestRoom.players || 0)}/${requiredAgents} seats are spoken for, so this table is close to opening.`;
-        if (pulseJoinBtn) pulseJoinBtn.href = roomJumpUrl(bestRoom);
-        if (pulseMeta) pulseMeta.textContent = `${bestRoom.players}/${requiredAgents} agents · ${bestRoom.hotLobby ? 'Hot lobby 🔥' : 'Open now'}`;
+        if (pulseTitle) pulseTitle.textContent = `Room ${randomRoom.roomId} is live right now`;
+        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Open the spectator view to follow the table with the normal delay.`;
+        if (pulseJoinBtn) pulseJoinBtn.href = roomWatchUrl(randomRoom);
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Spectate this room';
+        if (pulseMeta) pulseMeta.textContent = `${randomRoom.players}/${requiredAgents} agents · ${randomRoom.hotLobby ? 'Hot lobby 🔥' : escapeHtml(randomRoom.phase || 'Live now')}`;
       } else {
         const arena = data.summary?.arena || {};
         pulseMission.style.display = 'block';
@@ -603,8 +628,8 @@ async function loadLiveRooms() {
         if (pulseCopy) pulseCopy.textContent = arena.connectedAgents
           ? `There are ${Number(arena.connectedAgents || 0)} connected agents online. Connect ${Number(arena.missingAgents || 0)} more to open the next ${requiredAgents}-agent table.`
           : 'No connected agents are in the public arena yet. Connect an OpenClaw agent to help open the first table.';
-        if (pulseJoinBtn) pulseJoinBtn.href = '/guide.html';
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Connect your agent';
+        if (pulseJoinBtn) pulseJoinBtn.href = '/browse.html';
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open spectator dashboard';
         if (pulseMeta) pulseMeta.textContent = 'Agent-only launch · no guest seats · no simulated bots';
       }
     }
@@ -622,7 +647,7 @@ async function loadLiveRooms() {
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/play.html?game=${safeMode}&room=${safeRoomId}&spectate=1">Watch room</a>
+          <a class="btn btn-primary" href="/play.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open spectator view</a>
         </div>
       </article>
     `;
@@ -650,7 +675,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 startArenaBtn?.addEventListener('click', async () => {
   const agentId = getConnectedAgentId();
   if (!agentId) {
-    if (arenaEntryStatus) arenaEntryStatus.textContent = 'Connect an OpenClaw agent first. Human guest seats are not part of this launch.';
+    setArenaEntryStatus('Connect an OpenClaw agent first. Human guest seats are not part of this launch.');
     window.location.href = '/guide.html#join';
     return;
   }
@@ -666,9 +691,9 @@ startArenaBtn?.addEventListener('click', async () => {
       window.location.href = data.watchUrl;
       return;
     }
-    if (arenaEntryStatus) arenaEntryStatus.textContent = data.message || 'Waiting for more agents.';
+    setArenaEntryStatus(data.message || 'Waiting for more agents.');
   } catch (err) {
-    if (arenaEntryStatus) arenaEntryStatus.textContent = `Arena entry unavailable: ${err.message}`;
+    setArenaEntryStatus(`Arena entry unavailable: ${err.message}`);
   }
 });
 
@@ -679,9 +704,7 @@ if (currentAgentCard || feedList || leaderboardList) {
   refreshFirstWinChecklist();
 }
 
-if (launchModeNotice) {
-  launchModeNotice.textContent = 'One game at launch: Agent Mafia. Seats are for connected OpenClaw agents only.';
-}
+syncArenaEntryButton();
 
 if (feedList) {
   loadFeed();

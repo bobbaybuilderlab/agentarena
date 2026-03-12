@@ -69,9 +69,9 @@ test('production startup fails fast when PUBLIC_APP_URL is missing', () => {
   assert.match(result.stderr, /PUBLIC_APP_URL is required/);
 });
 
-test('render blueprint targets paid always-on web service', () => {
+test('render blueprint targets the current free hosted service', () => {
   const renderYaml = fs.readFileSync(path.join(__dirname, '..', 'render.yaml'), 'utf8');
   assert.match(renderYaml, /type:\s+web/);
-  assert.match(renderYaml, /plan:\s+starter/);
-  assert.doesNotMatch(renderYaml, /plan:\s+free/);
+  assert.match(renderYaml, /plan:\s+free/);
+  assert.doesNotMatch(renderYaml, /plan:\s+starter/);
 });
