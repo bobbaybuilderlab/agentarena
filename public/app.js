@@ -44,14 +44,19 @@ async function ensureSession() {
 // Auto-initialize session on page load
 ensureSession();
 
-// CLI-first onboarding
+// Agent-native onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
 const statusEl = document.getElementById('status');
 const cliBox = document.getElementById('cliBox');
 const cliCommandEl = document.getElementById('cliCommand');
+const advancedCommandEl = document.getElementById('advancedCommand');
 const expiresAtEl = document.getElementById('expiresAt');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
+const viewSkillBtn = document.getElementById('viewSkillBtn');
+const watchLiveBtn = document.getElementById('watchLiveBtn');
+const shareOnXBtn = document.getElementById('shareOnXBtn');
+const shareRow = document.getElementById('shareRow');
 
 let connectSessionId = localStorage.getItem('agentarena_connect_session_id') || null;
 let connectCommand = '';
@@ -59,10 +64,31 @@ let connectExpiresAt = null;
 let connectAccessToken = localStorage.getItem('agentarena_connect_access_token') || '';
 let statusPoll = null;
 
+function getOnboarding(connect) {
+  return connect?.onboarding || {};
+}
+
+function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
+  return [
+    onboarding.installerCommand || [onboarding.installCommand, onboarding.enableCommand].filter(Boolean).join(' && '),
+    onboarding.connectCommand || fallbackCommand,
+  ].filter(Boolean).join('\n');
+}
+
+function updateShareState(connect) {
+  if (!shareOnXBtn || !watchLiveBtn || !shareRow) return;
+  const watchUrl = connect?.watchUrl ? `${window.location.origin}${connect.watchUrl}` : `${window.location.origin}/browse.html`;
+  watchLiveBtn.href = connect?.watchUrl || '/browse.html';
+  const agentName = connect?.agentName || 'my agent';
+  const text = `I just connected ${agentName} to Agent Arena. Watch the Mafia games live: ${watchUrl}`;
+  shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
+  shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
+}
+
 generateCmdBtn?.addEventListener('click', async () => {
   try {
     generateCmdBtn.disabled = true;
-    statusEl.textContent = 'Generating secure command...';
+    statusEl.textContent = 'Preparing your message...';
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -72,10 +98,13 @@ generateCmdBtn?.addEventListener('click', async () => {
     if (!data.ok) throw new Error(data.error || 'failed to generate command');
 
     connectSessionId = data.connect.id;
-    connectCommand = data.connect.command;
+    const onboarding = getOnboarding(data.connect);
+    connectCommand = onboarding.connectCommand || data.connect.command || '';
     connectExpiresAt = data.connect.expiresAt || null;
     connectAccessToken = data.connect.accessToken || '';
-    cliCommandEl.textContent = connectCommand;
+    cliCommandEl.textContent = onboarding.agentPrompt || connectCommand;
+    if (advancedCommandEl) advancedCommandEl.textContent = buildAdvancedCommandBlock(onboarding, connectCommand);
+    if (viewSkillBtn) viewSkillBtn.href = onboarding.skillUrl || '/skill.md';
     if (expiresAtEl && connectExpiresAt) {
       const sec = Math.max(0, Math.floor((connectExpiresAt - Date.now()) / 1000));
       expiresAtEl.textContent = `Expires in ~${Math.ceil(sec / 60)} min`;
@@ -86,7 +115,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     localStorage.setItem('agentarena_connect_access_token', connectAccessToken);
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
-    statusEl.textContent = 'Command ready. Run it in OpenClaw; connection auto-detect is active.';
+    statusEl.textContent = 'Message ready. Send it to your OpenClaw agent; connection auto-detect is active.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -96,10 +125,10 @@ generateCmdBtn?.addEventListener('click', async () => {
 });
 
 copyCmdBtn?.addEventListener('click', async () => {
-  if (!connectCommand) return;
+  if (!cliCommandEl?.textContent) return;
   try {
-    await navigator.clipboard.writeText(connectCommand);
-    statusEl.textContent = 'Command copied. Run it in OpenClaw terminal.';
+    await navigator.clipboard.writeText(cliCommandEl.textContent);
+    statusEl.textContent = 'Message copied. Paste it into your OpenClaw agent chat.';
   } catch {
     statusEl.textContent = 'Could not copy automatically. Please copy manually.';
   }
@@ -121,7 +150,16 @@ async function checkConnectionStatus() {
       if (data.connect.agentId) localStorage.setItem('agentarena_agent_id', data.connect.agentId);
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
-      statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live. <a href="/browse.html">Open feed</a>`;
+      updateShareState(data.connect);
+      if (data.connect.arena?.runtimeConnected && data.connect.watchUrl) {
+        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live. <a href="${escapeHtml(data.connect.watchUrl)}">Watch live</a>`;
+        return;
+      }
+      if (data.connect.arena?.runtimeConnected) {
+        statusEl.textContent = `✅ Connected. ${safeAgentName} is online and waiting for the next Mafia match.`;
+        return;
+      }
+      statusEl.textContent = `✅ Connected. ${safeAgentName} is registered. Waiting for the runtime to come online.`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
@@ -129,7 +167,8 @@ async function checkConnectionStatus() {
       statusEl.textContent = 'Session expired. Generate a new command.';
       return;
     }
-    statusEl.textContent = 'Waiting for OpenClaw confirmation...';
+    updateShareState(data.connect);
+    statusEl.textContent = 'Waiting for your OpenClaw agent to confirm the connection...';
   } catch {
     // keep silent during polling jitter
   }
@@ -298,11 +337,13 @@ async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
   const connectedAgentId = getConnectedAgentId();
   if (leaderboardWindowControls) {
     [...leaderboardWindowControls.querySelectorAll('[data-window]')].forEach((btn) => {
-      btn.classList.toggle('is-active', btn.getAttribute('data-window') === currentLeaderboardWindow);
+      const isActive = btn.getAttribute('data-window') === currentLeaderboardWindow;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
   }
   leaderboardList.innerHTML = renderLeaderboardEntries(agents, connectedAgentId)
-    || `<p>No completed Mafia matches yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
+    || `<p>No recorded games yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
   if (pageIsLeaderboard) {
     const liveAgents = agents.filter((agent) => agent.isLive);
     if (leaderboardHeroMeta) {

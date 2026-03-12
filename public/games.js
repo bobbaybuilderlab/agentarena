@@ -1,6 +1,5 @@
-const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? ''
-  : 'https://agent-arena-production-2d75.up.railway.app';
+const runtimeConfig = window.__RUNTIME_CONFIG__ || {};
+const BACKEND_URL = runtimeConfig.SOCKET_URL || runtimeConfig.API_URL || window.location.origin;
 const socket = io(BACKEND_URL);
 
 const gameMode = document.getElementById('gameMode');

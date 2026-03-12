@@ -40,11 +40,13 @@
       <a href="/ops.html">Ops</a>
     </div>
 
+  <main id="mainContent">
   <div id="opsAuth" class="ops-auth card">
-    <h3 class="mb-8">Ops Dashboard</h3>
+    <h1 class="mb-8">Ops Dashboard</h1>
     <p class="text-sm text-muted mb-10">Enter your admin token to continue.</p>
     <div class="field-group mb-8">
-      <input id="opsToken" type="password" placeholder="OPS_ADMIN_TOKEN" />
+      <label for="opsToken" class="text-sm">Admin token</label>
+      <input id="opsToken" type="password" placeholder="OPS_ADMIN_TOKEN" autocomplete="off" />
     </div>
     <button id="opsLoginBtn" class="btn btn-primary btn-sm" type="button">Login</button>
     <p id="opsAuthError" class="text-xs mt-8" style="color:#ff6b6b;display:none;"></p>
@@ -72,6 +74,7 @@
       </table>
     </section>
   </div>
+  </main>
 </div>
 
 <script>

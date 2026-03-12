@@ -28,6 +28,7 @@ const { createCanaryMode } = require('./lib/canary-mode');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
 const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('./server/state/helpers');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
+const { createOpenClawRouter } = require('./server/routes/openclaw');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
 const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, getMatchBaselineSummary, closeDb } = require('./server/db');
@@ -35,23 +36,82 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
 
+function normalizeBaseUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
-const PRODUCTION_ORIGINS = ['https://agent-arena-vert.vercel.app'];
-const DEV_ORIGINS = ['http://localhost:3000'];
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL || '');
+if (IS_PRODUCTION && !PUBLIC_APP_URL) {
+  throw new Error('PUBLIC_APP_URL is required when NODE_ENV=production');
+}
+const PRODUCTION_ORIGINS = [PUBLIC_APP_URL].filter(Boolean);
+const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4173', 'http://127.0.0.1:4173'];
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+if (IS_PRODUCTION && !allowedOrigins.length && PUBLIC_APP_URL) {
+  console.warn('[startup] ALLOWED_ORIGINS not set; defaulting to PUBLIC_APP_URL');
+}
 const effectiveOrigins = allowedOrigins.length
   ? allowedOrigins
-  : process.env.NODE_ENV === 'production'
+  : IS_PRODUCTION
     ? PRODUCTION_ORIGINS
     : [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
+const socketCorsOrigin = effectiveOrigins.length ? effectiveOrigins : true;
+
+function resolvePublicBaseUrl(req) {
+  if (PUBLIC_APP_URL) return PUBLIC_APP_URL;
+  return normalizeBaseUrl(`${req.protocol}://${req.get('host')}`);
+}
+
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const LEGACY_PUBLIC_HOST = 'https://agent-arena-vert.vercel.app';
+
+function injectPublicBaseUrl(html, publicBaseUrl) {
+  return String(html || '').replaceAll(LEGACY_PUBLIC_HOST, publicBaseUrl);
+}
+
+function resolvePublicHtmlPath(requestPath) {
+  const normalizedPath = requestPath === '/' ? '/index.html' : String(requestPath || '');
+  if (!normalizedPath.endsWith('.html')) return null;
+  const absolutePath = path.resolve(PUBLIC_DIR, `.${normalizedPath}`);
+  if (!absolutePath.startsWith(`${PUBLIC_DIR}${path.sep}`)) return null;
+  if (!fs.existsSync(absolutePath)) return null;
+  return absolutePath;
+}
+
+function buildRuntimeConfigScript(req) {
+  const runtimeConfig = {
+    API_URL: '',
+    SOCKET_URL: '',
+    PUBLIC_APP_URL: resolvePublicBaseUrl(req),
+  };
+  return `window.__RUNTIME_CONFIG__ = ${JSON.stringify(runtimeConfig, null, 2)};\n`;
+}
+
+function sendRuntimeHtml(req, res, next) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const htmlPath = resolvePublicHtmlPath(req.path);
+  if (!htmlPath) return next();
+
+  try {
+    const html = fs.readFileSync(htmlPath, 'utf8');
+    const publicBaseUrl = resolvePublicBaseUrl(req);
+    res.type('html');
+    res.send(injectPublicBaseUrl(html, publicBaseUrl));
+  } catch (err) {
+    next(err);
+  }
+}
 
 const io = new Server(server, {
   cors: {
-    origin: effectiveOrigins,
+    origin: socketCorsOrigin,
     credentials: true,
   },
 });
@@ -1936,7 +1996,6 @@ const authLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: AUTH_RATE_L
 const opsLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: OPS_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
-app.use('/api/openclaw/', authLimiter);
 app.use('/api/ops/', opsLimiter);
 app.use('/api/evals/', opsLimiter);
 
@@ -2264,43 +2323,6 @@ function buildMatchBaseline(mode = 'mafia') {
     latestCompletedRoomId: baseline.latestCompletedRoomId || null,
     latestCompletedAt: baseline.latestCompletedAt || null,
   };
-}
-
-function sanitizeConnectSession(connect, { includeSecrets = false } = {}) {
-  if (!connect) return null;
-  const base = {
-    id: connect.id,
-    email: connect.email,
-    status: connect.status,
-    command: connect.command,
-    callbackUrl: connect.callbackUrl,
-    createdAt: connect.createdAt,
-    expiresAt: connect.expiresAt,
-    agentId: connect.agentId,
-    agentName: connect.agentName,
-    connectedAt: connect.connectedAt,
-  };
-  if (includeSecrets) {
-    base.accessToken = connect.accessToken;
-  }
-  return base;
-}
-
-function readConnectAccessToken(req) {
-  return String(
-    req.query?.accessToken
-      || req.headers['x-connect-access-token']
-      || req.body?.accessToken
-      || req.body?.proof
-      || ''
-  ).trim();
-}
-
-function authorizeConnectSession(req, connect) {
-  if (!connect) return false;
-  const token = readConnectAccessToken(req);
-  if (!token) return false;
-  return token === connect.accessToken || token === connect.callbackProof;
 }
 
 let _persistDirty = false;
@@ -2916,133 +2938,16 @@ app.get('/api/matches/mine', (req, res) => {
   }
 });
 
-app.post('/api/openclaw/connect-session', (req, res) => {
-  incrementGrowthMetric('funnel.connectSessionStarts', 1);
-  const email = String(req.body?.email || '').trim().toLowerCase() || 'anonymous';
-
-  const id = shortId(18);
-  const callbackUrl = `${req.protocol}://${req.get('host')}/api/openclaw/callback`;
-  const callbackProof = shortId(24);
-  const accessToken = shortId(24);
-  const connect = {
-    id,
-    email,
-    status: 'pending_confirmation',
-    command: `openclaw agentarena connect --token ${id} --callback '${callbackUrl}' --proof ${callbackProof}`,
-    callbackUrl,
-    callbackProof,
-    accessToken,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 15 * 60_000,
-    agentId: null,
-    agentName: null,
-  };
-  connectSessions.set(id, connect);
-  roomEvents.append('growth', id, 'CONNECT_SESSION_STARTED', {
-    status: connect.status,
-    emailDomain: email.split('@')[1] || null,
-  });
-  res.json({ ok: true, connect: sanitizeConnectSession(connect, { includeSecrets: true }) });
-});
-
-app.post('/api/openclaw/callback', (req, res) => {
-  const token = String(req.body?.token || '').trim();
-  const proof = String(req.body?.proof || '').trim();
-  const connect = connectSessions.get(token);
-  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-  if (!proof || proof !== connect.callbackProof) return res.status(401).json({ ok: false, error: 'invalid callback proof' });
-
-  if (connect.status === 'connected') return res.json({ ok: true, connect: sanitizeConnectSession(connect) });
-
-  const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
-  const style = String(req.body?.style || 'witty').slice(0, 24);
-  const agentId = shortId(10);
-  const agent = {
-    id: agentId,
-    owner: connect.email,
-    name,
-    deployed: true,
-    mmr: 1000,
-    karma: 0,
-    persona: { style, intensity: 7 },
-    openclaw: {
-      connected: true,
-      mode: 'cli',
-      connectSessionId: connect.id,
-      connectedAt: Date.now(),
-      note: 'connected through OpenClaw CLI callback',
-    },
-    createdAt: Date.now(),
-  };
-
-  agentProfiles.set(agentId, agent);
-  connect.status = 'connected';
-  connect.agentId = agentId;
-  connect.agentName = name;
-  connect.connectedAt = Date.now();
-  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_CONNECTED', {
-    status: connect.status,
-    agentId,
-    agentName: name,
-    emailDomain: String(connect.email || '').split('@')[1] || null,
-  });
-  persistState();
-
-  res.json({ ok: true, connect: sanitizeConnectSession(connect), agent });
-});
-
-app.get('/api/openclaw/connect-session/:id', (req, res) => {
-  const connect = connectSessions.get(req.params.id);
-  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-  if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
-  res.json({ ok: true, connect: sanitizeConnectSession(connect) });
-});
-
-app.post('/api/openclaw/connect-session/:id/confirm', (req, res) => {
-  const connect = connectSessions.get(req.params.id);
-  if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-  if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-  if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
-
-  if (connect.status === 'connected') return res.json({ ok: true, connect: sanitizeConnectSession(connect) });
-
-  const name = String(req.body?.agentName || `agent-${shortId(4)}`).trim().slice(0, 24);
-  const style = String(req.body?.style || 'witty').slice(0, 24);
-  const agentId = shortId(10);
-  const agent = {
-    id: agentId,
-    owner: connect.email,
-    name,
-    deployed: true,
-    mmr: 1000,
-    karma: 0,
-    persona: { style, intensity: 7 },
-    openclaw: {
-      connected: true,
-      mode: 'cli',
-      connectSessionId: connect.id,
-      connectedAt: Date.now(),
-      note: 'connected through OpenClaw CLI confirmation flow',
-    },
-    createdAt: Date.now(),
-  };
-
-  agentProfiles.set(agentId, agent);
-  connect.status = 'connected';
-  connect.agentId = agentId;
-  connect.connectedAt = Date.now();
-  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_CONNECTED', {
-    status: connect.status,
-    agentId,
-    agentName: name,
-    emailDomain: String(connect.email || '').split('@')[1] || null,
-  });
-  persistState();
-
-  res.json({ ok: true, connect: sanitizeConnectSession(connect), agent });
-});
+app.use('/api/openclaw', createOpenClawRouter({
+  agentProfiles,
+  connectSessions,
+  incrementGrowthMetric,
+  persistState,
+  resolvePublicBaseUrl,
+  roomEvents,
+  shortId,
+  summarizeAgentArenaState,
+}));
 
 app.post('/api/agents', (req, res) => {
   const name = String(req.body?.name || '').trim();
@@ -4127,7 +4032,14 @@ app.get('/match/:matchId', (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('/config.js', (req, res) => {
+  res.type('application/javascript');
+  res.set('Cache-Control', 'no-store');
+  res.send(buildRuntimeConfigScript(req));
+});
+
+app.use(sendRuntimeHtml);
+app.use(express.static(PUBLIC_DIR));
 
 registerRoomEventRoutes(app, { roomEvents });
 
@@ -4303,6 +4215,8 @@ app.get('/health', (_req, res) => {
     ok: true,
     status: dbStatus === 'ok' || dbStatus === 'unavailable' ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
+    launchMode: PUBLIC_LAUNCH_MODE,
+    publicBaseUrl: PUBLIC_APP_URL || null,
     database: dbStatus,
     uptimeSec: Math.floor(process.uptime()),
     rooms: {
@@ -4449,6 +4363,10 @@ module.exports = {
   liveAgentRuntimes,
   roomEvents,
   arenaCanary,
+  PUBLIC_APP_URL,
+  resolvePublicBaseUrl,
+  injectPublicBaseUrl,
+  buildRuntimeConfigScript,
   processPublicArenaQueue,
   createPublicArenaMafiaRoom,
   buildMatchBaseline,

@@ -29,6 +29,14 @@ test('connect session endpoints require secret access token', async () => {
     const id = created.connect.id;
     const accessToken = created.connect.accessToken;
     assert.ok(accessToken);
+    assert.equal(created.connect.callbackProof.length > 0, true);
+    assert.equal(created.connect.onboarding.pluginId, 'openclaw-connect');
+    assert.equal(created.connect.onboarding.pluginPackage, '@agentarena/openclaw-connect');
+    assert.match(created.connect.onboarding.installCommand, /openclaw plugins install --pin @agentarena\/openclaw-connect/);
+    assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable openclaw-connect/);
+    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @agentarena\/openclaw-connect && openclaw plugins enable openclaw-connect/);
+    assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
+    assert.match(created.connect.onboarding.agentPrompt, /run this command first/);
 
     const noAuthStatus = await fetch(`${base}/api/openclaw/connect-session/${id}`);
     assert.equal(noAuthStatus.status, 401);
@@ -44,5 +52,9 @@ test('connect session endpoints require secret access token', async () => {
     assert.equal(authStatus.status, 200);
     const statusData = await authStatus.json();
     assert.equal(statusData.ok, true);
+    assert.equal('accessToken' in statusData.connect, false);
+    assert.equal('callbackProof' in statusData.connect, false);
+    assert.equal(statusData.connect.onboarding.connectCommand, null);
+    assert.equal(statusData.connect.onboarding.agentPrompt, null);
   });
 });

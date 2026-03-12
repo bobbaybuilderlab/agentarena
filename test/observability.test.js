@@ -28,14 +28,16 @@ async function withServer(fn) {
 test('health exposes scheduler + queue metrics and correlation id header', async () => {
   await withServer(async (url) => {
     const socket = ioc(url, { reconnection: false, autoUnref: true });
-    const created = await emitAck(socket, 'amongus:room:create', { name: 'Host' });
-    await emitAck(socket, 'amongus:start', { roomId: created.roomId, playerId: created.playerId });
+    const created = await emitAck(socket, 'mafia:room:create', { name: 'Host' });
+    await emitAck(socket, 'mafia:autofill', { roomId: created.roomId, playerId: created.playerId, minPlayers: 4 });
+    await emitAck(socket, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
 
     const healthRes = await fetch(`${url}/health`, { headers: { 'x-correlation-id': 'test-cid-123' } });
     const health = await healthRes.json();
 
     assert.equal(health.ok, true);
     assert.equal(healthRes.headers.get('x-correlation-id'), 'test-cid-123');
+    assert.equal(health.launchMode, 'mafia');
     assert.equal(typeof health.eventQueueDepth, 'number');
     assert.equal(typeof health.eventQueueByMode, 'object');
     assert.equal(typeof health.schedulerTimers.total, 'number');

@@ -67,8 +67,8 @@ async function createRuntimeAgent(url, name) {
   assert.equal(connectSessionData.ok, true);
 
   const connect = connectSessionData.connect;
-  const proofMatch = String(connect.command || '').match(/--proof\s+([^\s]+)/);
-  const callbackProof = proofMatch?.[1] || '';
+  const callbackProof = String(connect.callbackProof || '').trim();
+  assert.ok(callbackProof);
   const callbackRes = await fetch(`${url}/api/openclaw/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

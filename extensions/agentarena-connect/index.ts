@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 type ConnectSession = {
   id: string;
   command: string;
+  callbackUrl?: string;
+  callbackProof?: string;
+  onboarding?: {
+    connectCommand?: string;
+  };
 };
 
 type AgentArenaStatus = {
@@ -39,8 +45,10 @@ type DecisionResponsePayload = {
   targetId?: string;
 };
 
-const DEFAULT_API_BASE = "https://agent-arena-api-production-5778.up.railway.app";
+const DEFAULT_API_BASE = process.env.AGENTARENA_API_BASE?.trim() || "http://127.0.0.1:3000";
 const DEFAULT_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA.md");
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
 
 function parseArenaProfile(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -144,7 +152,7 @@ function buildArenaUrls(apiBase: string) {
   const normalized = apiBase.replace(/\/+$/, "");
   return {
     apiBase: normalized,
-    webBase: normalized.replace(/api[-.]production-[^/]+\.up\.railway\.app$/, "agent-arena-vert.vercel.app"),
+    webBase: normalized,
   };
 }
 
@@ -201,7 +209,7 @@ const plugin = {
             const profile = loadArenaProfile(path.resolve(opts.path || DEFAULT_PROFILE_PATH));
             const style = String(profile.tone || profile.style || opts.style || "witty").slice(0, 24);
             const intensity = Math.max(1, Math.min(10, Number(profile.intensity || 7)));
-            const decisionCmd = String(opts.decisionCmd || cfg.decisionCmd || "").trim();
+            const decisionCmd = String(opts.decisionCmd || cfg.decisionCmd || STARTER_STRATEGY_CMD).trim();
             let token = String(opts.token || "").trim();
             let proof = String(opts.proof || "").trim();
             let callbackUrl = String(opts.callback || "").trim();
@@ -219,12 +227,15 @@ const plugin = {
 
                 if (!startRes.ok) throw new Error(`connect-session failed (${startRes.status})`);
 
-                const startJson = (await startRes.json()) as { ok: boolean; connect: ConnectSession & { callbackUrl?: string } };
-                const command = startJson.connect?.command || "";
+                const startJson = (await startRes.json()) as { ok: boolean; connect: ConnectSession };
                 token = startJson.connect?.id || "";
                 callbackUrl = startJson.connect?.callbackUrl || callbackUrl;
-                const proofMatch = command.match(/--proof\s+([^\s']+)/);
-                proof = proofMatch?.[1] || "";
+                proof = String(startJson.connect?.callbackProof || "").trim();
+                if (!proof) {
+                  const command = startJson.connect?.onboarding?.connectCommand || startJson.connect?.command || "";
+                  const proofMatch = command.match(/--proof\s+([^\s']+)/);
+                  proof = proofMatch?.[1] || "";
+                }
               }
 
               if (!token || !proof) throw new Error("Could not resolve token/proof for connect flow");
@@ -248,10 +259,10 @@ const plugin = {
               console.log("✅ Connected to Agent Arena");
               console.log(`Agent: ${cbJson.agent?.name || opts.agent}`);
               console.log(`Style: ${style} · intensity ${intensity}`);
-              if (decisionCmd) {
+              if (decisionCmd === STARTER_STRATEGY_CMD) {
+                console.log("Decision mode: starter Mafia strategy (customize later if you want).");
+              } else if (decisionCmd) {
                 console.log(`Decision hook: ${decisionCmd}`);
-              } else {
-                console.log("Decision hook: not configured. This runtime will stay online but passive until you provide --decision-cmd.");
               }
 
               const socket = io(apiBase, {
