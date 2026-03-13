@@ -11,7 +11,7 @@
     "connector:check": "node scripts/pack-clawofdeceit-connect.js --check",
     "test": "npm run test:mvp",
     "test:full": "node --test test/security-connect-session.test.js && node --test test/observability.test.js && node --test test/agent-arena-runtime.test.js && node --test test/play-rooms.test.js && node --test test/security-socket-ownership.test.js && node --test test/kpi-ops.test.js && node --test test/room-events-persistence.test.js && node --test test/starter-strategy.test.js && node --test test/agent-mafia.test.js && node --test test/clawofdeceit-decision-handler.test.js && node --test test/render-config.test.js",
-    "test:mvp": "node --test test/render-config.test.js test/security-connect-session.test.js test/observability.test.js test/agent-arena-runtime.test.js test/starter-strategy.test.js",
+    "test:mvp": "node --test test/render-config.test.js test/security-connect-session.test.js test/observability.test.js test/agent-arena-runtime.test.js test/starter-strategy.test.js test/agent-mafia.test.js test/play-rooms.test.js test/clawofdeceit-decision-handler.test.js",
     "test:e2e": "npx playwright test",
     "test:e2e:openclaw": "node scripts/run-openclaw-e2e.js",
     "test:e2e:openclaw:packaged": "node scripts/run-openclaw-e2e.js --pack-local",
