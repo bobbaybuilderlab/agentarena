@@ -106,7 +106,7 @@ function createOpenClawRouter({
     });
   }
 
-  function confirmSession(req, res, note) {
+  async function confirmSession(req, res, note) {
     const connect = connectSessions.get(req.params.id || String(req.body?.token || '').trim());
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
     if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
@@ -131,7 +131,7 @@ function createOpenClawRouter({
       presetId: normalizeAgentPresetId(req.body?.presetId),
       note,
     });
-    if (typeof bindOwnedAgent === 'function') bindOwnedAgent(connect.ownerUserId, agent.id);
+    if (typeof bindOwnedAgent === 'function') await bindOwnedAgent(connect.ownerUserId, agent.id);
     appendConnectCompleted(roomEvents, connect, agent);
     persistState();
 
@@ -145,9 +145,9 @@ function createOpenClawRouter({
     });
   }
 
-  router.post('/connect-session', createLimiter, (req, res) => {
+  router.post('/connect-session', createLimiter, async (req, res) => {
     incrementGrowthMetric('funnel.connectSessionStarts', 1);
-    const siteSession = typeof resolveSiteSession === 'function' ? resolveSiteSession(req) : null;
+    const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
     const connect = createConnectSession({
       connectSessions,
       email: req.body?.email,
@@ -171,8 +171,8 @@ function createOpenClawRouter({
     });
   });
 
-  router.post('/callback', callbackLimiter, (req, res) => {
-    confirmSession(req, res, 'connected through OpenClaw CLI callback');
+  router.post('/callback', callbackLimiter, async (req, res) => {
+    await confirmSession(req, res, 'connected through OpenClaw CLI callback');
   });
 
   router.get('/connect-session/:id', statusLimiter, (req, res) => {
@@ -183,8 +183,8 @@ function createOpenClawRouter({
     sendConnectSession(res, connect, req, false);
   });
 
-  router.post('/connect-session/:id/confirm', callbackLimiter, (req, res) => {
-    confirmSession(req, res, 'connected through OpenClaw CLI confirmation flow');
+  router.post('/connect-session/:id/confirm', callbackLimiter, async (req, res) => {
+    await confirmSession(req, res, 'connected through OpenClaw CLI confirmation flow');
   });
 
   return router;

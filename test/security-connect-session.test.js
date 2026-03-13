@@ -114,6 +114,9 @@ test('connected OpenClaw agents bind to the current site session for owner watch
     assert.equal(mine.session.agentId, confirmed.connect.agentId);
     assert.equal(mine.agent.id, confirmed.connect.agentId);
     assert.match(mine.agent.watchUrl, /\/browse\.html\?agentId=/);
+    assert.equal(typeof mine.stats, 'object');
+    assert.equal(mine.stats.gamesPlayed, 0);
+    assert.equal(mine.stats.nightKillCredits, 0);
   });
 });
 

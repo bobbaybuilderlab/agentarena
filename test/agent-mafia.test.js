@@ -7,6 +7,7 @@ const {
   joinRoom,
   startGame,
   submitAction,
+  prepareRematch,
   addLobbyBots,
   transitionRoomState,
   disconnectPlayer,
@@ -36,6 +37,36 @@ test('agent-mafia room create/join/start happy path', () => {
   const roles = started.room.players.map((p) => p.role);
   assert.equal(roles.filter((r) => r === 'mafia').length, 2);
   assert.equal(roles.filter((r) => r === 'town').length, 4);
+});
+
+test('agent-mafia assigns a fresh matchId for each rematch in the same room', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host', hostSocketId: 's-host' });
+  const roomId = created.room.id;
+  const hostPlayerId = created.player.id;
+
+  joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
+  joinRoom(store, { roomId, name: 'P3', socketId: 's3' });
+  joinRoom(store, { roomId, name: 'P4', socketId: 's4' });
+  joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  joinRoom(store, { roomId, name: 'P6', socketId: 's6' });
+
+  const firstStart = startGame(store, { roomId, hostPlayerId });
+  assert.equal(firstStart.ok, true);
+  const firstMatchId = firstStart.room.matchId;
+  assert.equal(typeof firstMatchId, 'string');
+  assert.equal(firstMatchId.length > 0, true);
+
+  firstStart.room.status = 'finished';
+  firstStart.room.phase = 'finished';
+
+  const rematch = prepareRematch(store, { roomId, hostPlayerId });
+  assert.equal(rematch.ok, true);
+  assert.equal(rematch.room.matchId, null);
+
+  const secondStart = startGame(store, { roomId, hostPlayerId });
+  assert.equal(secondStart.ok, true);
+  assert.notEqual(secondStart.room.matchId, firstMatchId);
 });
 
 test('agent-mafia start requires host and minimum players', () => {
@@ -177,4 +208,39 @@ test('agent-mafia continues to day 2 when no faction has won after the first vot
   assert.equal(room.phase, 'night');
   assert.equal(room.day, 2);
   assert.equal(room.winner, null);
+});
+
+test('agent-mafia tracks night kill credit for mafia voters who picked the resolved victim', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host', hostSocketId: 's-host' });
+  const roomId = created.room.id;
+  const hostPlayerId = created.player.id;
+
+  joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
+  joinRoom(store, { roomId, name: 'P3', socketId: 's3' });
+  joinRoom(store, { roomId, name: 'P4', socketId: 's4' });
+  joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  joinRoom(store, { roomId, name: 'P6', socketId: 's6' });
+
+  const started = startGame(store, { roomId, hostPlayerId });
+  assert.equal(started.ok, true);
+
+  const room = started.room;
+  const playersByName = Object.fromEntries(room.players.map((player) => [player.name, player]));
+  playersByName.Host.role = 'mafia';
+  playersByName.P2.role = 'mafia';
+  playersByName.P3.role = 'town';
+  playersByName.P4.role = 'town';
+  playersByName.P5.role = 'town';
+  playersByName.P6.role = 'town';
+
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.Host.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+
+  assert.equal(room.phase, 'discussion');
+  assert.equal(room.nightKillCredits[playersByName.Host.id], 1);
+  assert.equal(room.nightKillCredits[playersByName.P2.id], 1);
+
+  const elimination = room.events.find((event) => event.type === 'NIGHT_ELIMINATION');
+  assert.deepEqual(elimination.actorIds.sort(), [playersByName.Host.id, playersByName.P2.id].sort());
 });

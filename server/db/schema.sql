@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS match_results (
   rounds INTEGER NOT NULL DEFAULT 0,
   duration_ms INTEGER,
   started_at TEXT,
-  finished_at TEXT NOT NULL DEFAULT (datetime('now'))
+  finished_at TEXT NOT NULL DEFAULT (datetime('now')),
+  party_chain_id TEXT,
+  party_streak INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS match_players (
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS match_players (
   is_bot INTEGER NOT NULL DEFAULT 0,
   survived INTEGER NOT NULL DEFAULT 0,
   placement INTEGER,
+  night_kill_credits INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

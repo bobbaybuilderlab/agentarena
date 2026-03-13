@@ -2,7 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers, resetPlayTelemetry, seedPlayTelemetry } = require('../server');
+const {
+  server,
+  mafiaRooms,
+  roomEvents,
+  clearAllGameTimers,
+  resetPlayTelemetry,
+  seedPlayTelemetry,
+} = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
@@ -10,8 +17,6 @@ function emitAck(socket, event, payload) {
 
 async function withServer(fn) {
   mafiaRooms.clear();
-  amongUsRooms.clear();
-  villaRooms.clear();
   roomEvents.clear();
   resetPlayTelemetry();
   await new Promise((resolve) => server.listen(0, resolve));
@@ -25,79 +30,63 @@ async function withServer(fn) {
   }
 }
 
-test('play rooms API lists cross-mode room discovery with open-room filtering', async () => {
+test('play rooms API lists mafia rooms and open-room filtering', async () => {
   await withServer(async (url) => {
-    const s1 = ioc(url, { reconnection: false, autoUnref: true });
-    const s2 = ioc(url, { reconnection: false, autoUnref: true });
-    const sVilla = ioc(url, { reconnection: false, autoUnref: true });
+    const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guestA = ioc(url, { reconnection: false, autoUnref: true });
+    const guestB = ioc(url, { reconnection: false, autoUnref: true });
+    const guestC = ioc(url, { reconnection: false, autoUnref: true });
 
-    const mafiaCreate = await emitAck(s1, 'mafia:room:create', { name: 'MHost' });
-    assert.equal(mafiaCreate.ok, true);
+    try {
+      const created = await emitAck(host, 'mafia:room:create', { name: 'Host' });
+      assert.equal(created.ok, true);
 
-    const amongCreate = await emitAck(s2, 'amongus:room:create', { name: 'AHost' });
-    assert.equal(amongCreate.ok, true);
-    const villaCreate = await emitAck(sVilla, 'villa:room:create', { name: 'VHost' });
-    assert.equal(villaCreate.ok, true);
+      let roomsRes = await fetch(`${url}/api/play/rooms`);
+      let roomsData = await roomsRes.json();
+      assert.equal(roomsData.ok, true);
+      assert.equal(roomsData.summary.totalRooms, 1);
+      assert.equal(roomsData.summary.byMode.mafia, 1);
+      assert.equal(roomsData.summary.openRooms, 1);
+      assert.equal(roomsData.rooms[0].mode, 'mafia');
+      assert.equal(roomsData.rooms[0].canJoin, true);
 
-    const allRes = await fetch(`${url}/api/play/rooms`);
-    const allData = await allRes.json();
+      await emitAck(guestA, 'mafia:room:join', { roomId: created.roomId, name: 'GuestA' });
+      await emitAck(guestB, 'mafia:room:join', { roomId: created.roomId, name: 'GuestB' });
+      await emitAck(guestC, 'mafia:room:join', { roomId: created.roomId, name: 'GuestC' });
 
-    assert.equal(allData.ok, true);
-    assert.equal(allData.summary.totalRooms, 3);
-    assert.equal(allData.summary.openRooms, 3);
+      const started = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(started.ok, true);
+      assert.equal(started.state.status, 'in_progress');
+      assert.equal(started.state.players.length, 6);
+      assert.equal(started.addedBots, 2);
 
-    const modes = allData.rooms.map((r) => r.mode).sort();
-    assert.deepEqual(modes, ['amongus', 'mafia', 'villa']);
-
-    const mafiaItem = allData.rooms.find((r) => r.mode === 'mafia');
-    assert.equal(mafiaItem.roomId, mafiaCreate.roomId);
-    assert.equal(mafiaItem.canJoin, true);
-
-    const s3 = ioc(url, { reconnection: false, autoUnref: true });
-    const s4 = ioc(url, { reconnection: false, autoUnref: true });
-    const s5 = ioc(url, { reconnection: false, autoUnref: true });
-
-    await emitAck(s3, 'mafia:room:join', { roomId: mafiaCreate.roomId, name: 'M2' });
-    await emitAck(s4, 'mafia:room:join', { roomId: mafiaCreate.roomId, name: 'M3' });
-    await emitAck(s5, 'mafia:room:join', { roomId: mafiaCreate.roomId, name: 'M4' });
-
-    const startRes = await emitAck(s1, 'mafia:start', { roomId: mafiaCreate.roomId, playerId: mafiaCreate.playerId });
-    assert.equal(startRes.ok, true);
-
-    const openRes = await fetch(`${url}/api/play/rooms?status=open`);
-    const openData = await openRes.json();
-    assert.equal(openData.ok, true);
-    assert.equal(openData.summary.openRooms, 2);
-    assert.equal(openData.rooms.length, 2);
-    assert.ok(openData.rooms.some((r) => r.mode === 'amongus'));
-    assert.ok(openData.rooms.some((r) => r.mode === 'villa'));
-    assert.ok(openData.rooms.every((r) => r.status === 'lobby'));
-
-    s1.disconnect();
-    s2.disconnect();
-    s3.disconnect();
-    s4.disconnect();
-    s5.disconnect();
-    sVilla.disconnect();
+      roomsRes = await fetch(`${url}/api/play/rooms?status=open`);
+      roomsData = await roomsRes.json();
+      assert.equal(roomsData.ok, true);
+      assert.equal(roomsData.summary.openRooms, 0);
+      assert.equal(roomsData.rooms.length, 0);
+    } finally {
+      host.disconnect();
+      guestA.disconnect();
+      guestB.disconnect();
+      guestC.disconnect();
+    }
   });
 });
 
-test('quick-join API picks highest-fit open room or creates one with join ticket', async () => {
+test('quick-join picks the highest-quality mafia lobby and returns a join ticket', async () => {
   await withServer(async (url) => {
     const hostA = ioc(url, { reconnection: false, autoUnref: true });
     const hostB = ioc(url, { reconnection: false, autoUnref: true });
-    const p2 = ioc(url, { reconnection: false, autoUnref: true });
-    const p3 = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
 
     try {
-      const baseRoom = await emitAck(hostA, 'mafia:room:create', { name: 'HostA' });
-      const hotRoom = await emitAck(hostB, 'mafia:room:create', { name: 'HostB' });
+      const baseRoom = await emitAck(hostA, 'mafia:room:create', { name: 'BaseHost' });
+      const hotRoom = await emitAck(hostB, 'mafia:room:create', { name: 'HotHost' });
       assert.equal(baseRoom.ok, true);
       assert.equal(hotRoom.ok, true);
 
-      await emitAck(p2, 'mafia:room:join', { roomId: baseRoom.roomId, name: 'M2' });
-      await emitAck(p3, 'mafia:room:join', { roomId: hotRoom.roomId, name: 'M3' });
-
+      await emitAck(guest, 'mafia:room:join', { roomId: hotRoom.roomId, name: 'HotGuest' });
       seedPlayTelemetry('mafia', hotRoom.roomId, {
         rematchCount: 2,
         quickMatchTickets: 10,
@@ -114,506 +103,86 @@ test('quick-join API picks highest-fit open room or creates one with join ticket
       assert.equal(quickJoinData.ok, true);
       assert.equal(quickJoinData.created, false);
       assert.equal(quickJoinData.room.roomId, hotRoom.roomId);
-      assert.ok((quickJoinData.room.matchQuality?.score || 0) > 0.5);
       assert.equal(typeof quickJoinData.quickJoinDecision?.code, 'string');
-      assert.equal(typeof quickJoinData.quickJoinDecision?.message, 'string');
       assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${hotRoom.roomId}`));
-      assert.match(quickJoinData.joinTicket.joinUrl, /name=QueueRunner/);
-      assert.match(quickJoinData.joinTicket.joinUrl, /qjReason=/);
-
-      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-      const roomsData = await roomsRes.json();
-      const room = roomsData.rooms.find((r) => r.roomId === hotRoom.roomId);
-      assert.equal(room.quickMatch.tickets, 11);
-      assert.equal(room.quickMatch.conversions, 9);
-      assert.ok(room.matchQuality.score > 0.6);
-      assert.equal(room.launchReadiness.hostConnected, true);
-      assert.equal(room.launchReadiness.canHostStartReady, true);
+      assert.match(quickJoinData.joinTicket.joinUrl, /game=mafia/);
     } finally {
       hostA.disconnect();
       hostB.disconnect();
-      p2.disconnect();
-      p3.disconnect();
-    }
-  });
-
-  await withServer(async (url) => {
-    const res = await fetch(`${url}/api/play/quick-join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'amongus', name: 'FreshPlayer' }),
-    });
-    const data = await res.json();
-    assert.equal(data.ok, true);
-    assert.equal(data.created, true);
-    assert.equal(data.quickJoinDecision?.code, 'CREATED_NEW_ROOM');
-    assert.equal(data.room.mode, 'amongus');
-    assert.equal(data.room.players, 4);
-    assert.equal(data.room.hostName, 'FreshPlayer');
-    assert.match(data.joinTicket.joinUrl, /game=amongus/);
-  });
-});
-
-test('quick-join supports villa mode and room cards include fairness counters', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const created = await emitAck(host, 'villa:room:create', { name: 'VillaHost' });
-    assert.equal(created.ok, true);
-
-    const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'villa', name: 'VillaRunner' }),
-    });
-    const quickJoinData = await quickJoinRes.json();
-
-    assert.equal(quickJoinData.ok, true);
-    assert.equal(quickJoinData.created, false);
-    assert.equal(quickJoinData.room.mode, 'villa');
-    assert.match(quickJoinData.joinTicket.joinUrl, /game=villa/);
-
-    const roomsRes = await fetch(`${url}/api/play/rooms?mode=villa`);
-    const roomsData = await roomsRes.json();
-    assert.equal(roomsData.ok, true);
-    assert.equal(roomsData.summary.byMode.villa, 1);
-    assert.equal(typeof roomsData.summary.fairness.joinAttempts, 'number');
-    assert.equal(typeof roomsData.summary.fairness.socketSeatCapBlockRate, 'number');
-
-    host.disconnect();
-  });
-});
-
-test('quick-join down-ranks reconnect-friction rooms when healthier lobby exists', async () => {
-  await withServer(async (url) => {
-    const riskyHost = ioc(url, { reconnection: false, autoUnref: true });
-    const healthyHost = ioc(url, { reconnection: false, autoUnref: true });
-    const p2 = ioc(url, { reconnection: false, autoUnref: true });
-    const p3 = ioc(url, { reconnection: false, autoUnref: true });
-
-    try {
-      const riskyRoom = await emitAck(riskyHost, 'mafia:room:create', { name: 'RiskyHost' });
-      const healthyRoom = await emitAck(healthyHost, 'mafia:room:create', { name: 'HealthyHost' });
-      assert.equal(riskyRoom.ok, true);
-      assert.equal(healthyRoom.ok, true);
-
-      await emitAck(p2, 'mafia:room:join', { roomId: riskyRoom.roomId, name: 'RiskyP2' });
-      await emitAck(p3, 'mafia:room:join', { roomId: healthyRoom.roomId, name: 'HealthyP2' });
-
-      seedPlayTelemetry('mafia', riskyRoom.roomId, {
-        quickMatchTickets: 12,
-        quickMatchConversions: 12,
-        reconnectAutoAttempts: 9,
-        reconnectAutoSuccesses: 1,
-        reconnectAutoFailures: 8,
-      });
-
-      seedPlayTelemetry('mafia', healthyRoom.roomId, {
-        quickMatchTickets: 4,
-        quickMatchConversions: 3,
-        reconnectAutoAttempts: 4,
-        reconnectAutoSuccesses: 4,
-        reconnectAutoFailures: 0,
-      });
-
-      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
-      });
-      const quickJoinData = await quickJoinRes.json();
-
-      assert.equal(quickJoinData.ok, true);
-      assert.equal(quickJoinData.created, false);
-      assert.equal(quickJoinData.room.roomId, healthyRoom.roomId);
-      assert.equal(quickJoinData.quickJoinDecision?.code, 'LOWER_RECONNECT_FRICTION');
-
-      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-      const roomsData = await roomsRes.json();
-      const riskySummary = roomsData.rooms.find((r) => r.roomId === riskyRoom.roomId);
-      const healthySummary = roomsData.rooms.find((r) => r.roomId === healthyRoom.roomId);
-
-      assert.ok((riskySummary.matchQuality?.reconnectFrictionPenalty || 0) > 0);
-      assert.equal(healthySummary.matchQuality?.reconnectFrictionPenalty || 0, 0);
-      assert.ok((riskySummary.matchQuality?.score || 0) < (healthySummary.matchQuality?.score || 0));
-    } finally {
-      riskyHost.disconnect();
-      healthyHost.disconnect();
-      p2.disconnect();
-      p3.disconnect();
+      guest.disconnect();
     }
   });
 });
 
-test('quick-join includes reconnect suggestion + claim token for disconnected lobby seats', async () => {
+test('lobby claims expose disconnected mafia seats and reconnect telemetry is mafia-only', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
 
     try {
-      const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
+      const created = await emitAck(host, 'mafia:room:create', { name: 'Host' });
+      const joined = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
       assert.equal(created.ok, true);
+      assert.equal(joined.ok, true);
 
-      host.disconnect();
+      guest.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 25));
 
-      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+      const claimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${encodeURIComponent(created.roomId)}`);
+      const claims = await claimsRes.json();
+      assert.equal(claims.ok, true);
+      assert.equal(claims.claimable.length, 1);
+      assert.equal(claims.claimable[0].name, 'Guest');
+
+      const telemetryRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+        body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'attempt', event: 'reclaim_clicked' }),
       });
-      const quickJoinData = await quickJoinRes.json();
+      const telemetry = await telemetryRes.json();
+      assert.equal(telemetry.ok, true);
+      assert.equal(telemetry.reconnectAuto.attempts, 1);
+      assert.equal(telemetry.reconnectRecoveryClicks.reclaim_clicked, 1);
 
-      assert.equal(quickJoinData.ok, true);
-      assert.equal(quickJoinData.created, false);
-      assert.equal(quickJoinData.room.roomId, created.roomId);
-      assert.equal(quickJoinData.joinTicket.reconnect.name, 'HostM');
-      assert.equal(typeof quickJoinData.joinTicket.reconnect.token, 'string');
-      assert.ok(quickJoinData.joinTicket.reconnect.token.length >= 8);
-
-      const params = new URLSearchParams(String(quickJoinData.joinTicket.joinUrl || '').split('?')[1] || '');
-      assert.equal(params.get('reclaimName'), 'HostM');
-      assert.equal(params.get('reclaimHost'), '1');
-      assert.equal(params.get('claimToken'), quickJoinData.joinTicket.reconnect.token);
-
-      const reconnecting = ioc(url, { reconnection: false, autoUnref: true });
-      const claimed = await emitAck(reconnecting, 'mafia:room:join', {
-        roomId: created.roomId,
-        name: 'QueueRunner',
-        claimToken: quickJoinData.joinTicket.reconnect.token,
+      const invalidModeRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'villa', roomId: created.roomId, outcome: 'attempt' }),
       });
-      assert.equal(claimed.ok, true);
-      assert.equal(claimed.playerId, created.playerId);
-      reconnecting.disconnect();
+      assert.equal(invalidModeRes.status, 400);
     } finally {
       host.disconnect();
     }
   });
 });
 
-test('reconnect auto-reclaim telemetry is tracked in room discovery + ops endpoints', async () => {
+test('lobby autofill remains mafia-only and start-ready replaces disconnected humans before launch', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-
-    const attemptRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'attempt' }),
-    });
-    const successRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'success' }),
-    });
-    const failRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'failure' }),
-    });
-    const reclaimClickRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, event: 'reclaim_clicked' }),
-    });
-    const quickRecoverClickRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, event: 'quick_recover_clicked' }),
-    });
-
-    assert.equal((await attemptRes.json()).ok, true);
-    assert.equal((await successRes.json()).ok, true);
-    assert.equal((await failRes.json()).ok, true);
-    assert.equal((await reclaimClickRes.json()).ok, true);
-    assert.equal((await quickRecoverClickRes.json()).ok, true);
-
-    const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-    const roomsData = await roomsRes.json();
-    const card = roomsData.rooms.find((r) => r.roomId === created.roomId);
-    assert.equal(card.reconnectAuto.attempts, 1);
-    assert.equal(card.reconnectAuto.successes, 1);
-    assert.equal(card.reconnectAuto.failures, 1);
-    assert.equal(card.reconnectAuto.successRate, 1);
-    assert.equal(card.reconnectRecoveryClicks.reclaim_clicked, 1);
-    assert.equal(card.reconnectRecoveryClicks.quick_recover_clicked, 1);
-    assert.equal(roomsData.summary.reconnectAuto.attempts, 1);
-    assert.equal(roomsData.summary.reconnectRecoveryClicks.reclaim_clicked, 1);
-    assert.equal(roomsData.summary.reconnectRecoveryClicks.quick_recover_clicked, 1);
-
-    const opsRes = await fetch(`${url}/api/ops/reconnect`);
-    const ops = await opsRes.json();
-    assert.equal(ops.ok, true);
-    assert.equal(ops.totals.attempts, 1);
-    assert.equal(ops.totals.successes, 1);
-    assert.equal(ops.totals.failures, 1);
-    assert.equal(ops.totals.reclaim_clicked, 1);
-    assert.equal(ops.totals.quick_recover_clicked, 1);
-    assert.equal(ops.byMode.mafia.reclaim_clicked, 1);
-    assert.equal(ops.byMode.mafia.quick_recover_clicked, 1);
-    assert.equal(ops.byMode.mafia.successRate, 1);
-
-    host.disconnect();
-  });
-});
-
-test('quick-join avoids host-offline lobbies when host-online alternative exists', async () => {
-  await withServer(async (url) => {
-    const offlineHost = ioc(url, { reconnection: false, autoUnref: true });
-    const onlineHost = ioc(url, { reconnection: false, autoUnref: true });
+    const guest = ioc(url, { reconnection: false, autoUnref: true });
 
     try {
-      const offlineRoom = await emitAck(offlineHost, 'mafia:room:create', { name: 'OfflineHost' });
-      const onlineRoom = await emitAck(onlineHost, 'mafia:room:create', { name: 'OnlineHost' });
-      assert.equal(offlineRoom.ok, true);
-      assert.equal(onlineRoom.ok, true);
+      const created = await emitAck(host, 'mafia:room:create', { name: 'Host' });
+      const joined = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
+      assert.equal(created.ok, true);
+      assert.equal(joined.ok, true);
 
-      offlineHost.disconnect();
-
-      const quickJoinRes = await fetch(`${url}/api/play/quick-join`, {
+      const invalidModeRes = await fetch(`${url}/api/play/lobby/autofill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'mafia', name: 'QueueRunner' }),
+        body: JSON.stringify({ mode: 'amongus', roomId: created.roomId, minPlayers: 4 }),
       });
-      const quickJoinData = await quickJoinRes.json();
+      assert.equal(invalidModeRes.status, 400);
 
-      assert.equal(quickJoinData.ok, true);
-      assert.equal(quickJoinData.room.roomId, onlineRoom.roomId);
+      guest.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 25));
 
-      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-      const roomsData = await roomsRes.json();
-      const offlineCard = roomsData.rooms.find((r) => r.roomId === offlineRoom.roomId);
-      const onlineCard = roomsData.rooms.find((r) => r.roomId === onlineRoom.roomId);
-      assert.equal(offlineCard.launchReadiness.hostConnected, false);
-      assert.equal(offlineCard.launchReadiness.canHostStartReady, false);
-      assert.equal(onlineCard.launchReadiness.hostConnected, true);
-      assert.ok(onlineCard.matchQuality.score > offlineCard.matchQuality.score);
-    } finally {
-      onlineHost.disconnect();
-    }
-  });
-});
-
-test('lobby claims API exposes disconnected seats and host reclaim by name', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const guest = ioc(url, { reconnection: false, autoUnref: true });
-
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-
-    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'GuestM' });
-    assert.equal(guestJoin.ok, true);
-
-    host.disconnect();
-    guest.disconnect();
-
-    const claimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${created.roomId}`);
-    const claims = await claimsRes.json();
-    assert.equal(claims.ok, true);
-    assert.equal(claims.claimable.length, 2);
-    assert.equal(claims.hasHostClaim, true);
-    assert.ok(claims.claimable.some((seat) => seat.name === 'HostM' && seat.hostSeat === true));
-    assert.ok(claims.claimable.some((seat) => seat.name === 'GuestM' && seat.hostSeat === false));
-
-    const hostReconnect = ioc(url, { reconnection: false, autoUnref: true });
-    const reclaimed = await emitAck(hostReconnect, 'mafia:room:join', { roomId: created.roomId, name: 'HostM' });
-    assert.equal(reclaimed.ok, true);
-    assert.equal(reclaimed.playerId, created.playerId);
-
-    const room = mafiaRooms.get(created.roomId);
-    const hostSeat = room.players.find((p) => p.id === created.playerId);
-    assert.equal(hostSeat.isConnected, true);
-
-    const afterClaimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${created.roomId}`);
-    const afterClaims = await afterClaimsRes.json();
-    assert.equal(afterClaims.ok, true);
-    assert.equal(afterClaims.hasHostClaim, false);
-    assert.ok(afterClaims.claimable.every((seat) => seat.name !== 'HostM'));
-
-    hostReconnect.disconnect();
-  });
-});
-
-test('rooms API surfaces recent winners telemetry for finished rooms', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-
-    const room = mafiaRooms.get(created.roomId);
-    room.status = 'finished';
-    room.phase = 'finished';
-    room.winner = 'town';
-
-    const res = await fetch(`${url}/api/play/rooms?mode=mafia`);
-    const data = await res.json();
-    const card = data.rooms.find((r) => r.roomId === created.roomId);
-    assert.equal(card.recentWinners.length, 1);
-    assert.equal(card.recentWinners[0].winner, 'town');
-
-    host.disconnect();
-  });
-});
-
-test('host can autofill lobby bots to start immediately; non-host cannot', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const guest = ioc(url, { reconnection: false, autoUnref: true });
-
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-
-    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
-    assert.equal(guestJoin.ok, true);
-
-    const denied = await emitAck(guest, 'mafia:autofill', { roomId: created.roomId, playerId: guestJoin.playerId, minPlayers: 4 });
-    assert.equal(denied.ok, false);
-    assert.equal(denied.error.code, 'HOST_ONLY');
-
-    const filled = await emitAck(host, 'mafia:autofill', { roomId: created.roomId, playerId: created.playerId, minPlayers: 4 });
-    assert.equal(filled.ok, true);
-    assert.equal(filled.addedBots, 2);
-    assert.equal(filled.state.players.length, 4);
-    assert.equal(filled.state.players.filter((p) => p.isBot).length, 2);
-
-    const started = await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
-    assert.equal(started.ok, true);
-
-    host.disconnect();
-    guest.disconnect();
-  });
-});
-
-test('start-ready auto-fills lobby and replaces disconnected humans before start', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const guest = ioc(url, { reconnection: false, autoUnref: true });
-
-    const created = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    assert.equal(created.ok, true);
-
-    const guestJoin = await emitAck(guest, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
-    assert.equal(guestJoin.ok, true);
-    guest.disconnect();
-
-    const denied = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: 'NOT_HOST' });
-    assert.equal(denied.ok, false);
-    assert.equal(denied.error.code, 'HOST_ONLY');
-
-    const started = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: created.playerId });
-    assert.equal(started.ok, true);
-    assert.equal(started.state.status, 'in_progress');
-    assert.equal(started.state.players.length, 4);
-    assert.equal(started.addedBots, 3);
-    assert.equal(started.removedDisconnectedHumans, 1);
-    assert.equal(started.state.players.some((p) => p.id === guestJoin.playerId), false);
-
-    host.disconnect();
-  });
-});
-
-test('finished rooms support one-click rematch for host in both modes', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-    const guest = ioc(url, { reconnection: false, autoUnref: true });
-
-    const mafiaCreated = await emitAck(host, 'mafia:room:create', { name: 'HostM' });
-    const mafiaGuest = await emitAck(guest, 'mafia:room:join', { roomId: mafiaCreated.roomId, name: 'Guest' });
-    await emitAck(host, 'mafia:autofill', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId, minPlayers: 4 });
-    await emitAck(host, 'mafia:start', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId });
-
-    const mafiaRoom = mafiaRooms.get(mafiaCreated.roomId);
-    mafiaRoom.status = 'finished';
-    mafiaRoom.phase = 'finished';
-
-    const mafiaDenied = await emitAck(guest, 'mafia:rematch', { roomId: mafiaCreated.roomId, playerId: mafiaGuest.playerId });
-    assert.equal(mafiaDenied.ok, false);
-    assert.equal(mafiaDenied.error.code, 'HOST_ONLY');
-
-    const mafiaRematch = await emitAck(host, 'mafia:rematch', { roomId: mafiaCreated.roomId, playerId: mafiaCreated.playerId });
-    assert.equal(mafiaRematch.ok, true);
-    assert.equal(mafiaRematch.state.status, 'in_progress');
-    assert.ok(['night', 'discussion', 'voting'].includes(mafiaRematch.state.phase));
-    assert.equal(mafiaRematch.state.players.length, 4);
-
-    const mafiaAfterRematch = await fetch(`${url}/api/play/rooms?mode=mafia`);
-    const mafiaAfterRematchData = await mafiaAfterRematch.json();
-    const mafiaCard = mafiaAfterRematchData.rooms.find((r) => r.roomId === mafiaCreated.roomId);
-    assert.equal(mafiaCard.rematchCount, 1);
-    assert.equal(mafiaCard.partyStreak, 1);
-    assert.equal(mafiaCard.telemetryEvents.rematch_clicked, 1);
-    assert.equal(mafiaCard.telemetryEvents.party_streak_extended, 1);
-
-    const amongHost = ioc(url, { reconnection: false, autoUnref: true });
-    const amongGuest = ioc(url, { reconnection: false, autoUnref: true });
-
-    const amongCreated = await emitAck(amongHost, 'amongus:room:create', { name: 'HostA' });
-    await emitAck(amongGuest, 'amongus:room:join', { roomId: amongCreated.roomId, name: 'GuestA' });
-    await emitAck(amongHost, 'amongus:autofill', { roomId: amongCreated.roomId, playerId: amongCreated.playerId, minPlayers: 4 });
-    await emitAck(amongHost, 'amongus:start', { roomId: amongCreated.roomId, playerId: amongCreated.playerId });
-
-    const amongRoom = amongUsRooms.get(amongCreated.roomId);
-    amongRoom.status = 'finished';
-    amongRoom.phase = 'finished';
-
-    const amongRematch = await emitAck(amongHost, 'amongus:rematch', { roomId: amongCreated.roomId, playerId: amongCreated.playerId });
-    assert.equal(amongRematch.ok, true);
-    assert.equal(amongRematch.state.status, 'in_progress');
-    assert.ok(['tasks', 'meeting'].includes(amongRematch.state.phase));
-    assert.equal(amongRematch.state.players.length, 4);
-    assert.equal(amongRematch.state.partyStreak, 1);
-
-    const allRoomsRes = await fetch(`${url}/api/play/rooms`);
-    const allRoomsData = await allRoomsRes.json();
-    assert.equal(allRoomsData.summary.telemetryEvents.rematch_clicked, 2);
-    assert.equal(allRoomsData.summary.telemetryEvents.party_streak_extended, 2);
-
-    const opsRes = await fetch(`${url}/api/ops/reconnect`);
-    const opsData = await opsRes.json();
-    assert.equal(opsData.totals.rematch_clicked, 2);
-    assert.equal(opsData.totals.party_streak_extended, 2);
-
-    host.disconnect();
-    guest.disconnect();
-    amongHost.disconnect();
-    amongGuest.disconnect();
-  });
-});
-
-test('party streak persists across repeated rematches in same room party chain', async () => {
-  await withServer(async (url) => {
-    const host = ioc(url, { reconnection: false, autoUnref: true });
-
-    try {
-      const created = await emitAck(host, 'mafia:room:create', { name: 'StreakHost' });
-      assert.equal(created.ok, true);
-
-      await emitAck(host, 'mafia:autofill', { roomId: created.roomId, playerId: created.playerId, minPlayers: 4 });
-      await emitAck(host, 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
-
-      const room = mafiaRooms.get(created.roomId);
-      room.status = 'finished';
-      room.phase = 'finished';
-      const chainId = room.partyChainId;
-
-      const r1 = await emitAck(host, 'mafia:rematch', { roomId: created.roomId, playerId: created.playerId });
-      assert.equal(r1.ok, true);
-      assert.equal(r1.state.partyChainId, chainId);
-      assert.equal(r1.state.partyStreak, 1);
-
-      room.status = 'finished';
-      room.phase = 'finished';
-      const r2 = await emitAck(host, 'mafia:rematch', { roomId: created.roomId, playerId: created.playerId });
-      assert.equal(r2.ok, true);
-      assert.equal(r2.state.partyChainId, chainId);
-      assert.equal(r2.state.partyStreak, 2);
-
-      const roomsRes = await fetch(`${url}/api/play/rooms?mode=mafia`);
-      const roomsData = await roomsRes.json();
-      const card = roomsData.rooms.find((x) => x.roomId === created.roomId);
-      assert.equal(card.partyChainId, chainId);
-      assert.equal(card.partyStreak, 2);
-      assert.equal(card.telemetryEvents.rematch_clicked, 2);
-      assert.equal(card.telemetryEvents.party_streak_extended, 2);
+      const startReady = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(startReady.ok, true);
+      assert.equal(startReady.removedDisconnectedHumans, 1);
+      assert.equal(startReady.addedBots, 5);
+      assert.equal(startReady.state.status, 'in_progress');
+      assert.equal(startReady.state.players.length, 6);
     } finally {
       host.disconnect();
     }

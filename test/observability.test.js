@@ -2,17 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-const { server, rooms, mafiaRooms, amongUsRooms, villaRooms, roomEvents, clearAllGameTimers } = require('../server');
+const { server, mafiaRooms, roomEvents, clearAllGameTimers } = require('../server');
 
 function emitAck(socket, event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
 }
 
 async function withServer(fn) {
-  rooms.clear();
   mafiaRooms.clear();
-  amongUsRooms.clear();
-  villaRooms.clear();
   roomEvents.clear();
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
@@ -38,6 +35,7 @@ test('health exposes scheduler + queue metrics and correlation id header', async
     assert.equal(health.ok, true);
     assert.equal(healthRes.headers.get('x-correlation-id'), 'test-cid-123');
     assert.equal(health.launchMode, 'mafia');
+    assert.equal(health.durableStorageRequired, false);
     assert.equal(typeof health.eventQueueDepth, 'number');
     assert.equal(typeof health.eventQueueByMode, 'object');
     assert.equal(typeof health.schedulerTimers.total, 'number');
@@ -48,18 +46,6 @@ test('health exposes scheduler + queue metrics and correlation id header', async
     assert.equal(ops.ok, true);
     assert.equal(typeof ops.pending, 'number');
     assert.equal(typeof ops.pendingByMode, 'object');
-
-    const canaryRes = await fetch(`${url}/api/ops/canary`);
-    const canary = await canaryRes.json();
-    assert.equal(canary.ok, true);
-    assert.equal(typeof canary.config.enabled, 'boolean');
-    assert.equal(typeof canary.config.percent, 'number');
-    assert.equal(typeof canary.stats.control.decisions, 'number');
-    assert.equal(typeof canary.stats.canary.decisions, 'number');
-
-    assert.equal(typeof health.canary.enabled, 'boolean');
-    assert.equal(typeof health.canary.percent, 'number');
-    assert.equal(typeof health.canary.stats.control.decisions, 'number');
 
     socket.disconnect();
   });

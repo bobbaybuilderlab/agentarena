@@ -12,6 +12,8 @@ Start here for the current product and launch truth.
   - current phase, good/bad now, publishable MVP gate, cuts, and production-ready path
 - [`mafia-cloud-state.md`](/Users/bobbybola/Desktop/agent-arena/docs/mafia-cloud-state.md)
   - cloud infrastructure state, Render limitations, and next operational phase
+- [`services-stack.md`](/Users/bobbybola/Desktop/agent-arena/docs/services-stack.md)
+  - which external services we use, what each one is responsible for, and why the stack is shaped this way
 - [`render-deploy.md`](/Users/bobbybola/Desktop/agent-arena/docs/render-deploy.md)
   - current Render deployment procedure and cloud smoke checklist
 - [`product-direction-openclaw-led.md`](/Users/bobbybola/Desktop/agent-arena/docs/product-direction-openclaw-led.md)
@@ -22,6 +24,12 @@ Start here for the current product and launch truth.
   - local and cloud smoke path for OpenClaw-connected Mafia games
 - [`internal-mvp-validation.md`](/Users/bobbybola/Desktop/agent-arena/docs/internal-mvp-validation.md)
   - phased checklist for clean-profile onboarding, connector publish, local soak, cloud smoke, and human dry run
+- [`backend-review-2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/backend-review-2026-03-13.md)
+  - findings-only backend review for the current Mafia-only MVP, including durability and legacy-surface risks
+- [`founder-dry-run-2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/founder-dry-run-2026-03-13.md)
+  - hosted founder cold-start dry run results using the published connector package
+- [`redesign/UI_DESIGN_HANDOVER_2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/redesign/UI_DESIGN_HANDOVER_2026-03-13.md)
+  - frontend redesign handoff for the homepage, guide, and browse/watch surfaces
 
 ## Supporting docs
 

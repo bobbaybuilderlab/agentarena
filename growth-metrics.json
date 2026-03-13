@@ -1,11 +1,11 @@
 {
-  "updatedAt": "2026-03-11T09:18:46.568Z",
+  "updatedAt": "2026-03-13T15:42:25.743Z",
   "window": "all_time",
   "funnel": {
-    "visits": 245,
-    "connectSessionStarts": 53,
-    "quickJoinStarts": 6,
-    "firstMatchesCompleted": 184,
+    "visits": 404,
+    "connectSessionStarts": 257,
+    "quickJoinStarts": 8,
+    "firstMatchesCompleted": 707,
     "rematchStarts": 4,
     "d1ReturnRate": 0
   },

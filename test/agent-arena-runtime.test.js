@@ -10,9 +10,6 @@ process.env.AUTH_RATE_LIMIT_MAX = '20';
 const {
   server,
   mafiaRooms,
-  amongUsRooms,
-  villaRooms,
-  gtaRooms,
   agentProfiles,
   connectSessions,
   liveAgentRuntimes,
@@ -26,9 +23,6 @@ const {
 
 async function withServer(fn) {
   mafiaRooms.clear();
-  amongUsRooms.clear();
-  villaRooms.clear();
-  gtaRooms.clear();
   agentProfiles.clear();
   connectSessions.clear();
   liveAgentRuntimes.clear();
@@ -67,10 +61,13 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
   return null;
 }
 
-async function createRuntimeAgent(url, name) {
+async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
     body: JSON.stringify({ email: `${name.toLowerCase()}@example.com` }),
   });
   const connectSessionData = await connectSessionRes.json();
@@ -156,8 +153,21 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
   await withServer(async (url) => {
     const agents = [];
     try {
-      for (const name of ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']) {
-        agents.push(await createRuntimeAgent(url, name));
+      const authRes = await fetch(`${url}/api/auth/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const authData = await authRes.json();
+      assert.equal(authData.ok, true);
+      const sessionToken = authData.session.token;
+      assert.ok(sessionToken);
+
+      const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
+      for (const [index, name] of names.entries()) {
+        agents.push(await createRuntimeAgent(url, name, {
+          sessionToken: index === 0 ? sessionToken : undefined,
+        }));
       }
 
       const seatedRoomId = await waitFor(async () => {
@@ -189,7 +199,7 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Number(baselineData.baseline.estimatedGamesPerHour || 0) > 0, true);
 
       mafiaRooms.clear();
-      const durableBaseline = buildMatchBaseline('mafia');
+      const durableBaseline = await buildMatchBaseline('mafia');
       assert.equal(durableBaseline.sampleSize >= 1, true);
       assert.equal(Number(durableBaseline.avgDurationMs || 0) > 0, true);
 
@@ -210,6 +220,32 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(matchesData.matches), true);
       assert.equal(matchesData.matches.length >= 1, true);
       assert.ok(['mafia', 'town'].includes(matchesData.matches[0].winner));
+
+      const statsRes = await fetch(`${url}/api/stats`);
+      const statsData = await statsRes.json();
+      assert.equal(statsData.ok, true);
+      assert.equal(Number(statsData.totalGames || 0) >= 1, true);
+      assert.equal(Number(statsData.uniqueAgents || 0) >= 6, true);
+      assert.equal(typeof statsData.mafiasCaught, 'number');
+
+      const mineRes = await fetch(`${url}/api/agents/mine`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const mineData = await mineRes.json();
+      assert.equal(mineData.ok, true);
+      assert.equal(mineData.session.agentId, agents[0].agentId);
+      assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
+      assert.equal(typeof mineData.stats.nightKillCredits, 'number');
+
+      const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const mineMatchesData = await mineMatchesRes.json();
+      assert.equal(mineMatchesData.ok, true);
+      assert.equal(mineMatchesData.agentId, agents[0].agentId);
+      assert.equal(Array.isArray(mineMatchesData.matches), true);
+      assert.equal(mineMatchesData.matches.length >= 1, true);
+      assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

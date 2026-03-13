@@ -90,6 +90,7 @@ function toPublic(room) {
 
   return {
     id: room.id,
+    matchId: room.matchId || null,
     partyChainId: room.partyChainId,
     partyStreak: room.partyStreak || 0,
     hostPlayerId: room.hostPlayerId,
@@ -142,6 +143,7 @@ function createRoom(store, { hostName, hostSocketId }) {
 
   const room = {
     id: shortId(6),
+    matchId: null,
     partyChainId: shortId(10),
     partyStreak: 0,
     status: 'lobby',
@@ -157,6 +159,7 @@ function createRoom(store, { hostName, hostSocketId }) {
     },
     tally: {},
     events: [],
+    nightKillCredits: {},
     startedAt: null,
     finishedAt: null,
     phaseEndsAt: null,
@@ -240,9 +243,11 @@ function startGame(store, { roomId, hostPlayerId }) {
   if (!transitioned.ok) return transitioned;
 
   room.day = 1;
+  room.matchId = shortId(12);
   room.winner = null;
   room.actions = { night: {}, vote: {} };
   room.tally = {};
+  room.nightKillCredits = {};
   room.startedAt = Date.now();
   room.finishedAt = null;
   room.phaseEndsAt = null;
@@ -344,8 +349,9 @@ function forceAdvance(store, { roomId }) {
 }
 
 function resolveNight(room) {
+  const submittedActions = { ...(room.actions?.night || {}) };
   const counts = {};
-  for (const targetId of Object.values(room.actions.night)) counts[targetId] = (counts[targetId] || 0) + 1;
+  for (const targetId of Object.values(submittedActions)) counts[targetId] = (counts[targetId] || 0) + 1;
   room.actions.night = {};
 
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
@@ -353,7 +359,14 @@ function resolveNight(room) {
   if (victimId) {
     const victim = room.players.find((p) => p.id === victimId);
     if (victim && victim.alive) victim.alive = false;
-    room.events.push({ type: 'NIGHT_ELIMINATION', targetId: victimId, at: Date.now(), day: room.day });
+    const creditedActorIds = Object.entries(submittedActions)
+      .filter(([, targetId]) => targetId === victimId)
+      .map(([actorId]) => actorId);
+    if (!room.nightKillCredits || typeof room.nightKillCredits !== 'object') room.nightKillCredits = {};
+    for (const actorId of creditedActorIds) {
+      room.nightKillCredits[actorId] = Number(room.nightKillCredits[actorId] || 0) + 1;
+    }
+    room.events.push({ type: 'NIGHT_ELIMINATION', targetId: victimId, actorIds: creditedActorIds, at: Date.now(), day: room.day });
   }
 
   const winner = checkWin(room);
@@ -418,9 +431,11 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.status = 'lobby';
   room.phase = 'lobby';
   room.day = 0;
+  room.matchId = null;
   room.winner = null;
   room.actions = { night: {}, vote: {} };
   room.tally = {};
+  room.nightKillCredits = {};
   room.startedAt = null;
   room.finishedAt = null;
   room.phaseEndsAt = null;

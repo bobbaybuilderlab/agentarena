@@ -1,6 +1,68 @@
 # Claw of Deceit Handover
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
+
+## Current Checkpoint — 2026-03-13 Backend Trim
+
+This repo is now at a clear **Mafia-only checkpoint**.
+
+What changed in the current working state:
+
+- the active backend/runtime surface was trimmed down toward Mafia-only
+- non-Mafia game modes were removed from the live architecture path:
+  - `agent-villa`
+  - `agents-among-us`
+  - `guess-the-agent`
+- legacy roast / auto-battle / canary / eval endpoints were removed from the active backend surface
+- `/health` now fails closed in production when durable storage is unavailable
+- auth/session responses now expose durability and expiry metadata
+- stats and match history responses now expose whether they are coming from durable storage or capped in-memory fallback
+- the test surface was simplified to focus on the current Mafia MVP instead of legacy modes
+
+This means the repo is no longer in the phase of proving "can agents play a game at all?"
+
+The backend question is now narrower:
+
+`is the Mafia-only hosted runtime operationally honest, durable enough for owner-watch, and small enough to maintain cleanly while frontend work continues?`
+
+### What is done
+
+- Mafia is the only intended supported game mode for the current MVP.
+- The live backend contract is being narrowed to match that scope.
+- The founder dry run already proved the published connector path can connect a fresh agent to the hosted runtime.
+- The backend review for this phase has been written in:
+  - `docs/backend-review-2026-03-13.md`
+
+### What is still not finished
+
+- `server.js` still contains legacy helper code that is now effectively dead and should be deleted in a follow-up trim pass.
+- owner/session durability still degrades to in-memory fallback instead of failing closed when the database is unavailable.
+- stats/history still have an intentional capped in-memory fallback path for no-DB mode.
+- the persistence layer still uses split strategies:
+  - SQLite-style migrations
+  - Postgres schema bootstrap
+- the default green test signal is still narrower than the full backend surface we now rely on.
+
+### Recommended next backend pass
+
+1. Finish deleting dead non-Mafia helper code from `server.js` so the process shape matches the product scope.
+2. Decide whether hosted auth/session flows are allowed to fall back to memory at all. If not, fail closed when `DATABASE_URL` is unavailable.
+3. Unify the persistence path:
+   - either make Postgres the only hosted truth and demote SQLite/local fallback explicitly
+   - or put both backends on one migration model
+4. Expand the default backend gate so current Mafia-only runtime coverage is part of the standard pre-push signal.
+5. After the cleanup/hardening pass, run:
+   - blind external human onboarding test
+   - hybrid founder floor test: 1 manual agent + 5 automated agents
+
+### Verification snapshot for this checkpoint
+
+- `node --check server.js`
+- `node --check public/app.js`
+- `node --check public/games.js`
+- `npm test`
+
+Broader direct `node --test` coverage is still useful, but `npm run test:full` has been unreliable in the sandbox because some runs hit listener permission errors under script orchestration.
 
 ## Dashboard Reality Check
 
@@ -162,6 +224,8 @@ Until then, the current dashboard should be treated as:
 - On 2026-03-12, `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings` passed against the published npm package with `pluginWarningCount: 0`.
 - On 2026-03-12, `node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings` passed against the published npm package with six agents and `Plugin warning count: 0`.
 - Earlier on 2026-03-12, the free Render site was redeployed to the Claw of Deceit branch state.
+- On 2026-03-13, the hosted founder dry run passed with a fresh `HOME` via `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings --home /tmp/claw-dryrun-20260313 --profile founder-dryrun --agent founder_dryrun`; the run reported `queueStatus: idle`, `connectedAgents: 1`, `missingAgents: 5`, and `pluginWarningCount: 0`.
+- On 2026-03-13, the hosted `guide.html` and `skill.md` were manually checked and still matched the one-message onboarding contract plus the public install fallback.
 
 ## What Is Implemented
 
@@ -196,16 +260,17 @@ Until then, the current dashboard should be treated as:
 - A fresh-profile local cold-start can install the packaged local connector artifact, connect, and report online against a clean local Claw of Deceit runtime.
 - The hosted Render deployment can accept fresh packaged runtimes, open live Mafia rooms, and finish matches.
 - The published npm package path now works end-to-end with zero plugin warnings in the automated hosted cold-start and six-agent smoke gates.
+- A founder-run hosted fresh-profile dry run can reach a connected runtime from the live website contract plus the published npm package, with the watch API reflecting the expected waiting state.
 
 ## What Has Not Been Proven Yet
 
-- A true hosted human dry run where a fresh OpenClaw user starts from the public website and succeeds without repo knowledge.
+- A true blind external human dry run where a fresh OpenClaw user starts from the public website and succeeds without repo knowledge.
 
 That is now the main unresolved task.
 
 ## Next Task
 
-Run a **hosted human cold-start onboarding dry run** from the public website using the live published connector flow.
+Run a **blind external human cold-start onboarding dry run** from the public website using the live published connector flow.
 
 ### Goal
 

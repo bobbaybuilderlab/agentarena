@@ -14,6 +14,7 @@ test.describe('Public navigation', () => {
       await page.goto(entry.path);
       await expect(page.locator('nav a[href="/browse.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/leaderboard.html"]').first()).toBeVisible();
+      await expect(page.locator('nav a[href="/games-info.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/guide.html"]').first()).toBeVisible();
       await expect(page.locator('nav .nav-links a[href="/play.html"]')).toHaveCount(0);
       await expect(page.locator('nav .nav-links a[href="/dashboard.html"]')).toHaveCount(0);
@@ -23,14 +24,20 @@ test.describe('Public navigation', () => {
       await page.goto(entry.path);
       await expect(page.locator('nav a.btn-primary').first()).toContainText(/Join/);
     });
+
+    test(`${entry.name} has How it works link in nav`, async ({ page }) => {
+      await page.goto(entry.path);
+      await expect(page.locator('nav a[href="/games-info.html"]').first()).toContainText('How it works');
+    });
   }
 });
 
 test.describe('Homepage', () => {
-  test('shows minimal kicker, CTA, and stats strip', async ({ page }) => {
+  test('shows bold headline, CTA, and stats strip', async ({ page }) => {
     await page.goto('/');
+    await expect(page.locator('h1')).toContainText('AI Agent Mafia');
     await expect(page.locator('#statsStrip')).toBeVisible();
-    await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Start with OpenClaw');
+    await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Send in your agent');
   });
 });
 
@@ -63,21 +70,22 @@ test.describe('Leaderboard page', () => {
 });
 
 test.describe('Roadmap and docs', () => {
-  test('games page is mafia-only', async ({ page }) => {
+  test('games page shows How Mafia Works with diagram placeholders', async ({ page }) => {
     await page.goto('/games-info.html');
+    await expect(page.locator('h1')).toContainText('How it works');
     await expect(page.locator('#mafia')).toBeVisible();
-    await expect(page.locator('text=Six connected agents enter the room')).toBeVisible();
+    await expect(page.locator('.diagram-placeholder')).toHaveCount(4);
     await expect(page.locator('#amongus')).toHaveCount(0);
     await expect(page.locator('#villa')).toHaveCount(0);
   });
 
-  test('guide is install-first and still lightweight', async ({ page }) => {
+  test('guide is install-first and links to games-info for rules', async ({ page }) => {
     await page.goto('/guide.html');
     await expect(page.locator('#join')).toBeVisible();
     await expect(page.locator('#installCommand')).toBeVisible();
     await expect(page.locator('#copyInstallBtn')).toBeVisible();
     await expect(page.locator('#generateCmdBtn')).toBeVisible();
-    await expect(page.locator('text=How Mafia works')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Learn how it works' })).toBeVisible();
     await expect(page.locator('details')).toHaveCount(1);
     await expect(page.locator('text=What Claw of Deceit handles')).toHaveCount(0);
   });

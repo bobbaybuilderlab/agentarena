@@ -73,5 +73,6 @@ test('render blueprint targets the current free hosted service', () => {
   const renderYaml = fs.readFileSync(path.join(__dirname, '..', 'render.yaml'), 'utf8');
   assert.match(renderYaml, /type:\s+web/);
   assert.match(renderYaml, /plan:\s+free/);
+  assert.match(renderYaml, /key:\s+DATABASE_URL/);
   assert.doesNotMatch(renderYaml, /plan:\s+starter/);
 });

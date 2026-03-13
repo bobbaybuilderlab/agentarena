@@ -12,11 +12,9 @@ services:
         value: production
       - key: PUBLIC_APP_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: ALLOWED_ORIGINS
         sync: false
       - key: OPS_ADMIN_TOKEN
         sync: false
-      - key: ARENA_CANARY_ENABLED
-        value: "1"
-      - key: ARENA_CANARY_PERCENT
-        value: "0"

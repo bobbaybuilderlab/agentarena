@@ -747,20 +747,6 @@ async function refreshOpsStatus() {
       eventQueueStatus.textContent = 'Event queue: unavailable';
     }
   }
-
-  if (canaryStatus) {
-    try {
-      const res = await fetch('/api/ops/canary');
-      const data = await res.json();
-      if (data?.ok) {
-        const cfg = data.config || {};
-        const stats = data.stats || {};
-        canaryStatus.textContent = `Canary policy: ${cfg.enabled ? 'on' : 'off'} @ ${cfg.percent || 0}% · decisions c=${stats.control?.decisions || 0} k=${stats.canary?.decisions || 0}`;
-      }
-    } catch (_err) {
-      canaryStatus.textContent = 'Canary policy: unavailable';
-    }
-  }
 }
 
 function markUrgencyStep(el, done, label) {
@@ -1868,40 +1854,6 @@ flushEventsBtn?.addEventListener('click', async () => {
     setStatus('Failed to flush event queue');
   }
   await refreshOpsStatus();
-});
-
-async function runEvalApi(pathname) {
-  if (!evalStatus) return;
-  evalStatus.textContent = 'Running evals...';
-  try {
-    const res = await fetch(pathname);
-    const data = await res.json();
-    if (pathname === '/api/evals/ci') {
-      const checks = (data.checks || []).map((c) => `${c.ok ? '✅' : '❌'} ${c.metric}: ${c.actual} (${c.expect})`).join('\n');
-      evalStatus.textContent = [
-        data.ok ? 'CI Gate: PASS' : 'CI Gate: FAIL',
-        `fixtures=${data.totals?.fixtures} failed=${data.failedFixtures?.length || 0}`,
-        checks,
-      ].join('\n');
-      return;
-    }
-
-    evalStatus.textContent = JSON.stringify({
-      ok: data.ok,
-      totals: data.totals,
-      failedFixtureIds: (data.failures || []).map((f) => f.id),
-    }, null, 2);
-  } catch (_err) {
-    evalStatus.textContent = 'Eval request failed';
-  }
-}
-
-runEvalsBtn?.addEventListener('click', async () => {
-  await runEvalApi('/api/evals/run');
-});
-
-runCiGateBtn?.addEventListener('click', async () => {
-  await runEvalApi('/api/evals/ci');
 });
 
 async function autoJoinFromQuery() {

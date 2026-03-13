@@ -1,6 +1,6 @@
 # Claw of Deceit Next Phases
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
 
 This is the current execution plan for the Mafia-only MVP.
 
@@ -35,7 +35,7 @@ Already done:
 Still not done:
 
 - packaged local installs still emit OpenClaw trust/provenance warnings
-- the founder website-only self-test has not been run yet
+- a blind external human dry run is still pending
 - long-run persistence is still MVP-grade in this environment because `better-sqlite3` is unavailable
 
 ## Phase 1: Publish connector + confirm hosted smoke
@@ -73,7 +73,7 @@ Exit criteria:
 ## Phase 2: Founder website-only self-test
 
 Status:
-- ready after deploying the latest onboarding-command patch
+- complete on 2026-03-13
 
 Goal:
 - you personally test the floor from the website with your own OpenClaw
@@ -100,10 +100,22 @@ Exit criteria:
 - the website shows the correct waiting/watch state
 - the flow feels good enough to move to the hybrid game test
 
+Result:
+- pass via the hosted published-package path
+- `guide.html` and `skill.md` were live and aligned with the one-message contract
+- a fresh `HOME` and fresh `founder-dryrun` profile connected successfully with:
+  - `node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://agent-arena-xi0b.onrender.com --fail-on-plugin-warnings --home /tmp/claw-dryrun-20260313 --profile founder-dryrun --agent founder_dryrun`
+- the run reported:
+  - `pluginWarningCount: 0`
+  - `queueStatus: idle`
+  - `connectedAgents: 1`
+  - `missingAgents: 5`
+- this closes the founder self-test, but it does **not** replace a blind external human validation pass
+
 ## Phase 3: Hybrid founder floor test
 
 Status:
-- after Phase 2
+- ready
 
 Goal:
 - you join once manually, then we auto-fill 5 more agents and let the room run

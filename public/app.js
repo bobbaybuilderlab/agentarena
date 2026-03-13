@@ -265,13 +265,11 @@ async function checkConnectionStatus() {
 
 checkStatusBtn?.addEventListener('click', checkConnectionStatus);
 
-// Roast feed + leaderboard page
-const feedList = document.getElementById('feedList');
+// Leaderboard + live rooms
 const leaderboardList = document.getElementById('leaderboardList');
 const leaderboardWindowControls = document.getElementById('leaderboardWindowControls');
 const leaderboardHeroMeta = document.getElementById('leaderboardHeroMeta');
 const leaderboardLiveSummary = document.getElementById('leaderboardLiveSummary');
-const simulateBtn = document.getElementById('simulateBtn');
 const liveRoomsList = document.getElementById('liveRoomsList');
 const liveRoomsSummary = document.getElementById('liveRoomsSummary');
 const refreshLiveRoomsBtn = document.getElementById('refreshLiveRoomsBtn');
@@ -365,31 +363,6 @@ function refreshFirstWinChecklist() {
   mark(stepWatch, hasViewedArena, 'Watch your agent play');
 }
 
-async function loadFeed() {
-  if (!feedList) return;
-  const res = await fetch(`${API_BASE}/api/feed?sort=top`);
-  const data = await res.json();
-  const items = data.items || [];
-  feedList.innerHTML = items.slice(0, 12).map((item) => {
-    const safeAgentName = escapeHtml(item.agentName);
-    const safeTextBody = escapeHtml(item.text);
-    const safeUpvotes = Number(item.upvotes || 0);
-    const safeId = encodeURIComponent(String(item.id || ''));
-    const shareText = encodeURIComponent(`🔥 Claw of Deceit roast by ${item.agentName}: "${item.text}"\n\n▲ ${safeUpvotes} upvotes so far\n\n${window.location.origin}/browse.html`);
-    return `
-    <article>
-      <h3>${safeAgentName}</h3>
-      <p>${safeTextBody}</p>
-      <p><strong>▲ ${safeUpvotes}</strong></p>
-      <div class="cta-row">
-        <button class="btn btn-soft" data-upvote="${safeId}" type="button">Upvote</button>
-        <a class="btn btn-soft" target="_blank" rel="noopener" href="https://x.com/intent/tweet?text=${shareText}">Share on X</a>
-      </div>
-    </article>
-  `;
-  }).join('') || '<p>No roasts yet. Run a round.</p>';
-}
-
 async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
   if (!leaderboardList) return;
   currentLeaderboardWindow = windowKey;
@@ -418,32 +391,6 @@ async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
     }
   }
 }
-
-simulateBtn?.addEventListener('click', async () => {
-  await fetch(`${API_BASE}/api/matchmaking/tick`, { method: 'POST' });
-  await loadFeed();
-  await loadLeaderboard();
-});
-
-feedList?.addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-upvote]');
-  if (!btn) return;
-  const roastId = btn.getAttribute('data-upvote');
-  const voterAgentId = getConnectedAgentId();
-  if (!voterAgentId) {
-    alert('Only connected agents can vote. Connect your agent first.');
-    return;
-  }
-  const res = await fetch(`${API_BASE}/api/roasts/${roastId}/upvote`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ voterAgentId }),
-  });
-  const data = await res.json();
-  if (!data.ok) alert(data.error || 'Vote failed');
-  await loadFeed();
-  await loadLeaderboard();
-});
 
 function roomModeLabel(mode) {
   return 'Agent Mafia';
@@ -578,9 +525,6 @@ if (document.body.classList.contains('page-watch-owner')) {
 syncArenaEntryButton();
 void loadPublicOnboarding();
 
-if (feedList) {
-  loadFeed();
-}
 if (leaderboardList) {
   loadLeaderboard();
 }
