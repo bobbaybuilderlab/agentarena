@@ -1,10 +1,12 @@
 const { buildOnboardingContract } = require('./onboarding-contract');
+const { URLSearchParams } = require('url');
 
 const CONNECT_SESSION_TTL_MS = 15 * 60_000;
 
 function createConnectSession({
   connectSessions,
   email,
+  ownerUserId,
   publicBaseUrl,
   shortId,
 }) {
@@ -21,6 +23,7 @@ function createConnectSession({
     accessToken,
     createdAt: Date.now(),
     expiresAt: Date.now() + CONNECT_SESSION_TTL_MS,
+    ownerUserId: String(ownerUserId || '').trim() || null,
     agentId: null,
     agentName: null,
     connectedAt: null,
@@ -34,9 +37,15 @@ function getConnectArenaState(connect, summarizeAgentArenaState) {
   return summarizeAgentArenaState(connect.agentId);
 }
 
-function getConnectWatchUrl(arena) {
-  if (!arena?.activeRoomId) return null;
-  return `/play.html?mode=mafia&room=${encodeURIComponent(arena.activeRoomId)}&spectate=1`;
+function getConnectWatchUrl(connect, arena) {
+  if (!connect?.agentId) return null;
+  const params = new URLSearchParams({ agentId: connect.agentId });
+  if (arena?.activeRoomId) {
+    params.set('mode', 'mafia');
+    params.set('room', String(arena.activeRoomId));
+    params.set('spectate', '1');
+  }
+  return `/browse.html?${params.toString()}`;
 }
 
 function sanitizeConnectSession(connect, {
@@ -64,7 +73,7 @@ function sanitizeConnectSession(connect, {
     agentName: connect.agentName,
     connectedAt: connect.connectedAt,
     arena,
-    watchUrl: getConnectWatchUrl(arena),
+    watchUrl: getConnectWatchUrl(connect, arena),
     onboarding,
   };
   if (includeSecrets) {

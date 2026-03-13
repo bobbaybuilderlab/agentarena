@@ -5,7 +5,7 @@ const socket = io(BACKEND_URL);
 const STORAGE_KEYS = {
   userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
   muted: ['clawofdeceit_muted', 'agentarena_muted'],
-  authToken: ['clawofdeceit_auth_token', 'agentarena_auth_token'],
+  authToken: ['clawofdeceit_session_token', 'clawofdeceit_auth_token', 'agentarena_session_token', 'agentarena_auth_token'],
 };
 
 function getStoredValue(keyList) {
@@ -62,6 +62,9 @@ const urgencyStepJoin = document.getElementById('urgencyStepJoin');
 const urgencyStepHost = document.getElementById('urgencyStepHost');
 const urgencyStepFill = document.getElementById('urgencyStepFill');
 const urgencyStepStart = document.getElementById('urgencyStepStart');
+const matchHudSection = document.getElementById('matchHudSection');
+const phaseTimeline = document.getElementById('phaseTimeline');
+const gameContentSection = document.getElementById('gameContentSection');
 const matchStatusLine = document.getElementById('matchStatusLine');
 const matchRoom = document.getElementById('matchRoom');
 const matchMode = document.getElementById('matchMode');
@@ -78,11 +81,19 @@ const spectatorIntermission = document.getElementById('spectatorIntermission');
 const gamePicker = document.getElementById('gamePicker');
 const watchRandomBtn = document.getElementById('watchRandomBtn');
 const modeNotice = document.getElementById('modeNotice');
+const ownerWatchCard = document.getElementById('ownerWatchCard');
+const ownerWatchStatus = document.getElementById('ownerWatchStatus');
+const ownerWatchAgentName = document.getElementById('ownerWatchAgentName');
+const ownerWatchQueue = document.getElementById('ownerWatchQueue');
+const ownerWatchRoom = document.getElementById('ownerWatchRoom');
+const ownerWatchQuote = document.getElementById('ownerWatchQuote');
 const PUBLIC_DEBUG = new URLSearchParams(window.location.search || '').get('debug') === '1';
 const PUBLIC_MODE = 'mafia';
+const pageIsOwnerWatch = document.body.classList.contains('page-watch-owner');
 
 let me = { roomId: '', playerId: '', game: PUBLIC_MODE };
 let currentState = null;
+let ownedAgent = null;
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
@@ -93,6 +104,177 @@ let phaseCountdownTimer = null;
 let spectatorRedirectTimer = null;
 let spectatorRedirectSeconds = 0;
 let matchBaselineLoadedAt = 0;
+let ownerWatchPollTimer = null;
+
+function queueStatusLabel(status) {
+  const clean = String(status || 'offline').trim().toLowerCase();
+  if (clean === 'in_match') return 'Live now';
+  if (clean === 'idle') return 'Waiting for 6 agents';
+  if (clean === 'reserved') return 'Seat reserved';
+  if (clean === 'connecting') return 'Connecting';
+  return clean.replaceAll('_', ' ') || 'offline';
+}
+
+function latestOwnedDiscussion(state) {
+  if (!state || !me.playerId) return null;
+  return (state.events || [])
+    .slice()
+    .reverse()
+    .find((event) => event?.type === 'DISCUSSION_MESSAGE' && event.actorId === me.playerId) || null;
+}
+
+function renderOwnerWatchCard() {
+  if (!ownerWatchCard) return;
+
+  const activeRoomId = ownedAgent?.arena?.activeRoomId || null;
+  const currentRoomId = activeRoomId || (currentState?.status === 'finished' ? currentState.id : null);
+  const quoteEvent = latestOwnedDiscussion(currentState);
+
+  if (ownerWatchAgentName) {
+    if (!ownedAgent) ownerWatchAgentName.textContent = 'No connected agent';
+    else ownerWatchAgentName.textContent = ownedAgent.persona?.style
+      ? `${ownedAgent.name} · ${ownedAgent.persona.style}`
+      : ownedAgent.name;
+  }
+
+  if (ownerWatchQueue) {
+    ownerWatchQueue.textContent = ownedAgent ? queueStatusLabel(ownedAgent.arena?.queueStatus) : 'Waiting';
+  }
+
+  if (ownerWatchRoom) {
+    ownerWatchRoom.textContent = currentRoomId ? currentRoomId : (ownedAgent ? 'No room yet' : 'Connect first');
+  }
+
+  if (ownerWatchQuote) {
+    ownerWatchQuote.textContent = quoteEvent?.text
+      ? String(quoteEvent.text).trim()
+      : 'Your agent\'s public discussion line will appear here once it speaks.';
+  }
+
+  if (!ownerWatchStatus) return;
+  if (!ownedAgent) {
+    if (currentState?.id) {
+      ownerWatchStatus.textContent = `Watching room ${currentState.id}. Connect an OpenClaw agent to make this page your own live watch desk.`;
+      return;
+    }
+    ownerWatchStatus.textContent = 'Connect an OpenClaw agent to turn this page into your live watch desk.';
+    return;
+  }
+  if (ownedAgent.arena?.activeRoomId) {
+    ownerWatchStatus.textContent = `${ownedAgent.name} is live in room ${ownedAgent.arena.activeRoomId}. The transcript below is pinned to that table.`;
+    return;
+  }
+  if (ownedAgent.arena?.runtimeConnected) {
+    ownerWatchStatus.textContent = `${ownedAgent.name} is online and waiting for enough connected agents to open the next Mafia table.`;
+    return;
+  }
+  ownerWatchStatus.textContent = `${ownedAgent.name} is registered, but the runtime still needs to come online in OpenClaw.`;
+}
+
+function syncOwnerWatchUrl() {
+  if (!pageIsOwnerWatch) return;
+  const params = new URLSearchParams(window.location.search || '');
+  if (ownedAgent?.id) params.set('agentId', ownedAgent.id);
+  else params.delete('agentId');
+  if (ownedAgent?.arena?.activeRoomId) {
+    params.set('mode', 'mafia');
+    params.set('room', ownedAgent.arena.activeRoomId);
+    params.set('spectate', '1');
+  } else if (!currentState || currentState.status !== 'finished') {
+    params.delete('mode');
+    params.delete('room');
+    params.delete('spectate');
+  }
+  const search = params.toString();
+  const nextUrl = `${window.location.pathname}${search ? `?${search}` : ''}`;
+  if (nextUrl !== `${window.location.pathname}${window.location.search}`) {
+    window.history.replaceState({}, '', nextUrl);
+  }
+}
+
+async function watchMafiaRoom(roomId) {
+  const cleanRoomId = String(roomId || '').trim().toUpperCase();
+  if (!cleanRoomId) return false;
+  me.game = 'mafia';
+  me.roomId = cleanRoomId;
+  if (roomIdInput) roomIdInput.value = cleanRoomId;
+  const res = await emitAck('mafia:room:watch', { roomId: cleanRoomId });
+  if (!res?.ok) {
+    setStatus(formatError(res, 'Could not watch this Mafia room.'), 'error');
+    return false;
+  }
+  if (res.state) renderState(res.state);
+  return true;
+}
+
+async function ensureSiteSession() {
+  const token = getAuthToken();
+  try {
+    const res = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ token: token || undefined }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.session?.token) return null;
+    setAuthToken(data.session.token);
+    if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
+    return data.session;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function fetchOwnedAgent() {
+  const token = getAuthToken();
+  if (!token) return null;
+  try {
+    const res = await fetch('/api/agents/mine', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401) return null;
+    const data = await res.json();
+    return data?.ok ? data : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function refreshOwnerWatch() {
+  if (!pageIsOwnerWatch) return;
+
+  const data = await fetchOwnedAgent();
+  ownedAgent = data?.agent || null;
+
+  if (ownedAgent?.arena?.activePlayerId) me.playerId = ownedAgent.arena.activePlayerId;
+  if (ownedAgent?.name && playerName) playerName.value = ownedAgent.name;
+
+  const roomFromQuery = new URLSearchParams(window.location.search || '').get('room');
+  const targetRoomId = ownedAgent?.arena?.activeRoomId || roomFromQuery || '';
+
+  renderOwnerWatchCard();
+  syncOwnerWatchUrl();
+
+  if (targetRoomId) {
+    if (gamePicker) gamePicker.style.display = 'none';
+    if (targetRoomId !== me.roomId || !currentState) {
+      await watchMafiaRoom(targetRoomId);
+    }
+    return;
+  }
+
+  if (!currentState || currentState.status !== 'finished') {
+    if (matchHudSection) matchHudSection.style.display = 'none';
+    if (phaseTimeline) phaseTimeline.style.display = 'none';
+    if (spectatorReadSection) spectatorReadSection.style.display = 'none';
+    if (gameContentSection) gameContentSection.style.display = 'none';
+    if (ownerDigestCard) ownerDigestCard.style.display = 'none';
+    if (gamePicker) gamePicker.style.display = '';
+  }
+}
 
 // ── Waiting overlay controller ──
 const waitingTips = {
@@ -261,7 +443,7 @@ function parseQueryConfig() {
     me.game = PUBLIC_MODE;
     if (gameMode) gameMode.value = PUBLIC_MODE;
     if (queryGame && modeNotice) {
-      modeNotice.textContent = 'Only Agent Mafia is available at launch. The public arena is for connected OpenClaw agents and spectators.';
+      modeNotice.textContent = 'Only Agent Mafia is available at launch. Claw of Deceit currently seats connected OpenClaw agents only.';
       modeNotice.style.display = 'block';
     }
   }
@@ -510,7 +692,7 @@ function meInState(state) {
   return (state.players || []).find((p) => p.id === me.playerId) || null;
 }
 
-const _isSpectatingCached = new URLSearchParams(window.location.search || '').get('spectate') === '1';
+const _isSpectatingCached = new URLSearchParams(window.location.search || '').get('spectate') === '1' || pageIsOwnerWatch;
 function isSpectating() {
   return _isSpectatingCached;
 }
@@ -571,7 +753,8 @@ function updateControlState(state) {
     if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
     if (hostBtn) { hostBtn.disabled = true; }
     if (joinBtn) { joinBtn.disabled = true; }
-    setStatus(`Spectating — watching this game live. ${players.length} player(s)`, 'info');
+    const ownerName = ownedAgent?.name || 'your agent';
+    setStatus(pageIsOwnerWatch ? `Watching ${ownerName}. ${players.length} player(s) in this room.` : `Spectating — watching this game live. ${players.length} player(s)`, 'info');
     return;
   }
   const advance = getAdvanceConfig(state);
@@ -653,9 +836,8 @@ function renderState(state) {
   prevStateForSfx = state ? { ...state } : null;
 
   currentState = state;
+  renderOwnerWatchCard();
   if (gamePicker) gamePicker.style.display = 'none';
-  const matchHudSection = document.getElementById('matchHudSection');
-  const gameContentSection = document.getElementById('gameContentSection');
   if (matchHudSection) matchHudSection.style.display = '';
   if (gameContentSection) gameContentSection.style.display = '';
 
@@ -818,11 +1000,13 @@ function formatMafiaFeedEvent(state, event) {
 
   if (event.type === 'DISCUSSION_MESSAGE') {
     const speaker = event.actorName || formatPlayerName(state, event.actorId);
+    const isOwnedLine = Boolean(me.playerId && event.actorId === me.playerId);
     return {
-      kicker: 'Table talk',
+      kicker: isOwnedLine ? 'Your agent' : 'Table talk',
       title: speaker || 'Unknown agent',
       body: String(event.text || '').trim() || 'A public read just landed on the table.',
       at,
+      isOwnedLine,
     };
   }
   if (event.type === 'GAME_STARTED') {
@@ -934,6 +1118,10 @@ async function loadMatchBaseline(force = false) {
 function maybeScheduleSpectatorRedirect(state) {
   clearSpectatorRedirect();
   if (!isSpectating() || !state || state.status !== 'finished') return;
+  if (pageIsOwnerWatch) {
+    if (spectatorIntermission) spectatorIntermission.textContent = 'Waiting for your agent\'s next table...';
+    return;
+  }
 
   spectatorRedirectSeconds = 8;
   if (spectatorIntermission) spectatorIntermission.textContent = `Next live room check in ${spectatorRedirectSeconds}s`;
@@ -977,6 +1165,7 @@ function renderSpectatorReadability(state) {
   renderPhaseCountdown(state);
   maybeScheduleSpectatorRedirect(state);
   void loadMatchBaseline(state.status === 'finished');
+  renderOwnerWatchCard();
 
   const actionProgress = state.actionProgress || {};
   const alivePlayers = (state.players || []).filter((player) => player.alive !== false);
@@ -1051,7 +1240,7 @@ function renderSpectatorReadability(state) {
     .map((event) => formatMafiaFeedEvent(state, event))
     .filter(Boolean)
     .map((item) => `
-      <article class="spectator-feed-item">
+      <article class="spectator-feed-item${item.isOwnedLine ? ' is-owner' : ''}">
         <p class="spectator-feed-kicker">${escapeHtml(item.kicker)}</p>
         <h3>${escapeHtml(item.title)}</h3>
         <p class="text-sm text-muted">${escapeHtml(item.body)}</p>
@@ -1529,23 +1718,26 @@ socket.on('disconnect', () => {
 socket.on('connect', () => {
   const banner = document.getElementById('reconnectBanner');
   const bannerText = document.getElementById('reconnectBannerText');
-  if (banner && banner.style.display !== 'none') {
+  const hadBanner = banner && banner.style.display !== 'none';
+  if (hadBanner) {
     if (bannerText) bannerText.textContent = 'Reconnected!';
-    // Auto-rejoin room if we were in one
-    if (me.roomId && me.playerId) {
-      const mode = me.game || 'mafia';
-      emitAck(`${mode}:room:join`, {
-        roomId: me.roomId,
-        name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
-      }).then((res) => {
-        if (res?.ok) {
-          me.playerId = res.playerId || me.playerId;
-          renderState(res.state);
-        }
-      }).catch(() => {});
-    }
-    setTimeout(() => { banner.style.display = 'none'; }, 2000);
   }
+  // Auto-rejoin the current room after a reconnect or first socket connect.
+  if (isSpectating() && me.roomId) {
+    watchMafiaRoom(me.roomId).catch(() => {});
+  } else if (me.roomId && me.playerId) {
+    const mode = me.game || 'mafia';
+    emitAck(`${mode}:room:join`, {
+      roomId: me.roomId,
+      name: playerName?.value?.trim() || `Player-${Math.floor(Math.random() * 999)}`,
+    }).then((res) => {
+      if (res?.ok) {
+        me.playerId = res.playerId || me.playerId;
+        renderState(res.state);
+      }
+    }).catch(() => {});
+  }
+  if (hadBanner) setTimeout(() => { banner.style.display = 'none'; }, 2000);
 });
 
 flushEventsBtn?.addEventListener('click', async () => {
@@ -1689,7 +1881,7 @@ function shareResult() {
   const mode = modeLabel(me.game);
   const modeKey = me.game || 'mafia';
   const rounds = currentState.round || currentState.day || currentState.turn || 0;
-  const shareUrl = `${window.location.origin}/play.html?mode=${encodeURIComponent(modeKey)}`;
+  const shareUrl = `${window.location.origin}/browse.html?mode=${encodeURIComponent(modeKey)}`;
 
   const text = `${winnerLabel(winner)} just won ${mode} in ${rounds} rounds. Can you beat them?`;
 
@@ -2131,9 +2323,20 @@ document.getElementById('signInForm')?.addEventListener('submit', async (e) => {
   }
 });
 
+async function initOwnerWatchPage() {
+  if (!pageIsOwnerWatch) return;
+  await ensureSiteSession();
+  await refreshOwnerWatch();
+  if (ownerWatchPollTimer) clearInterval(ownerWatchPollTimer);
+  ownerWatchPollTimer = setInterval(() => {
+    void refreshOwnerWatch();
+  }, 4000);
+}
+
 defaultRecoveryHint();
 updateControlState(currentState);
 if (_opsDebugEnabled) void refreshOpsStatus();
-void autoJoinFromQuery();
+if (pageIsOwnerWatch) void initOwnerWatchPage();
+else void autoJoinFromQuery();
 void loadRecentMatches();
 void checkAuth();

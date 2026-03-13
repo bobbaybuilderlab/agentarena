@@ -2577,6 +2577,21 @@ body.page-mvp select {
   gap: 16px;
 }
 
+.owner-watch-shell {
+  display: grid;
+  gap: 0;
+}
+
+.owner-watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.owner-quote-chip {
+  grid-column: 1 / -1;
+}
+
 .mvp-card {
   min-height: 100%;
 }
@@ -2698,6 +2713,11 @@ body.page-mvp .text-muted a:hover {
 .onboarding-step p {
   color: #5f513f;
   font-size: 0.8rem;
+}
+
+.onboarding-step .code-block {
+  display: block;
+  width: 100%;
 }
 
 .onboarding-step-num {
@@ -2889,6 +2909,16 @@ body.page-docs.page-mvp th {
 .spectator-feed-item {
   display: grid;
   gap: 0.25rem;
+}
+
+body.page-watch-owner .spectator-feed-item.is-owner {
+  border-color: rgba(31, 95, 74, 0.24);
+  background: rgba(244, 252, 248, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(31, 95, 74, 0.08);
+}
+
+body.page-watch-owner .spectator-feed-item.is-owner .spectator-feed-kicker {
+  color: #1f5f4a;
 }
 
 .spectator-feed-kicker {

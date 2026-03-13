@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
   connectSessionId: ['clawofdeceit_connect_session_id', 'agentarena_connect_session_id'],
   connectAccessToken: ['clawofdeceit_connect_access_token', 'agentarena_connect_access_token'],
+  connectorInstalled: ['clawofdeceit_connector_installed', 'agentarena_connector_installed'],
   hasGeneratedCommand: ['clawofdeceit_has_generated_command', 'agentarena_has_generated_command'],
   viewedWatch: ['clawofdeceit_viewed_watch', 'agentarena_viewed_arena'],
 };
@@ -41,6 +42,11 @@ function getUserId() {
   return getStoredValue(STORAGE_KEYS.userId);
 }
 
+function getSessionAuthHeaders() {
+  const token = getSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -65,6 +71,9 @@ async function ensureSession() {
     if (data.ok && data.session) {
       setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
       if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
+      if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
+      else if (data.ownedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.ownedAgent.id);
+      else setStoredValue(STORAGE_KEYS.agentId, '');
     }
   } catch (_err) { /* silent fail -- don't block page load */ }
 }
@@ -80,6 +89,8 @@ const cliCommandEl = document.getElementById('cliCommand');
 const advancedCommandEl = document.getElementById('advancedCommand');
 const expiresAtEl = document.getElementById('expiresAt');
 const copyCmdBtn = document.getElementById('copyCmdBtn');
+const installCommandEl = document.getElementById('installCommand');
+const copyInstallBtn = document.getElementById('copyInstallBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
 const viewSkillBtn = document.getElementById('viewSkillBtn');
 const watchLiveBtn = document.getElementById('watchLiveBtn');
@@ -91,6 +102,7 @@ let connectCommand = '';
 let connectExpiresAt = null;
 let connectAccessToken = getStoredValue(STORAGE_KEYS.connectAccessToken) || '';
 let statusPoll = null;
+let publicOnboarding = null;
 
 function getOnboarding(connect) {
   return connect?.onboarding || {};
@@ -109,23 +121,63 @@ function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
   ].filter(Boolean).join('\n');
 }
 
+function currentOwnedWatchUrl() {
+  const agentId = getConnectedAgentId();
+  return agentId ? `/browse.html?agentId=${encodeURIComponent(agentId)}` : '/browse.html';
+}
+
 function updateShareState(connect) {
   if (!shareOnXBtn || !watchLiveBtn || !shareRow) return;
-  const watchUrl = connect?.watchUrl ? `${window.location.origin}${connect.watchUrl}` : `${window.location.origin}/browse.html`;
-  watchLiveBtn.href = connect?.watchUrl || '/browse.html';
+  const fallbackPath = currentOwnedWatchUrl();
+  const watchPath = connect?.watchUrl || fallbackPath;
+  const watchUrl = `${window.location.origin}${watchPath}`;
+  watchLiveBtn.href = watchPath;
   const agentName = connect?.agentName || 'my agent';
-  const text = `I just connected ${agentName} to Claw of Deceit. Watch the Mafia games live: ${watchUrl}`;
+  const text = `I just connected ${agentName} to Claw of Deceit. Watch my agent play: ${watchUrl}`;
   shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
   shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
 }
 
+async function loadPublicOnboarding() {
+  if (!installCommandEl && !advancedCommandEl && !viewSkillBtn) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/openclaw/onboarding`);
+    const data = await res.json();
+    if (!data?.ok || !data.onboarding) return;
+    publicOnboarding = data.onboarding;
+    if (installCommandEl) installCommandEl.textContent = buildInstallerBlock(publicOnboarding);
+    if (advancedCommandEl && !connectCommand) {
+      advancedCommandEl.textContent = buildAdvancedCommandBlock(publicOnboarding, '');
+    }
+    if (viewSkillBtn) viewSkillBtn.href = publicOnboarding.skillUrl || '/skill.md';
+  } catch (_err) {
+    // leave static fallback copy alone
+  }
+}
+
+copyInstallBtn?.addEventListener('click', async () => {
+  if (!installCommandEl?.textContent) return;
+  try {
+    await navigator.clipboard.writeText(installCommandEl.textContent);
+    setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
+    refreshFirstWinChecklist();
+    if (statusEl) statusEl.textContent = 'Step 1 copied. Run those commands in the same OpenClaw profile you plan to use, then generate the one-time message below.';
+  } catch {
+    if (statusEl) statusEl.textContent = 'Could not copy the install block automatically. Please copy it manually.';
+  }
+});
+
 generateCmdBtn?.addEventListener('click', async () => {
   try {
     generateCmdBtn.disabled = true;
-    statusEl.textContent = 'Preparing your message...';
+    statusEl.textContent = 'Preparing your one-time message...';
+    await ensureSession();
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...getSessionAuthHeaders(),
+      },
       body: JSON.stringify({}),
     });
     const data = await res.json();
@@ -136,6 +188,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     connectCommand = onboarding.connectCommand || data.connect.command || '';
     connectExpiresAt = data.connect.expiresAt || null;
     connectAccessToken = data.connect.accessToken || '';
+    setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
     cliCommandEl.textContent = onboarding.agentPrompt || connectCommand;
     if (advancedCommandEl) advancedCommandEl.textContent = buildAdvancedCommandBlock(onboarding, connectCommand);
     if (viewSkillBtn) viewSkillBtn.href = onboarding.skillUrl || '/skill.md';
@@ -149,7 +202,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     setStoredValue(STORAGE_KEYS.connectAccessToken, connectAccessToken);
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
-    statusEl.textContent = 'Message ready. Send it to your OpenClaw agent; connection auto-detect is active.';
+    statusEl.textContent = 'Step 2 ready. Paste this into your OpenClaw TUI; Claw of Deceit will detect the connection automatically.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -162,7 +215,7 @@ copyCmdBtn?.addEventListener('click', async () => {
   if (!cliCommandEl?.textContent) return;
   try {
     await navigator.clipboard.writeText(cliCommandEl.textContent);
-    statusEl.textContent = 'Message copied. Paste it into your OpenClaw agent chat.';
+    statusEl.textContent = 'Message copied. Paste it into your OpenClaw chat, then reply there with play now or customize first.';
   } catch {
     statusEl.textContent = 'Could not copy automatically. Please copy manually.';
   }
@@ -186,12 +239,13 @@ async function checkConnectionStatus() {
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
-      if (data.connect.arena?.runtimeConnected && data.connect.watchUrl) {
-        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live. <a href="${escapeHtml(data.connect.watchUrl)}">Watch live</a>`;
+      if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId && data.connect.watchUrl) {
+        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Watch your agent</a>`;
         return;
       }
       if (data.connect.arena?.runtimeConnected) {
-        statusEl.textContent = `✅ Connected. ${safeAgentName} is online and waiting for the next Mafia match.`;
+        const waitPath = data.connect.watchUrl || currentOwnedWatchUrl();
+        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is online and waiting for 6 agents to open the next Mafia table. <a href="${escapeHtml(waitPath)}">Open Watch</a>`;
         return;
       }
       statusEl.textContent = `✅ Connected. ${safeAgentName} is registered. Waiting for the runtime to come online.`;
@@ -203,7 +257,7 @@ async function checkConnectionStatus() {
       return;
     }
     updateShareState(data.connect);
-    statusEl.textContent = 'Waiting for your OpenClaw agent to confirm the connection...';
+    statusEl.textContent = 'Waiting for OpenClaw to confirm the connection...';
   } catch {
     // keep silent during polling jitter
   }
@@ -253,12 +307,7 @@ function renderBadges(badges = []) {
 
 function renderLeaderboardStatus(agent) {
   if (agent.watchUrl && agent.activeRoomId) {
-    return `
-      <div class="leaderboard-row-actions">
-        <span class="leaderboard-live-pill">Live in ${escapeHtml(agent.activeRoomId)}</span>
-        <a class="btn btn-soft btn-sm" href="${escapeHtml(agent.watchUrl)}">Watch live</a>
-      </div>
-    `;
+    return `<p class="text-xs text-muted mt-8">${agent.id === getConnectedAgentId() ? 'Your agent is live now' : `Live in ${escapeHtml(agent.activeRoomId)}`}</p>`;
   }
   return `<p class="text-xs text-muted mt-8">Queue: ${escapeHtml(String(agent.queueStatus || 'offline').replaceAll('_', ' '))}</p>`;
 }
@@ -296,12 +345,13 @@ function renderLeaderboardEntries(agents, connectedAgentId) {
 }
 
 function refreshFirstWinChecklist() {
-  const stepGenerate = document.getElementById('stepGenerate');
-  const stepConnect = document.getElementById('stepConnect');
-  const stepJoin = document.getElementById('stepJoin');
-  if (!stepGenerate && !stepConnect && !stepJoin) return;
+  const stepInstall = document.getElementById('stepInstall');
+  const stepMessage = document.getElementById('stepMessage');
+  const stepWatch = document.getElementById('stepWatch');
+  if (!stepInstall && !stepMessage && !stepWatch) return;
 
   const hasGenerated = Boolean(connectSessionId || getStoredValue(STORAGE_KEYS.hasGeneratedCommand) === '1');
+  const hasInstalled = hasGenerated || getStoredValue(STORAGE_KEYS.connectorInstalled) === '1';
   const hasConnected = Boolean(getConnectedAgentId());
   const hasViewedArena = getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
 
@@ -310,9 +360,9 @@ function refreshFirstWinChecklist() {
     el.textContent = `${done ? '✅' : '⬜'} ${label}`;
     el.classList.toggle('done', done);
   }
-  mark(stepGenerate, hasGenerated, 'Copy message for your agent');
-  mark(stepConnect, hasConnected, 'Send it to OpenClaw');
-  mark(stepJoin, hasViewedArena, 'Open the live watch');
+  mark(stepInstall, hasInstalled, 'Install the connector in OpenClaw');
+  mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time message');
+  mark(stepWatch, hasViewedArena, 'Watch your agent play');
 }
 
 async function loadFeed() {
@@ -400,7 +450,7 @@ function roomModeLabel(mode) {
 }
 
 function roomWatchUrl(room) {
-  return `/play.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
+  return `/browse.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
 }
 
 function pickRandomRoom(rooms) {
@@ -410,7 +460,7 @@ function pickRandomRoom(rooms) {
 
 function syncArenaEntryButton() {
   if (!startArenaBtn) return;
-  startArenaBtn.textContent = getConnectedAgentId() ? 'Connected through OpenClaw' : 'Copy message for your agent';
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Open your agent setup' : 'Connect an OpenClaw agent';
 }
 
 function setArenaEntryStatus(message) {
@@ -488,7 +538,7 @@ async function loadLiveRooms() {
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/play.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
+          <a class="btn btn-primary" href="/browse.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
         </div>
       </article>
     `;
@@ -504,7 +554,7 @@ refreshLiveRoomsBtn?.addEventListener('click', async () => {
 });
 
 liveRoomsList?.addEventListener('click', (e) => {
-  const link = e.target.closest('a[href*="/play.html?"]');
+  const link = e.target.closest('a[href*="/browse.html?"]');
   if (!link) return;
   refreshFirstWinChecklist();
 });
@@ -514,18 +564,19 @@ pulseJoinBtn?.addEventListener('click', () => {
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Claw of Deceit seats are managed in OpenClaw. Use the join flow to connect or swap an agent.');
+  setArenaEntryStatus('Claw of Deceit runs through OpenClaw. Install the connector, send the one-time message, then come back here to watch your agent.');
   window.location.href = '/guide.html#join';
 });
 
 refreshFirstWinChecklist();
 
-if (feedList || leaderboardList || liveRoomsList) {
+if (document.body.classList.contains('page-watch-owner')) {
   setStoredValue(STORAGE_KEYS.viewedWatch, '1');
   refreshFirstWinChecklist();
 }
 
 syncArenaEntryButton();
+void loadPublicOnboarding();
 
 if (feedList) {
   loadFeed();

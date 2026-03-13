@@ -44,7 +44,7 @@ function normalizeAgentName(value, shortId) {
 }
 
 function normalizeAgentStyle(value) {
-  return String(value || 'witty').slice(0, 24);
+  return String(value || 'witty').trim().slice(0, 48);
 }
 
 function appendConnectStarted(roomEvents, connect) {
@@ -64,11 +64,13 @@ function appendConnectCompleted(roomEvents, connect, agent) {
 }
 
 function createOpenClawRouter({
+  bindOwnedAgent,
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
+  resolveSiteSession,
   roomEvents,
   shortId,
   summarizeAgentArenaState,
@@ -122,6 +124,7 @@ function createOpenClawRouter({
       style: normalizeAgentStyle(req.body?.style),
       note,
     });
+    if (typeof bindOwnedAgent === 'function') bindOwnedAgent(connect.ownerUserId, agent.id);
     appendConnectCompleted(roomEvents, connect, agent);
     persistState();
 
@@ -137,14 +140,28 @@ function createOpenClawRouter({
 
   router.post('/connect-session', createLimiter, (req, res) => {
     incrementGrowthMetric('funnel.connectSessionStarts', 1);
+    const siteSession = typeof resolveSiteSession === 'function' ? resolveSiteSession(req) : null;
     const connect = createConnectSession({
       connectSessions,
       email: req.body?.email,
+      ownerUserId: siteSession?.userId || null,
       publicBaseUrl: resolvePublicBaseUrl(req),
       shortId,
     });
     appendConnectStarted(roomEvents, connect);
     sendConnectSession(res, connect, req, true);
+  });
+
+  router.get('/onboarding', (req, res) => {
+    res.json({
+      ok: true,
+      onboarding: buildOnboardingContract({
+        publicBaseUrl: resolvePublicBaseUrl(req),
+        token: '',
+        callbackUrl: `${String(resolvePublicBaseUrl(req) || '').replace(/\/+$/, '')}/api/openclaw/callback`,
+        callbackProof: '',
+      }),
+    });
   });
 
   router.post('/callback', callbackLimiter, (req, res) => {

@@ -37,7 +37,8 @@ test('connect session endpoints require secret access token', async () => {
     assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable clawofdeceit-connect/);
     assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw config set plugins\.allow .* && openclaw plugins enable clawofdeceit-connect/);
     assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
-    assert.match(created.connect.onboarding.agentPrompt, /run this command first/);
+    assert.match(created.connect.onboarding.agentPrompt, /completed Step 1 on the website/);
+    assert.match(created.connect.onboarding.agentPrompt, /short style phrase/);
 
     const noAuthStatus = await fetch(`${base}/api/openclaw/connect-session/${id}`);
     assert.equal(noAuthStatus.status, 401);
@@ -57,5 +58,52 @@ test('connect session endpoints require secret access token', async () => {
     assert.equal('callbackProof' in statusData.connect, false);
     assert.equal(statusData.connect.onboarding.connectCommand, null);
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
+  });
+});
+
+test('connected OpenClaw agents bind to the current site session for owner watch', async () => {
+  await withServer(async (base) => {
+    const authRes = await fetch(`${base}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(authRes.status, 200);
+    const authData = await authRes.json();
+    assert.equal(authData.ok, true);
+    const sessionToken = authData.session.token;
+    assert.ok(sessionToken);
+
+    const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(createRes.status, 200);
+    const created = await createRes.json();
+    assert.equal(created.ok, true);
+
+    const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentName: 'owner_agent', style: 'paranoid detective' }),
+    });
+    assert.equal(confirmRes.status, 200);
+    const confirmed = await confirmRes.json();
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.connect.agentId.length > 0, true);
+
+    const mineRes = await fetch(`${base}/api/agents/mine`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    assert.equal(mineRes.status, 200);
+    const mine = await mineRes.json();
+    assert.equal(mine.ok, true);
+    assert.equal(mine.session.agentId, confirmed.connect.agentId);
+    assert.equal(mine.agent.id, confirmed.connect.agentId);
+    assert.match(mine.agent.watchUrl, /\/browse\.html\?agentId=/);
   });
 });

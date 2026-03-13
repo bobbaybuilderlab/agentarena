@@ -109,6 +109,10 @@ function sendRuntimeHtml(req, res, next) {
   }
 }
 
+function readBearerToken(req) {
+  return String(req.headers.authorization || '').replace('Bearer ', '').trim();
+}
+
 const io = new Server(server, {
   cors: {
     origin: socketCorsOrigin,
@@ -1237,6 +1241,14 @@ io.on('connection', (socket) => {
     cb?.({ ok: true, roomId: joined.room.id, playerId: joined.player.id, state: mafiaGame.toPublic(joined.room) });
   });
 
+  socket.on('mafia:room:watch', (payload, cb) => {
+    const { roomId } = payload || {};
+    const room = mafiaRooms.get(String(roomId || '').trim().toUpperCase());
+    if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
+    socket.join(`mafia:${room.id}`);
+    cb?.({ ok: true, roomId: room.id, state: mafiaGame.toPublic(room) });
+  });
+
   socket.on('mafia:autofill', (payload, cb) => {
     const { roomId, playerId, minPlayers } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
@@ -2212,7 +2224,7 @@ function decorateLeaderboardEntry(entry) {
     activeRoomId,
     queueStatus: arena.queueStatus || 'offline',
     runtimeConnected: Boolean(arena.runtimeConnected),
-    watchUrl: activeRoomId ? `/play.html?mode=mafia&room=${encodeURIComponent(activeRoomId)}&spectate=1` : null,
+    watchUrl: buildAgentWatchUrl(entry.id, arena),
   };
 }
 
@@ -2539,6 +2551,86 @@ function buildArenaAvailability() {
   };
 }
 
+function buildAgentWatchUrl(agentId, arena = summarizeAgentArenaState(agentId)) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return '/browse.html';
+  const params = new URLSearchParams({ agentId: cleanAgentId });
+  if (arena?.activeRoomId) {
+    params.set('mode', 'mafia');
+    params.set('room', String(arena.activeRoomId));
+    params.set('spectate', '1');
+  }
+  return `/browse.html?${params.toString()}`;
+}
+
+function resolveSiteSession(req) {
+  const token = readBearerToken(req);
+  if (!token) return null;
+
+  try {
+    const { getSessionByToken, getUserByToken } = require('./server/db');
+    const session = getSessionByToken(token);
+    const user = getUserByToken(token);
+    if (session || user) {
+      return {
+        token,
+        userId: user?.id || session?.user_id || null,
+        email: user?.email || null,
+        displayName: user?.display_name || null,
+        agentId: user?.agent_id || null,
+      };
+    }
+  } catch (_err) {
+    // fall through to in-memory session state
+  }
+
+  const fallback = sessions.get(token);
+  if (!fallback) return null;
+  return {
+    token,
+    userId: fallback.userId || null,
+    email: fallback.email || null,
+    displayName: fallback.displayName || null,
+    agentId: fallback.agentId || null,
+  };
+}
+
+function bindOwnedAgent(ownerUserId, agentId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanUserId || !cleanAgentId) return;
+
+  try {
+    const { setUserAgentId } = require('./server/db');
+    setUserAgentId(cleanUserId, cleanAgentId);
+  } catch (_err) {
+    // best-effort persistence only
+  }
+
+  for (const session of sessions.values()) {
+    if (session?.userId === cleanUserId) session.agentId = cleanAgentId;
+  }
+}
+
+function summarizeOwnedAgent(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  const agent = agentProfiles.get(cleanAgentId);
+  if (!agent) return null;
+  const arena = {
+    ...summarizeAgentArenaState(agent.id),
+    ...buildArenaAvailability(),
+  };
+  return {
+    id: agent.id,
+    name: agent.name,
+    deployed: !!agent.deployed,
+    persona: agent.persona || null,
+    watchUrl: buildAgentWatchUrl(agent.id, arena),
+    arena,
+  };
+}
+
 function getAgentRuntime(agentId) {
   return liveAgentRuntimes.get(String(agentId || '').trim()) || null;
 }
@@ -2849,9 +2941,19 @@ app.post('/api/auth/session', (req, res) => {
   // Check for existing session token
   const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
   if (existingToken) {
-    const existing = getSessionByToken(existingToken);
-    if (existing) {
-      return res.json({ ok: true, session: { token: existingToken, userId: existing.user_id }, renewed: true });
+    const siteSession = resolveSiteSession({ headers: { authorization: `Bearer ${existingToken}` } });
+    if (siteSession?.userId) {
+      const existing = getSessionByToken(existingToken);
+      return res.json({
+        ok: true,
+        session: {
+          token: existingToken,
+          userId: siteSession.userId || existing?.user_id || null,
+          agentId: siteSession?.agentId || null,
+        },
+        ownedAgent: summarizeOwnedAgent(siteSession?.agentId),
+        renewed: true,
+      });
     }
   }
 
@@ -2868,13 +2970,13 @@ app.post('/api/auth/session', (req, res) => {
     const session = { token, userId, email: null, createdAt: Date.now() };
     sessions.set(token, session);
 
-    res.json({ ok: true, session: { token, userId } });
+    res.json({ ok: true, session: { token, userId, agentId: null }, ownedAgent: null });
   } catch (err) {
     // Fallback to in-memory only if DB isn't initialized
     const token2 = shortId(20);
     const session = { token: token2, userId, createdAt: Date.now() };
     sessions.set(token2, session);
-    res.json({ ok: true, session: { token: token2, userId } });
+    res.json({ ok: true, session: { token: token2, userId, agentId: null }, ownedAgent: null });
   }
 });
 
@@ -2986,11 +3088,13 @@ app.get('/api/matches/mine', (req, res) => {
 });
 
 app.use('/api/openclaw', createOpenClawRouter({
+  bindOwnedAgent,
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
+  resolveSiteSession,
   roomEvents,
   shortId,
   summarizeAgentArenaState,
@@ -3011,7 +3115,7 @@ app.post('/api/agents', (req, res) => {
     mmr: 1000,
     karma: 0,
     persona: {
-      style: String(req.body?.persona?.style || 'witty').slice(0, 24),
+      style: String(req.body?.persona?.style || 'witty').trim().slice(0, 48),
       intensity: Math.max(1, Math.min(10, Number(req.body?.persona?.intensity || 6))),
     },
     openclaw: { connected: false, mode: 'manual' },
@@ -3062,7 +3166,7 @@ app.post('/api/openclaw/style-sync', (req, res) => {
 
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
 
-  const nextStyle = String(profile.tone || profile.style || agent.persona?.style || 'witty').slice(0, 24);
+  const nextStyle = String(profile.tone || profile.style || agent.persona?.style || 'witty').trim().slice(0, 48);
   const nextIntensity = Math.max(1, Math.min(10, Number(profile.intensity || agent.persona?.intensity || 7)));
 
   agent.persona = {
@@ -3129,10 +3233,31 @@ app.post('/api/roasts/:id/upvote', (req, res) => {
   res.json({ ok: true, roast });
 });
 
+app.get('/api/agents/mine', (req, res) => {
+  const siteSession = resolveSiteSession(req);
+  if (!siteSession?.userId) {
+    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
+  }
+
+  const agent = summarizeOwnedAgent(siteSession.agentId);
+  res.json({
+    ok: true,
+    session: {
+      userId: siteSession.userId,
+      agentId: siteSession.agentId || null,
+    },
+    agent,
+    arena: buildArenaAvailability(),
+  });
+});
+
 app.get('/api/agents/:id', (req, res) => {
   const agent = agentProfiles.get(String(req.params.id || '').trim());
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
-  const arena = summarizeAgentArenaState(agent.id);
+  const arena = {
+    ...summarizeAgentArenaState(agent.id),
+    ...buildArenaAvailability(),
+  };
 
   res.json({
     ok: true,
@@ -3144,6 +3269,7 @@ app.get('/api/agents/:id', (req, res) => {
       deployed: !!agent.deployed,
       openclawConnected: arena.runtimeConnected,
       persona: agent.persona || null,
+      watchUrl: buildAgentWatchUrl(agent.id, arena),
       arena,
     },
   });
@@ -3943,7 +4069,7 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: runtime.currentRoomId,
       activePlayerId: runtime.currentPlayerId,
-      watchUrl: `/play.html?mode=mafia&room=${encodeURIComponent(runtime.currentRoomId)}&spectate=1`,
+      watchUrl: buildAgentWatchUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
       message: 'Your agent is already in a live Mafia match.',
     });
   }
@@ -3957,7 +4083,7 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: refreshed.currentRoomId,
       activePlayerId: refreshed.currentPlayerId,
-      watchUrl: `/play.html?mode=mafia&room=${encodeURIComponent(refreshed.currentRoomId)}&spectate=1`,
+      watchUrl: buildAgentWatchUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
       message: 'Your agent has been seated in the next live Mafia match.',
     });
   }
@@ -3990,7 +4116,7 @@ app.get('/api/play/watch', (_req, res) => {
       found: true,
       roomId: best.roomId,
       mode: best.mode,
-      watchUrl: `/play.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
+      watchUrl: `/browse.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
       players: best.players,
     });
   }
@@ -4066,7 +4192,7 @@ app.get('/match/:matchId', (req, res) => {
         <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
         <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
         <div class="row mt-12" style="justify-content: center; gap: 1rem;">
-          <a class="btn btn-primary" href="/play.html?mode=mafia&spectate=1">Watch live</a>
+          <a class="btn btn-primary" href="/browse.html">Watch your agent</a>
           <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
         </div>
       </div>
@@ -4084,6 +4210,11 @@ app.get('/config.js', (req, res) => {
   res.type('application/javascript');
   res.set('Cache-Control', 'no-store');
   res.send(buildRuntimeConfigScript(req));
+});
+
+app.get('/play.html', (req, res) => {
+  const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, `/browse.html${search}`);
 });
 
 app.use(sendRuntimeHtml);

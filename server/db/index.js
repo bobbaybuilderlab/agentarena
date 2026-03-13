@@ -85,6 +85,17 @@ function getUserByToken(token) {
   `).get(token);
 }
 
+function setUserAgentId(userId, agentId) {
+  const database = getDb();
+  if (!database) return { id: userId, agent_id: agentId };
+  database.prepare(`
+    UPDATE users
+    SET agent_id = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(agentId || null, userId);
+  return database.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+}
+
 // ── Session operations ──
 
 function createSession(id, userId, token, expiresAt) {
@@ -287,6 +298,7 @@ module.exports = {
   createAnonymousUser,
   upgradeUser,
   getUserByToken,
+  setUserAgentId,
   createSession,
   getSessionByToken,
   recordMatch,

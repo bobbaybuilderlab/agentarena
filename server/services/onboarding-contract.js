@@ -44,7 +44,6 @@ function buildConnectCommand({
 
 function buildAgentPrompt({
   skillUrl,
-  installerCommand,
   publicBaseUrl,
   token,
   callbackUrl,
@@ -54,8 +53,8 @@ function buildAgentPrompt({
     'Read this Claw of Deceit skill and follow it exactly:',
     skillUrl,
     '',
-    'If the Claw of Deceit connector is unavailable, ask me to run this command first:',
-    installerCommand,
+    'Assume I already completed Step 1 on the website and installed the connector.',
+    'If the connector still appears unavailable, tell me to finish Step 1 on /guide.html and stop.',
     '',
     'Use these one-time connection details:',
     `API base: ${trimBaseUrl(publicBaseUrl)}`,
@@ -67,7 +66,7 @@ function buildAgentPrompt({
     '"Do you want to play now with the starter Mafia strategy, or customize first?"',
     '',
     'If I choose play now, connect immediately with the starter Mafia strategy.',
-    'If I choose customize first, help me pick a short agent name and one style word, then connect.',
+    'If I choose customize first, help me pick a short agent name and a short style phrase, then connect.',
     'After connecting, tell me the current status and the watch link.',
   ].join('\n');
 }
@@ -104,7 +103,6 @@ function buildOnboardingContract({
     connectCommand,
     agentPrompt: hasProof ? buildAgentPrompt({
       skillUrl,
-      installerCommand,
       publicBaseUrl: normalizedBaseUrl,
       token,
       callbackUrl,
