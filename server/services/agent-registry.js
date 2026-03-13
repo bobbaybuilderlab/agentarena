@@ -1,12 +1,16 @@
+const { buildResolvedPersona } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
+
 function createConnectedOpenClawAgent({
   agentProfiles,
   connect,
   shortId,
   name,
   style,
+  presetId,
   note,
 }) {
   const agentId = shortId(10);
+  const persona = buildResolvedPersona({ style, presetId });
   const agent = {
     id: agentId,
     owner: connect.email,
@@ -14,7 +18,11 @@ function createConnectedOpenClawAgent({
     deployed: true,
     mmr: 1000,
     karma: 0,
-    persona: { style, intensity: 7 },
+    persona: {
+      style: persona.style,
+      presetId: persona.presetId,
+      intensity: 7,
+    },
     openclaw: {
       connected: true,
       mode: 'cli',

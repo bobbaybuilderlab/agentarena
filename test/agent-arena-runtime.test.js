@@ -91,6 +91,8 @@ async function createRuntimeAgent(url, name) {
   });
   const callbackData = await callbackRes.json();
   assert.equal(callbackData.ok, true);
+  assert.equal(callbackData.agent.persona.presetId, 'pragmatic');
+  assert.equal(callbackData.agent.persona.style, 'witty');
 
   const socket = ioc(url, { reconnection: false, autoUnref: true });
   let assignedRoomId = null;

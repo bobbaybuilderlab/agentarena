@@ -7,6 +7,7 @@
   "files": [
     "index.ts",
     "starter-strategy.js",
+    "style-presets.cjs",
     "openclaw.plugin.json",
     "game-profiles",
     "README.md"

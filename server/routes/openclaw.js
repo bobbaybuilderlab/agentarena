@@ -3,6 +3,8 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { authorizeConnectSession, createConnectSession, readConnectAccessToken, sanitizeConnectSession } = require('../services/connect-sessions');
 const { createConnectedOpenClawAgent } = require('../services/agent-registry');
+const { buildOnboardingContract } = require('../services/onboarding-contract');
+const { cleanStylePhrase, normalizePresetToken } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
 
 function createLimiterHandler(errorMessage) {
   return (req, res, _next, options) => {
@@ -44,7 +46,11 @@ function normalizeAgentName(value, shortId) {
 }
 
 function normalizeAgentStyle(value) {
-  return String(value || 'witty').trim().slice(0, 48);
+  return cleanStylePhrase(value);
+}
+
+function normalizeAgentPresetId(value) {
+  return normalizePresetToken(value).slice(0, 32);
 }
 
 function appendConnectStarted(roomEvents, connect) {
@@ -122,6 +128,7 @@ function createOpenClawRouter({
       shortId,
       name: normalizeAgentName(req.body?.agentName, shortId),
       style: normalizeAgentStyle(req.body?.style),
+      presetId: normalizeAgentPresetId(req.body?.presetId),
       note,
     });
     if (typeof bindOwnedAgent === 'function') bindOwnedAgent(connect.ownerUserId, agent.id);

@@ -2,9 +2,23 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+
+const require = createRequire(import.meta.url);
+const {
+  DEFAULT_PRESET_ID,
+  buildResolvedPersona,
+} = require("./style-presets.cjs") as {
+  DEFAULT_PRESET_ID: string;
+  buildResolvedPersona: (args?: { presetId?: unknown; style?: unknown; fallbackPresetId?: string }) => {
+    presetId: string;
+    style: string;
+    preset: { id: string; label: string; starterPrompt: string };
+  };
+};
 
 type ConnectSession = {
   id: string;
@@ -35,6 +49,7 @@ type DecisionRequestPayload = {
   agent: {
     agentId: string;
     agentName: string;
+    presetId: string;
     style: string;
     intensity: number;
   };
@@ -86,6 +101,35 @@ function loadArenaProfile(profilePath: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function resolveArenaPersona(args: {
+  profile?: Record<string, unknown>;
+  presetId?: string;
+  style?: string;
+}) {
+  const profile = args.profile ?? {};
+  const profileStyle = typeof profile.tone === "string" && profile.tone.trim()
+    ? profile.tone
+    : typeof profile.style === "string" && profile.style.trim()
+      ? profile.style
+      : "";
+  const profilePresetId = typeof profile.preset === "string" && profile.preset.trim()
+    ? profile.preset
+    : "";
+  const resolved = buildResolvedPersona({
+    presetId: profilePresetId || args.presetId,
+    style: profileStyle || args.style,
+    fallbackPresetId: DEFAULT_PRESET_ID,
+  });
+  const intensitySource = typeof profile.intensity === "number" || typeof profile.intensity === "string"
+    ? Number(profile.intensity)
+    : 7;
+
+  return {
+    ...resolved,
+    intensity: Math.max(1, Math.min(10, Number.isFinite(intensitySource) ? intensitySource : 7)),
+  };
 }
 
 function normalizeDecisionResponse(kind: DecisionRequestPayload["kind"], raw: unknown): DecisionResponsePayload {
@@ -203,7 +247,8 @@ const plugin = {
           .description("Connect this OpenClaw setup to Claw of Deceit and keep the agent live in the Mafia arena")
           .option("--email <email>", "Owner email")
           .option("--agent <name>", "Agent name", "deceit_agent")
-          .option("--style <style>", "Agent style", "witty")
+          .option("--preset <presetId>", "Starter preset id")
+          .option("--style <style>", "Agent style phrase")
           .option("--token <token>", "Pre-issued connect token from Claw of Deceit")
           .option("--proof <proof>", "Connect proof from Claw of Deceit")
           .option("--callback <url>", "Callback URL from Claw of Deceit")
@@ -213,7 +258,8 @@ const plugin = {
           .action(async (opts: {
             email?: string;
             agent: string;
-            style: string;
+            preset?: string;
+            style?: string;
             token?: string;
             proof?: string;
             callback?: string;
@@ -225,8 +271,12 @@ const plugin = {
             const apiBase = urls.apiBase;
             const webBase = urls.webBase;
             const profile = loadArenaProfile(path.resolve(opts.path || DEFAULT_PROFILE_PATH));
-            const style = String(profile.tone || profile.style || opts.style || "witty").trim().slice(0, 48);
-            const intensity = Math.max(1, Math.min(10, Number(profile.intensity || 7)));
+            const persona = resolveArenaPersona({
+              profile,
+              presetId: opts.preset,
+              style: opts.style,
+            });
+            const { intensity, presetId, style } = persona;
             const decisionCmd = String(opts.decisionCmd || cfg.decisionCmd || STARTER_STRATEGY_CMD).trim();
             let token = String(opts.token || "").trim();
             let proof = String(opts.proof || "").trim();
@@ -262,7 +312,7 @@ const plugin = {
               const cbRes = await fetch(callbackUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token, proof, agentName: opts.agent, style }),
+                body: JSON.stringify({ token, proof, agentName: opts.agent, presetId, style }),
               });
 
               if (!cbRes.ok) {
@@ -276,7 +326,7 @@ const plugin = {
 
               console.log("✅ Connected to Claw of Deceit");
               console.log(`Agent: ${cbJson.agent?.name || opts.agent}`);
-              console.log(`Style: ${style} · intensity ${intensity}`);
+              console.log(`Style: ${style} · preset ${persona.preset.label} · intensity ${intensity}`);
               if (decisionCmd === STARTER_STRATEGY_CMD) {
                 console.log("Decision mode: starter Mafia strategy (customize later if you want).");
               } else if (decisionCmd) {
@@ -353,6 +403,7 @@ const plugin = {
                     agent: {
                       agentId,
                       agentName: cbJson.agent?.name || opts.agent,
+                      presetId,
                       style,
                       intensity,
                     },
@@ -421,7 +472,8 @@ const plugin = {
               target,
               [
                 "# Claw of Deceit Profile",
-                "tone: witty",
+                `preset: ${DEFAULT_PRESET_ID}`,
+                "tone: pragmatic operator",
                 "intensity: 7",
                 "likes: startup sarcasm, tech twitter dunks",
                 "avoid: slurs, hate speech, personal attacks",
@@ -461,9 +513,14 @@ const plugin = {
                 throw new Error(`style-sync failed (${res.status}): ${text}`);
               }
 
-              const json = (await res.json()) as { ok: boolean; agent?: { name: string; persona?: { style: string; intensity: number } } };
+              const json = (await res.json()) as {
+                ok: boolean;
+                agent?: { name: string; persona?: { style: string; presetId?: string; intensity: number } };
+              };
               console.log(`✅ Synced style for ${json.agent?.name || opts.agent}`);
-              console.log(`Style: ${json.agent?.persona?.style} · Intensity: ${json.agent?.persona?.intensity}`);
+              console.log(
+                `Style: ${json.agent?.persona?.style} · preset ${json.agent?.persona?.presetId || DEFAULT_PRESET_ID} · Intensity: ${json.agent?.persona?.intensity}`,
+              );
             } catch (err) {
               console.error(`❌ Claw of Deceit style sync failed: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;

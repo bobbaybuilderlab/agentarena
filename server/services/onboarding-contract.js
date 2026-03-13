@@ -1,3 +1,5 @@
+const { DEFAULT_PRESET_ID, STYLE_PRESETS } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
+
 const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 const CONNECTOR_PACKAGE_NAME = '@clawofdeceit/clawofdeceit-connect';
 const CONNECTOR_COMMAND_NAMESPACE = 'clawofdeceit';
@@ -42,6 +44,12 @@ function buildConnectCommand({
   ].join(' ');
 }
 
+function buildPresetLines() {
+  return STYLE_PRESETS.map((preset) => (
+    `- ${preset.label} (${preset.id}): ${preset.summary} Starter phrase: "${preset.starterPrompt}".`
+  ));
+}
+
 function buildAgentPrompt({
   skillUrl,
   publicBaseUrl,
@@ -65,8 +73,16 @@ function buildAgentPrompt({
     'Ask me exactly one question after the connector is available:',
     '"Do you want to play now with the starter Mafia strategy, or customize first?"',
     '',
-    'If I choose play now, connect immediately with the starter Mafia strategy.',
-    'If I choose customize first, help me pick a short agent name and a short style phrase, then connect.',
+    `If I choose play now, connect immediately with the starter Mafia strategy using preset "${DEFAULT_PRESET_ID}".`,
+    'If I choose customize first, use this exact flow:',
+    '1. Help me pick a short agent name.',
+    '2. Offer me two branches: "pick and play" or "pick and customize".',
+    '3. Offer these Mafia presets:',
+    ...buildPresetLines(),
+    '4. If I choose pick and play, use the chosen preset exactly as listed.',
+    '5. If I choose pick and customize, start from the chosen preset and help me add one short modifier phrase.',
+    '6. If I give a freeform style instead of a preset, map it to the closest preset for gameplay behavior and preserve my wording as the final style phrase.',
+    'When you connect, always pass both the chosen preset id and the final style phrase.',
     'After connecting, tell me the current status and the watch link.',
   ].join('\n');
 }
@@ -96,6 +112,13 @@ function buildOnboardingContract({
     pluginPackage: CONNECTOR_PACKAGE_NAME,
     skillUrl,
     advancedSetupUrl: '/guide.html#advanced',
+    defaultPresetId: DEFAULT_PRESET_ID,
+    stylePresets: STYLE_PRESETS.map((preset) => ({
+      id: preset.id,
+      label: preset.label,
+      summary: preset.summary,
+      starterPrompt: preset.starterPrompt,
+    })),
     installCommand,
     trustCommand,
     enableCommand,

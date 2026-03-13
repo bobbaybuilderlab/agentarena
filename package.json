@@ -11,7 +11,7 @@
     "connector:check": "node scripts/pack-clawofdeceit-connect.js --check",
     "test": "npm run test:mvp",
     "test:full": "node --test test/*.test.js",
-    "test:mvp": "node --test test/render-config.test.js test/security-connect-session.test.js test/observability.test.js test/agent-arena-runtime.test.js",
+    "test:mvp": "node --test test/render-config.test.js test/security-connect-session.test.js test/observability.test.js test/agent-arena-runtime.test.js test/starter-strategy.test.js",
     "test:e2e": "npx playwright test",
     "test:e2e:openclaw": "node scripts/run-openclaw-e2e.js",
     "test:e2e:openclaw:packaged": "node scripts/run-openclaw-e2e.js --pack-local",

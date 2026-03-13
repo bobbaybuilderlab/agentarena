@@ -38,7 +38,13 @@ test('connect session endpoints require secret access token', async () => {
     assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw config set plugins\.allow .* && openclaw plugins enable clawofdeceit-connect/);
     assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
     assert.match(created.connect.onboarding.agentPrompt, /completed Step 1 on the website/);
-    assert.match(created.connect.onboarding.agentPrompt, /short style phrase/);
+    assert.match(created.connect.onboarding.agentPrompt, /play now with the starter Mafia strategy, or customize first/);
+    assert.match(created.connect.onboarding.agentPrompt, /pick and play/);
+    assert.match(created.connect.onboarding.agentPrompt, /pick and customize/);
+    assert.match(created.connect.onboarding.agentPrompt, /Pragmatic \(pragmatic\)/);
+    assert.equal(created.connect.onboarding.defaultPresetId, 'pragmatic');
+    assert.equal(created.connect.onboarding.stylePresets.length, 8);
+    assert.equal(created.connect.onboarding.stylePresets[0].starterPrompt.length > 0, true);
 
     const noAuthStatus = await fetch(`${base}/api/openclaw/connect-session/${id}`);
     assert.equal(noAuthStatus.status, 401);
@@ -58,6 +64,7 @@ test('connect session endpoints require secret access token', async () => {
     assert.equal('callbackProof' in statusData.connect, false);
     assert.equal(statusData.connect.onboarding.connectCommand, null);
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
+    assert.equal(statusData.connect.onboarding.stylePresets.length, 8);
   });
 });
 
@@ -95,6 +102,8 @@ test('connected OpenClaw agents bind to the current site session for owner watch
     const confirmed = await confirmRes.json();
     assert.equal(confirmed.ok, true);
     assert.equal(confirmed.connect.agentId.length > 0, true);
+    assert.equal(confirmed.agent.persona.presetId, 'paranoid');
+    assert.equal(confirmed.agent.persona.style, 'paranoid detective');
 
     const mineRes = await fetch(`${base}/api/agents/mine`, {
       headers: { authorization: `Bearer ${sessionToken}` },
@@ -105,5 +114,54 @@ test('connected OpenClaw agents bind to the current site session for owner watch
     assert.equal(mine.session.agentId, confirmed.connect.agentId);
     assert.equal(mine.agent.id, confirmed.connect.agentId);
     assert.match(mine.agent.watchUrl, /\/browse\.html\?agentId=/);
+  });
+});
+
+test('style sync preserves the human style phrase while resolving a gameplay preset', async () => {
+  await withServer(async (base) => {
+    const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'preset-owner@example.com' }),
+    });
+    assert.equal(createRes.status, 200);
+    const created = await createRes.json();
+    assert.equal(created.ok, true);
+
+    const callbackRes = await fetch(`${base}/api/openclaw/callback`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: created.connect.id,
+        proof: created.connect.callbackProof,
+        agentName: 'preset_owner',
+        style: 'friendly manipulator',
+      }),
+    });
+    assert.equal(callbackRes.status, 200);
+    const connected = await callbackRes.json();
+    assert.equal(connected.ok, true);
+    assert.equal(connected.agent.persona.presetId, 'charming');
+    assert.equal(connected.agent.persona.style, 'friendly manipulator');
+
+    const syncRes = await fetch(`${base}/api/openclaw/style-sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: 'preset-owner@example.com',
+        agentName: 'preset_owner',
+        profile: {
+          preset: 'chaotic',
+          tone: 'chaotic preacher',
+          intensity: 9,
+        },
+      }),
+    });
+    assert.equal(syncRes.status, 200);
+    const synced = await syncRes.json();
+    assert.equal(synced.ok, true);
+    assert.equal(synced.agent.persona.presetId, 'chaotic');
+    assert.equal(synced.agent.persona.style, 'chaotic preacher');
+    assert.equal(synced.agent.persona.intensity, 9);
   });
 });
