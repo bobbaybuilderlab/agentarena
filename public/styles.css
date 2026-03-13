@@ -2594,23 +2594,86 @@ body.page-mvp select {
   font-size: 0.85rem;
 }
 
+body.page-home .mvp-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 70vh;
+}
+
+body.page-home .mvp-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(600px 400px at 50% 30%, rgba(255, 50, 50, 0.06), transparent 70%),
+    radial-gradient(400px 300px at 20% 60%, rgba(39, 213, 173, 0.05), transparent 60%),
+    radial-gradient(500px 350px at 80% 40%, rgba(69, 185, 255, 0.04), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+body.page-home .mvp-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
 body.page-home .mvp-hero h1 {
-  font-size: clamp(2.93rem, 5.7vw, 5.46rem);
+  font-family: var(--font-display);
+  font-size: clamp(3.2rem, 7vw, 6.5rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  max-width: 14ch;
+  text-shadow: 0 4px 40px rgba(255, 50, 50, 0.08), 0 2px 20px rgba(69, 185, 255, 0.1);
 }
 
 body.page-home .mvp-sub {
-  font-size: 1.43rem;
-  max-width: 44ch;
+  font-size: 1.3rem;
+  max-width: 38ch;
+  line-height: 1.55;
+  color: #9cb0ca;
 }
 
 body.page-home .mvp-setup-note {
-  font-size: 1.1rem;
+  font-size: 0.85rem;
+  font-family: 'Space Mono', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #4a6a5a;
 }
 
 body.page-home .mvp-cta-row .btn {
   font-size: 1.07rem;
   min-height: 57px;
-  padding: 13px 21px;
+  padding: 13px 28px;
+}
+
+body.page-home .mvp-cta-row .btn-primary {
+  background: linear-gradient(140deg, #ff6b6b, #cc3333);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(255, 50, 50, 0.25);
+}
+
+body.page-home .mvp-cta-row .btn-primary:hover {
+  background: linear-gradient(140deg, #ff7b7b, #dd4444);
+  box-shadow: 0 8px 30px rgba(255, 50, 50, 0.35);
+}
+
+body.page-home .stats-strip {
+  border-top: 1px solid rgba(39, 213, 173, 0.1);
+  padding-top: 24px;
+}
+
+body.page-home .stat-num {
+  color: #27d5ad;
+  font-family: 'Space Mono', monospace;
+}
+
+body.page-home .stat-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.68rem;
+  color: #4a6a5a;
 }
 
 .diagram-placeholder {
@@ -2994,31 +3057,38 @@ body.page-docs.page-mvp th {
   word-break: break-word;
 }
 
+/* ── Terminal-style spectator experience ─────────────────── */
+
 .spectator-summary {
   display: grid;
-  gap: 0.8rem;
+  gap: 0.6rem;
 }
 
 .spectator-summary-card,
 .spectator-baseline-card,
 .spectator-feed-item {
-  border: 1px solid rgba(127, 92, 52, 0.14);
-  border-radius: 18px;
-  background: rgba(255, 250, 242, 0.88);
-  padding: 0.9rem 1rem;
+  border: 1px solid rgba(39, 213, 173, 0.15);
+  border-radius: 8px;
+  background: rgba(5, 12, 20, 0.92);
+  padding: 0.75rem 1rem;
+  font-family: 'Space Mono', monospace;
 }
 
 .spectator-summary-card h3,
 .spectator-baseline-card h3,
 .spectator-feed-item h3 {
-  margin: 0 0 0.25rem;
-  font-size: 0.98rem;
+  margin: 0 0 0.2rem;
+  font-size: 0.88rem;
+  font-family: 'Space Mono', monospace;
+  color: #27d5ad;
 }
 
 .spectator-summary-card p,
 .spectator-baseline-card p,
 .spectator-feed-item p {
   margin: 0;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.76rem;
 }
 
 .spectator-stat-grid {
@@ -3028,38 +3098,336 @@ body.page-docs.page-mvp th {
 }
 
 .spectator-stat-value {
-  color: #1f2e44;
-  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 1.1rem;
-  font-weight: 600;
+  color: #27d5ad;
+  font-family: 'Space Mono', monospace;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
+/* Terminal feed container */
 .spectator-feed {
   display: grid;
-  gap: 0.8rem;
+  gap: 0;
+  background: rgba(3, 8, 16, 0.95);
+  border: 1px solid rgba(39, 213, 173, 0.12);
+  border-radius: 10px;
+  padding: 0.5rem;
+  max-height: 520px;
+  overflow-y: auto;
 }
 
 .spectator-feed-item {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.15rem;
+  border: none;
+  border-radius: 4px;
+  border-left: 3px solid rgba(39, 213, 173, 0.2);
+  background: transparent;
+  padding: 0.5rem 0.75rem;
+  transition: background 150ms ease;
 }
 
-body.page-watch-owner .spectator-feed-item.is-owner {
-  border-color: rgba(31, 95, 74, 0.24);
-  background: rgba(244, 252, 248, 0.96);
-  box-shadow: inset 0 0 0 1px rgba(31, 95, 74, 0.08);
+.spectator-feed-item:hover {
+  background: rgba(39, 213, 173, 0.04);
 }
 
-body.page-watch-owner .spectator-feed-item.is-owner .spectator-feed-kicker {
-  color: #1f5f4a;
+.spectator-feed-item h3 {
+  color: #9cb0ca;
+  font-size: 0.82rem;
+}
+
+.spectator-feed-item .text-sm {
+  color: #6b7a90;
+  font-size: 0.74rem;
+}
+
+/* ── Own agent highlighting: bright green with glow ── */
+.spectator-feed-item.is-owner {
+  border-left-color: #27d5ad;
+  background: rgba(39, 213, 173, 0.06);
+  box-shadow: inset 0 0 12px rgba(39, 213, 173, 0.05);
+}
+
+.spectator-feed-item.is-owner h3 {
+  color: #27d5ad;
+  text-shadow: 0 0 8px rgba(39, 213, 173, 0.4);
+}
+
+.spectator-feed-item.is-owner .spectator-feed-kicker {
+  color: #27d5ad;
+}
+
+.spectator-feed-item.is-owner .text-sm {
+  color: #9cb0ca;
+}
+
+/* Phase change / system events: amber */
+.spectator-feed-item.is-system {
+  border-left-color: #ffc978;
+}
+
+.spectator-feed-item.is-system h3 {
+  color: #ffc978;
+}
+
+.spectator-feed-item.is-system .spectator-feed-kicker {
+  color: #ffc978;
+}
+
+/* Elimination events: red */
+.spectator-feed-item.is-elimination {
+  border-left-color: #ff8799;
+}
+
+.spectator-feed-item.is-elimination h3 {
+  color: #ff8799;
+}
+
+.spectator-feed-item.is-elimination .spectator-feed-kicker {
+  color: #ff8799;
 }
 
 .spectator-feed-kicker {
-  color: #7a634a;
-  font-size: 0.74rem;
+  color: #4a6a5a;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-family: 'Space Mono', monospace;
+}
+
+/* Terminal scanline effect on feed container */
+body.page-watch-owner #spectatorReadSection .card {
+  background: rgba(5, 12, 20, 0.95);
+  border-color: rgba(39, 213, 173, 0.12);
+}
+
+body.page-watch-owner #spectatorReadSection .section-title {
+  color: #27d5ad;
+  font-family: 'Space Mono', monospace;
+}
+
+body.page-watch-owner #spectatorReadSection .text-muted {
+  color: #4a6a5a;
+  font-family: 'Space Mono', monospace;
+}
+
+/* ── Persona viewer on watch page ─────────────────────────── */
+.persona-viewer {
+  border: 1px solid rgba(39, 213, 173, 0.15);
+  border-radius: 10px;
+  background: rgba(5, 12, 20, 0.92);
+  padding: 1rem;
+  font-family: 'Space Mono', monospace;
+}
+
+.persona-viewer .section-title {
+  color: #27d5ad;
+  font-family: 'Space Mono', monospace;
+}
+
+.persona-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(39, 213, 173, 0.25);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: rgba(39, 213, 173, 0.08);
+  color: #27d5ad;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.persona-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.persona-field {
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(39, 213, 173, 0.04);
+}
+
+.persona-field .field-label {
+  color: #4a6a5a;
+  font-family: 'Space Mono', monospace;
+}
+
+.persona-field-value {
+  color: #9cb0ca;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
+/* ── Strategy guidance panel ─────────────────────────────── */
+.strategy-guidance {
+  border: 1px solid rgba(255, 201, 120, 0.15);
+  border-radius: 10px;
+  background: rgba(5, 12, 20, 0.92);
+  padding: 1rem;
+  font-family: 'Space Mono', monospace;
+}
+
+.strategy-guidance .section-title {
+  color: #ffc978;
+  font-family: 'Space Mono', monospace;
+}
+
+.strategy-guidance p {
+  color: #9cb0ca;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.78rem;
+}
+
+.strategy-guidance code {
+  background: rgba(255, 201, 120, 0.08);
+  border: 1px solid rgba(255, 201, 120, 0.15);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #ffc978;
+  font-size: 0.74rem;
+}
+
+/* ── Atmospheric waiting state ───────────────────────────── */
+.terminal-waiting {
+  font-family: 'Space Mono', monospace;
+  text-align: center;
+  padding: 2rem 1rem;
+}
+
+.terminal-waiting .waiting-scanner {
+  color: #27d5ad;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1em;
+  background: #27d5ad;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.waiting-flavor {
+  color: #4a6a5a;
+  font-size: 0.74rem;
+  margin-top: 12px;
+  min-height: 1.2em;
+  transition: opacity 300ms ease;
+}
+
+.waiting-flavor.fading {
+  opacity: 0;
+}
+
+/* ── Celebratory connect moment ──────────────────────────── */
+.connect-celebration {
+  text-align: center;
+  padding: 1.5rem;
+  animation: celebrate-in 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes celebrate-in {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.connect-celebration h3 {
+  font-size: 1.1rem;
+  color: #27d5ad;
+  margin-bottom: 6px;
+}
+
+.connect-celebration p {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* ── Customization / character creation section ──────────── */
+.preset-showcase {
+  margin-top: 20px;
+}
+
+.preset-showcase .section-title {
+  font-size: 0.88rem;
+  margin-bottom: 12px;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.preset-card {
+  border: 1px solid rgba(39, 213, 173, 0.18);
+  border-radius: var(--radius-md);
+  background: linear-gradient(145deg, rgba(20, 37, 61, 0.88), rgba(14, 28, 49, 0.88));
+  padding: 12px;
+  text-align: center;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.preset-card:hover {
+  border-color: rgba(39, 213, 173, 0.4);
+  box-shadow: 0 0 16px rgba(39, 213, 173, 0.08);
+}
+
+.preset-card h4 {
+  font-size: 0.85rem;
+  color: #27d5ad;
+  margin-bottom: 4px;
+  text-transform: capitalize;
+}
+
+.preset-card p {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.copy-success {
+  color: #27d5ad !important;
+  font-weight: 700;
+}
+
+/* ── Post-game coaching nudge ────────────────────────────── */
+.coaching-nudge {
+  border: 1px solid rgba(255, 201, 120, 0.15);
+  border-radius: 10px;
+  background: rgba(5, 12, 20, 0.92);
+  padding: 0.75rem 1rem;
+  font-family: 'Space Mono', monospace;
+  margin-top: 12px;
+}
+
+.coaching-nudge .coaching-label {
+  color: #ffc978;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.coaching-nudge p {
+  color: #9cb0ca;
+  font-size: 0.78rem;
+  margin-top: 4px;
 }
 
 @media (max-width: 720px) {
@@ -3075,4 +3443,8 @@ body.page-watch-owner .spectator-feed-item.is-owner .spectator-feed-kicker {
 
   .stats-strip { gap: 20px; flex-wrap: wrap; }
   .stat-num { font-size: 1.5rem; }
+
+  .preset-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
