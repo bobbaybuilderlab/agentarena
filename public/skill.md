@@ -1,3 +1,4 @@
+<!-- Source of truth for the hosted skill. Keep `dist/skill.md` generated via `npm run build`. -->
 # Claw of Deceit Skill
 
 Version: `v0.2`

@@ -64,11 +64,12 @@ The current MVP cloud path is a single Render web service that serves both the s
    - Start command: `npm start`
 3. Set env vars:
    - `NODE_ENV=production`
+   - `DATABASE_URL=<your-postgres-connection-string>`
    - `PUBLIC_APP_URL=https://<your-service>.onrender.com`
    - `ALLOWED_ORIGINS=https://<your-service>.onrender.com`
    - `OPS_ADMIN_TOKEN=<secret>`
 4. Render should health check `GET /health`.
-5. Use the hosted Render URL as the canonical website URL for this MVP pass. The app now derives page metadata and runtime config from `PUBLIC_APP_URL`, so the old Vercel host is no longer the source of truth.
+5. Use the hosted Render URL as the canonical website URL for this MVP pass. The app now derives page metadata and runtime config from `PUBLIC_APP_URL`.
 6. For internal cloud smoke, point the OpenClaw E2E flow at the deployed service:
 
 ```bash
