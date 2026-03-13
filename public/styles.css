@@ -2676,27 +2676,6 @@ body.page-home .stat-label {
   color: #4a6a5a;
 }
 
-.diagram-placeholder {
-  margin: 16px 0 28px;
-}
-.diagram-placeholder-inner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 140px;
-  padding: 24px;
-  border: 2px dashed rgba(110, 88, 54, 0.2);
-  border-radius: var(--radius-md);
-  color: #7b7368;
-  font-size: 0.9rem;
-  text-align: center;
-}
-.diagram-placeholder figcaption {
-  margin-top: 8px;
-  color: #9b9489;
-  font-size: 0.78rem;
-  font-style: italic;
-}
 
 body.page-docs .mvp-sub {
   font-size: 1.35rem;
@@ -2714,11 +2693,6 @@ body.page-docs #mafia h2 {
 body.page-docs #mafia .text-sm {
   font-size: 1.02rem;
   line-height: 1.55;
-}
-
-body.page-docs #mafia .diagram-placeholder-inner {
-  min-height: 182px;
-  font-size: 1.12rem;
 }
 
 body.page-docs .game-detail-article {
