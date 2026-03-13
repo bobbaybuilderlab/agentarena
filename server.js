@@ -8,6 +8,11 @@ if (process.env.SENTRY_DSN) {
   });
 }
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  Sentry.captureException(reason);
+});
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
