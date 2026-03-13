@@ -17,7 +17,7 @@ const mafiaGame = require('./games/agent-mafia');
 const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
-const { shortId, correlationId, logStructured, fisherYatesShuffle } = require('./server/state/helpers');
+const { shortId, correlationId, logStructured } = require('./server/state/helpers');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { createOpenClawRouter } = require('./server/routes/openclaw');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
@@ -149,33 +149,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || undefined;
-const ROUND_MS = Number(process.env.ROUND_MS || 60_000);
-const VOTE_MS = Number(process.env.VOTE_MS || 20_000);
-
-const THEMES = [
-  'Yo Mama So Fast',
-  'Tech Twitter',
-  'Startup Founder',
-  'Gym Bro',
-  'Crypto',
-  'Corporate',
-  'SaaS Burn Rate',
-  'VC Pitch Night',
-  'Customer Support Meltdown',
-  'AI Hype Train',
-  'Remote Work Drama',
-];
-
-/** @type {Map<string, any>} */
-const rooms = new Map();
-
 const mafiaRooms = mafiaGame.createStore();
-
-const GTA_PROMPT_MS = Number(process.env.GTA_PROMPT_MS || 45_000);
-const GTA_REVEAL_MS = Number(process.env.GTA_REVEAL_MS || 15_000);
-const GTA_VOTE_MS   = Number(process.env.GTA_VOTE_MS   || 20_000);
-const GTA_RESULT_MS = Number(process.env.GTA_RESULT_MS || 8_000);
-const GTA_RECONNECT_MS = Number(process.env.GTA_RECONNECT_MS || 30_000);
 
 const roomScheduler = createRoomScheduler();
 const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
@@ -217,116 +191,6 @@ const {
   getClaimableLobbySeats: (mode, roomId) => getClaimableLobbySeats(mode, roomId),
 });
 
-const ROOM_TRANSITIONS = {
-  BATTLE_RESET: {
-    lobby: 'lobby',
-    round: 'lobby',
-    voting: 'lobby',
-    finished: 'lobby',
-  },
-  BEGIN_ROUND: {
-    lobby: 'round',
-  },
-  BEGIN_VOTING: {
-    round: 'voting',
-  },
-  ROUND_COMPLETE_CONTINUE: {
-    voting: 'lobby',
-  },
-  ROUND_COMPLETE_FINISH: {
-    voting: 'finished',
-  },
-};
-
-function transitionRoomState(room, event) {
-  const transitions = ROOM_TRANSITIONS[event];
-  if (!transitions) {
-    return {
-      ok: false,
-      error: {
-        code: 'UNKNOWN_TRANSITION_EVENT',
-        message: `Unknown room transition event: ${event}`,
-        event,
-      },
-    };
-  }
-
-  const from = room.status;
-  const to = transitions[from];
-  if (!to) {
-    return {
-      ok: false,
-      error: {
-        code: 'INVALID_ROOM_TRANSITION',
-        message: `Cannot transition room from ${from} using ${event}`,
-        from,
-        event,
-      },
-    };
-  }
-
-  room.status = to;
-  return { ok: true, from, to, event };
-}
-
-function createRoom(host) {
-  const roomId = shortId(6).toUpperCase();
-  const canaryBucket = arenaCanary.assignRoom(roomId);
-  const room = {
-    id: roomId,
-    createdAt: Date.now(),
-    canaryBucket,
-    hostSocketId: host.socketId,
-    theme: THEMES[0],
-    themeRotation: fisherYatesShuffle(THEMES).slice(0, 5),
-    players: [],
-    spectators: new Set(),
-    status: 'lobby',
-    round: 0,
-    maxRounds: 5,
-    roastsByRound: {},
-    votesByRound: {},
-    totalVotes: {},
-    roundEndsAt: null,
-    voteEndsAt: null,
-    lastWinner: null,
-  };
-  rooms.set(roomId, room);
-  logRoomEvent('arena', room, 'ROOM_CREATED', { status: room.status, round: room.round, canaryBucket: room.canaryBucket });
-  return room;
-}
-
-function getPublicRoom(room) {
-  return {
-    id: room.id,
-    theme: room.theme,
-    status: room.status,
-    round: room.round,
-    maxRounds: room.maxRounds,
-    canaryBucket: room.canaryBucket || 'control',
-    players: room.players.map((p) => ({
-      id: p.id,
-      name: p.name,
-      type: p.type,
-      isBot: !!p.isBot,
-      persona: p.persona || null,
-      owner: p.owner || null,
-      score: room.totalVotes[p.id] || 0,
-      isConnected: p.isConnected,
-    })),
-    roastsByRound: room.roastsByRound,
-    votesByRound: room.votesByRound,
-    roundEndsAt: room.roundEndsAt,
-    voteEndsAt: room.voteEndsAt,
-    lastWinner: room.lastWinner,
-    spectatorCount: room.spectators ? room.spectators.size : 0,
-  };
-}
-
-function emitRoom(room) {
-  io.to(room.id).emit('room:update', getPublicRoom(room));
-}
-
 // Map room event types to Amplitude event names
 const AMPLITUDE_EVENT_MAP = {
   ROOM_CREATED: 'room_created',
@@ -350,285 +214,14 @@ function logRoomEvent(mode, room, type, payload = {}) {
   }
 }
 
-function ensurePlayer(room, socket, payload) {
-  const { name, type } = payload;
-  if (!name || !name.trim()) return { error: 'Name required' };
-  const cleanType = type === 'agent' ? 'agent' : 'human';
-  const owner = String(payload?.owner || '').trim().toLowerCase();
-
-  if (cleanType === 'agent' && (!owner || !owner.includes('@'))) return { error: 'Agent owner email required' };
-
-  const cleanName = name.trim().slice(0, 24);
-  let player = room.players.find((p) => p.socketId === socket.id);
-
-  if (!player) {
-    player = room.players.find((p) => {
-      if (p.isBot || p.isConnected || p.type !== cleanType) return false;
-      if (cleanType === 'agent') return p.owner === owner;
-      return p.name === cleanName;
-    });
-  }
-
-  if (!player) {
-    player = {
-      id: shortId(8),
-      socketId: socket.id,
-      name: cleanName,
-      type: cleanType,
-      isBot: false,
-      isConnected: true,
-      owner: cleanType === 'agent' ? owner : null,
-    };
-    room.players.push(player);
-  } else {
-    player.socketId = socket.id;
-    player.name = cleanName;
-    player.type = cleanType;
-    player.isConnected = true;
-    player.owner = cleanType === 'agent' ? owner : null;
-  }
-
-  if (!(player.id in room.totalVotes)) room.totalVotes[player.id] = 0;
-  return { player };
-}
-
-function addBot(room, payload = {}) {
-  const persona = buildArenaPersona({
-    style: payload.persona?.style || 'witty',
-    presetId: payload.persona?.presetId,
-    intensity: payload.persona?.intensity || 6,
-  });
-  const bot = {
-    id: shortId(8),
-    name: (payload.name || `Bot-${Math.floor(Math.random() * 999)}`).slice(0, 24),
-    type: 'agent',
-    isBot: true,
-    socketId: null,
-    isConnected: true,
-    owner: 'system@agentarena',
-    persona,
-    memory: [],
-  };
-  room.players.push(bot);
-  room.totalVotes[bot.id] = 0;
-  return bot;
-}
-
-function generateBotRoast(theme, bot, intensity = 6, style = 'witty') {
-  const memorySummary = summarizeBotMemory(bot);
-  const recentRoasts = Array.isArray(bot?.memory) ? bot.memory.map((entry) => entry.roast).filter(Boolean) : [];
-  const turn = runBotTurn({ theme, botName: bot?.name || 'Bot', intensity, style, memorySummary, recentRoasts });
-  return turn.text;
-}
-
-function autoSubmitBotRoasts(room) {
-  const bots = room.players.filter((p) => p.isBot);
-  for (const bot of bots) {
-    const delay = 1000 + Math.floor(Math.random() * 7000);
-    roomScheduler.schedule({
-      namespace: 'arena',
-      roomId: room.id,
-      slot: `bot-roast:${room.round}:${bot.id}`,
-      delayMs: delay,
-      token: `${room.round}:round`,
-    }, () => {
-      const current = rooms.get(room.id);
-      if (!current || current.status !== 'round' || current.round !== room.round) return;
-      if (current.roastsByRound[current.round][bot.id]) return;
-      const roast = generateBotRoast(current.theme, bot, bot.persona?.intensity || 6, bot.persona?.style || 'witty');
-      current.roastsByRound[current.round][bot.id] = roast;
-      maybeAdvanceToVoting(current);
-      emitRoom(current);
-    });
-  }
-}
-
-function maybeAdvanceToVoting(room) {
-  const allSubmitted = room.players.every((p) => room.roastsByRound[room.round][p.id]);
-  if (allSubmitted) beginVoting(room);
-}
-
-function beginRound(room) {
-  if (room.players.length < 2) return { ok: false, error: { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players' } };
-
-  const transition = transitionRoomState(room, 'BEGIN_ROUND');
-  if (!transition.ok) return transition;
-
-  room.round += 1;
-  room.theme = room.themeRotation[room.round - 1] || THEMES[(room.round - 1) % THEMES.length];
-  room.roastsByRound[room.round] = {};
-  room.votesByRound[room.round] = {};
-  room.roundEndsAt = Date.now() + ROUND_MS;
-  logRoomEvent('arena', room, 'ROUND_STARTED', {
-    status: room.status,
-    phase: 'round',
-    round: room.round,
-    theme: room.theme,
-  });
-
-  autoSubmitBotRoasts(room);
-
-  roomScheduler.schedule({
-    namespace: 'arena',
-    roomId: room.id,
-    slot: 'round-deadline',
-    delayMs: ROUND_MS,
-    token: `${room.round}:round`,
-  }, () => {
-    const current = rooms.get(room.id);
-    if (!current || current.status !== 'round' || current.round !== room.round) return;
-    beginVoting(current);
-  });
-
-  emitRoom(room);
-}
-
-function beginVoting(room) {
-  const transition = transitionRoomState(room, 'BEGIN_VOTING');
-  if (!transition.ok) return transition;
-
-  room.voteEndsAt = Date.now() + VOTE_MS;
-  logRoomEvent('arena', room, 'VOTING_STARTED', {
-    status: room.status,
-    phase: 'voting',
-    round: room.round,
-  });
-  emitRoom(room);
-
-  roomScheduler.schedule({
-    namespace: 'arena',
-    roomId: room.id,
-    slot: 'vote-deadline',
-    delayMs: VOTE_MS,
-    token: `${room.round}:vote`,
-  }, () => {
-    const current = rooms.get(room.id);
-    if (!current || current.status !== 'voting' || current.round !== room.round) return;
-    finalizeRound(current);
-  });
-}
-
-function finalizeRound(room) {
-  const roundVotes = room.votesByRound[room.round] || {};
-  let winnerId = null;
-  let best = -1;
-  for (const [playerId, count] of Object.entries(roundVotes)) {
-    if (playerId.startsWith('voter:')) continue;
-    if (count > best) {
-      winnerId = playerId;
-      best = count;
-    }
-  }
-
-  if (!winnerId) {
-    const submittedIds = Object.keys(room.roastsByRound[room.round] || {});
-    if (submittedIds.length) {
-      winnerId = submittedIds[Math.floor(Math.random() * submittedIds.length)];
-      best = 0;
-    }
-  }
-
-  if (winnerId) {
-    room.totalVotes[winnerId] = (room.totalVotes[winnerId] || 0) + 1;
-    const winner = room.players.find((p) => p.id === winnerId);
-    room.lastWinner = {
-      id: winnerId,
-      name: winner?.name || 'Unknown',
-      round: room.round,
-      votes: best,
-      quote: room.roastsByRound[room.round]?.[winnerId] || '',
-    };
-  }
-
-  for (const player of room.players) {
-    if (!player.isBot) continue;
-    rememberBotRound(player, {
-      round: room.round,
-      theme: room.theme,
-      roast: room.roastsByRound[room.round]?.[player.id] || '',
-      votes: Number(roundVotes[player.id] || 0),
-      winner: player.id === winnerId,
-    });
-  }
-
-  room.roundEndsAt = null;
-  room.voteEndsAt = null;
-  const transition = transitionRoomState(room, room.round >= room.maxRounds ? 'ROUND_COMPLETE_FINISH' : 'ROUND_COMPLETE_CONTINUE');
-  if (!transition.ok) return transition;
-
-  if (room.status === 'finished') recordFirstMatchCompletion('arena', room.id);
-  logRoomEvent('arena', room, room.status === 'finished' ? 'BATTLE_FINISHED' : 'ROUND_FINISHED', {
-    status: room.status,
-    phase: room.status,
-    round: room.round,
-    winner: room.lastWinner?.id || null,
-    winnerName: room.lastWinner?.name || null,
-  });
-
-  emitRoom(room);
-
-  if (room.status !== 'finished') {
-    roomScheduler.schedule({
-      namespace: 'arena',
-      roomId: room.id,
-      slot: 'next-round',
-      delayMs: 2000,
-      token: `${room.round}:next`,
-    }, () => {
-      const current = rooms.get(room.id);
-      if (!current || current.status !== 'lobby') return;
-      beginRound(current);
-    });
-  }
-}
-
-function nextTheme(room) {
-  const options = THEMES.filter((t) => t !== room.theme);
-  room.theme = options[Math.floor(Math.random() * options.length)] || THEMES[0];
-  emitRoom(room);
-}
-
 function emitMafiaRoom(room) {
   io.to(`mafia:${room.id}`).emit('mafia:state', mafiaGame.toPublic(room));
-}
-
-function emitAmongUsRoom(room) {
-  io.to(`amongus:${room.id}`).emit('amongus:state', amongUsGame.toPublic(room));
-}
-
-function emitVillaRoom(room) {
-  io.to(`villa:${room.id}`).emit('villa:state', villaGame.toPublic(room));
-}
-
-function emitGtaRoom(room) {
-  // Broadcast to whole room — no role info
-  io.to(`gta:${room.id}`).emit('gta:state', gtaGame.toPublic(room));
-
-  // Send role-aware state ONLY to the human player's socket
-  const humanPlayer = room.players.find(p => p.role === 'human' && p.socketId && !p.isBot);
-  if (humanPlayer) {
-    const sock = io.sockets.sockets.get(humanPlayer.socketId);
-    if (sock) {
-      sock.emit('gta:state:self', gtaGame.toPublic(room, { forPlayerId: humanPlayer.id }));
-    }
-  }
 }
 
 function pickDeterministicTarget(players, actorId) {
   return players
     .filter((p) => p.alive && p.id !== actorId)
     .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
-}
-
-function pickVillaTarget(room, actorId) {
-  const immunity = room.roundState?.challenge?.immunityPlayerId || null;
-  const players = room.players || [];
-  if (room.phase === 'twist' || room.phase === 'elimination') {
-    return players
-      .filter((p) => p.alive && p.id !== actorId && p.id !== immunity)
-      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
-  }
-  return pickDeterministicTarget(players, actorId);
 }
 
 function runMafiaBotAutoplay(room) {
@@ -674,89 +267,6 @@ function runMafiaBotAutoplay(room) {
 
   if (acted > 0) {
     logRoomEvent('mafia', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, day: room.day, status: room.status });
-  }
-  return { acted };
-}
-
-function runAmongUsBotAutoplay(room) {
-  if (!room || room.status !== 'in_progress') return { acted: 0 };
-  let acted = 0;
-
-  if (room.phase === 'tasks') {
-    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
-    for (const bot of aliveBots) {
-      if (room.phase !== 'tasks' || room.status !== 'in_progress') break;
-
-      if (bot.role === 'crew' && bot.tasksDone < room.tasksToWin) {
-        const taskResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'task' });
-        if (taskResult.ok) acted += 1;
-        continue;
-      }
-
-      if (bot.role === 'imposter') {
-        const target = room.players
-          .filter((p) => p.alive && p.role === 'crew')
-          .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
-        if (!target) continue;
-        const killResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'kill', targetId: target.id });
-        if (killResult.ok) acted += 1;
-      }
-    }
-  }
-
-  if (room.status === 'in_progress' && room.phase === 'meeting') {
-    const aliveBots = room.players.filter((p) => p.alive && p.isBot);
-    for (const bot of aliveBots) {
-      if (room.phase !== 'meeting' || room.status !== 'in_progress') break;
-      if (room.votes?.[bot.id]) continue;
-      const target = pickDeterministicTarget(room.players, bot.id);
-      if (!target) continue;
-      const voteResult = amongUsGame.submitAction(amongUsRooms, { roomId: room.id, playerId: bot.id, type: 'vote', targetId: target.id });
-      if (voteResult.ok) acted += 1;
-    }
-  }
-
-  if (acted > 0) {
-    logRoomEvent('amongus', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, status: room.status });
-  }
-  return { acted };
-}
-
-function runVillaBotAutoplay(room) {
-  if (!room || room.status !== 'in_progress') return { acted: 0 };
-  let acted = 0;
-  const startingPhase = room.phase;
-  const phaseType = {
-    pairing: 'pair',
-    challenge: 'challengeVote',
-    twist: 'twistVote',
-    recouple: 'recouple',
-    elimination: 'eliminateVote',
-  }[startingPhase];
-  if (!phaseType) return { acted: 0 };
-
-  const phaseActions = room.actions?.[startingPhase] || {};
-  const bots = room.players.filter((p) => p.alive && p.isBot);
-  for (const bot of bots) {
-    if (phaseActions[bot.id]) continue;
-    const target = pickVillaTarget(room, bot.id);
-    if (!target) continue;
-    const result = villaGame.submitAction(villaRooms, {
-      roomId: room.id,
-      playerId: bot.id,
-      type: phaseType,
-      targetId: target.id,
-    });
-    if (!result.ok) continue;
-    acted += 1;
-    if (room.status !== 'in_progress' || room.phase !== startingPhase) break;
-  }
-
-  // NOTE: Removed human auto-submit — only bots should be autoplayed.
-  // forceAdvance() already handles deadline expiry for idle humans.
-
-  if (acted > 0) {
-    logRoomEvent('villa', room, 'BOTS_AUTOPLAYED', { acted, phase: room.phase, round: room.round, status: room.status });
   }
   return { acted };
 }
@@ -903,226 +413,7 @@ function scheduleMafiaPhase(room) {
   });
 }
 
-function scheduleAmongUsPhase(room) {
-  if (room.status !== 'in_progress') {
-    roomScheduler.clear({ namespace: 'amongus', roomId: room.id, slot: 'phase' });
-    return;
-  }
 
-  const auto = runAmongUsBotAutoplay(room);
-  if (auto.acted > 0) emitAmongUsRoom(room);
-  if (room.status !== 'in_progress') {
-    roomScheduler.clear({ namespace: 'amongus', roomId: room.id, slot: 'phase' });
-    return;
-  }
-
-  const token = `${room.phase}:${Date.now()}`;
-  const ms = room.phase === 'tasks' ? 8000 : room.phase === 'meeting' ? 6000 : 0;
-  if (!ms) return;
-
-  roomScheduler.schedule({ namespace: 'amongus', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
-    const advanced = amongUsGame.forceAdvance(amongUsRooms, { roomId: room.id });
-    if (advanced.ok) {
-      if (room.status === 'finished') recordFirstMatchCompletion('amongus', room.id);
-      emitAmongUsRoom(room);
-      scheduleAmongUsPhase(room);
-    }
-  });
-}
-
-function scheduleVillaPhase(room) {
-  if (room.status !== 'in_progress') {
-    roomScheduler.clear({ namespace: 'villa', roomId: room.id, slot: 'phase' });
-    return;
-  }
-
-  const phaseBeforeAutoplay = room.phase;
-  const auto = runVillaBotAutoplay(room);
-  if (auto.acted > 0) emitVillaRoom(room);
-  if (room.status !== 'in_progress') {
-    roomScheduler.clear({ namespace: 'villa', roomId: room.id, slot: 'phase' });
-    return;
-  }
-
-  // If bots advanced the phase, schedule a timer for the new phase
-  // instead of recursing immediately — this gives human players time
-  // to participate before the timer expires and force-advances.
-
-  const token = `${room.phase}:${Date.now()}`;
-  const ms = room.phase === 'pairing'
-    ? 7000
-    : room.phase === 'challenge'
-      ? 7000
-      : room.phase === 'twist'
-        ? 6000
-        : room.phase === 'recouple'
-          ? 7000
-          : room.phase === 'elimination'
-            ? 7000
-            : 0;
-  if (!ms) return;
-
-  roomScheduler.schedule({ namespace: 'villa', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
-    const advanced = villaGame.forceAdvance(villaRooms, { roomId: room.id });
-    if (advanced.ok) {
-      if (room.status === 'finished') recordFirstMatchCompletion('villa', room.id);
-      emitVillaRoom(room);
-      scheduleVillaPhase(room);
-    }
-  });
-}
-
-function pickHumanSuspect(room, botId) {
-  const alive = room.players.filter(p => p.alive && p.id !== botId);
-  if (!alive.length) return null;
-  // 40% chance to pick randomly, 60% chance to use mild heuristic
-  if (Math.random() < 0.4) {
-    return alive[Math.floor(Math.random() * alive.length)].id;
-  }
-  // Mild heuristic: pick player whose response has most human-like markers
-  const round = room.round;
-  const responses = room.responsesByRound[round] || {};
-  const scored = alive.map(p => {
-    const text = responses[p.id] || '';
-    let score = 0;
-    if (/\b(i|me|my)\b/i.test(text)) score += 2;
-    if (/\b(honestly|actually|tbh)\b/i.test(text)) score += 3;
-    if (/lol|haha|omg/i.test(text)) score += 4;
-    if (/\.\.\.|!!/.test(text)) score += 2;
-    score += Math.random(); // tie-breaker
-    return { id: p.id, score };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0]?.id || alive[0].id;
-}
-
-function scheduleGtaPhase(room) {
-  if (room.status !== 'in_progress') {
-    roomScheduler.clear({ namespace: 'gta', roomId: room.id, slot: 'phase' });
-    return;
-  }
-
-  roomScheduler.clear({ namespace: 'gta', roomId: room.id, slot: 'phase' });
-
-  const token = `${room.round}:${room.phase}`;
-
-  if (room.phase === 'prompt') {
-    // Update roundEndsAt on room
-    room.roundEndsAt = Date.now() + GTA_PROMPT_MS;
-    emitGtaRoom(room); // re-emit with updated roundEndsAt
-
-    // Emit prompt to live AI agent sockets
-    const liveAgents = room.players.filter(p => p.isLiveAgent && p.alive && p.socketId);
-    for (const agent of liveAgents) {
-      const agentSock = io.sockets.sockets.get(agent.socketId);
-      if (agentSock) {
-        agentSock.emit('gta:prompt', { prompt: room.currentPrompt, round: room.round, roomId: room.id });
-      }
-    }
-
-    // Schedule bot responses
-    const bots = room.players.filter(p => p.isBot && p.alive);
-    for (const bot of bots) {
-      if (room.responsesByRound[room.round]?.[bot.id]) continue;
-      const delay = 2000 + Math.random() * 8000;
-      roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: `respond:${room.round}:${bot.id}`, delayMs: delay, token }, () => {
-        const r = gtaRooms.get(room.id);
-        if (!r || r.phase !== 'prompt' || r.round !== room.round) return;
-        if (r.responsesByRound[r.round]?.[bot.id]) return;
-        const text = generateBotRoast(r.currentPrompt, bot, 6, 'thoughtful');
-        const result = gtaGame.submitResponse(gtaRooms, { roomId: r.id, playerId: bot.id, text });
-        if (result.ok) {
-          logRoomEvent('gta', r, 'BOT_RESPONDED', { botId: bot.id, round: r.round });
-          emitGtaRoom(r);
-          if (result.advanced) scheduleGtaPhase(r);
-        }
-      });
-    }
-
-    // Phase deadline
-    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_PROMPT_MS, token }, () => {
-      const r = gtaRooms.get(room.id);
-      if (!r || r.phase !== 'prompt' || r.round !== room.round) return;
-      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
-      if (adv.ok) { emitGtaRoom(r); scheduleGtaPhase(r); }
-    });
-  }
-
-  if (room.phase === 'reveal') {
-    room.roundEndsAt = Date.now() + GTA_REVEAL_MS;
-    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_REVEAL_MS, token }, () => {
-      const r = gtaRooms.get(room.id);
-      if (!r || r.phase !== 'reveal' || r.round !== room.round) return;
-      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
-      if (adv.ok) { emitGtaRoom(r); scheduleGtaPhase(r); }
-    });
-  }
-
-  if (room.phase === 'vote') {
-    room.roundEndsAt = Date.now() + GTA_VOTE_MS;
-
-    // Emit vote request to live AI agent sockets
-    const liveVoters = room.players.filter(p => p.isLiveAgent && p.alive && p.socketId && p.role === 'agent');
-    const publicPlayers = room.players.filter(p => p.alive).map(p => ({ id: p.id, name: p.name, alive: p.alive }));
-    for (const agent of liveVoters) {
-      const agentSock = io.sockets.sockets.get(agent.socketId);
-      if (agentSock) {
-        agentSock.emit('gta:vote_request', { players: publicPlayers, round: room.round, roomId: room.id });
-      }
-    }
-
-    // Schedule bot votes
-    const aliveBots = room.players.filter(p => p.isBot && p.alive && p.role === 'agent');
-    for (const bot of aliveBots) {
-      if (room.votesByRound[room.round]?.[bot.id]) continue;
-      const delay = 5000 + Math.random() * 10000;
-      roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: `vote:${room.round}:${bot.id}`, delayMs: delay, token }, () => {
-        const r = gtaRooms.get(room.id);
-        if (!r || r.phase !== 'vote' || r.round !== room.round) return;
-        if (r.votesByRound[r.round]?.[bot.id]) return;
-        const targetId = pickHumanSuspect(r, bot.id);
-        if (!targetId) return;
-        const result = gtaGame.castVote(gtaRooms, { roomId: r.id, voterId: bot.id, targetId });
-        if (result.ok) {
-          logRoomEvent('gta', r, 'BOT_VOTED', { botId: bot.id, targetId, round: r.round });
-          if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
-          emitGtaRoom(r);
-          scheduleGtaPhase(r);
-        }
-      });
-    }
-    // Phase deadline
-    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_VOTE_MS, token }, () => {
-      const r = gtaRooms.get(room.id);
-      if (!r || r.phase !== 'vote' || r.round !== room.round) return;
-      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id });
-      if (adv.ok) {
-        if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
-        emitGtaRoom(r);
-        scheduleGtaPhase(r);
-      }
-    });
-  }
-
-  if (room.phase === 'result') {
-    if (room.status === 'finished') {
-      recordFirstMatchCompletion('gta', room.id);
-      emitGtaRoom(room);
-      return;
-    }
-    room.roundEndsAt = Date.now() + GTA_RESULT_MS;
-    roomScheduler.schedule({ namespace: 'gta', roomId: room.id, slot: 'phase', delayMs: GTA_RESULT_MS, token }, () => {
-      const r = gtaRooms.get(room.id);
-      if (!r || r.phase !== 'result') return;
-      const adv = gtaGame.forceAdvance(gtaRooms, { roomId: r.id }); // → next prompt
-      if (adv.ok) {
-        if (r.status === 'finished') recordFirstMatchCompletion('gta', r.id);
-        emitGtaRoom(r);
-        scheduleGtaPhase(r);
-      }
-    });
-  }
-}
 
 function recordJoinHardeningEvent(mode, roomId, socketId, attemptedName) {
   const normalizedRoomId = String(roomId || '').trim().toUpperCase();
@@ -1479,7 +770,6 @@ const opsLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: OPS_RATE_LIM
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/ops/', opsLimiter);
-app.use('/api/evals/', opsLimiter);
 
 // ── Ops Auth Gate ──
 function opsAuthGate(req, res, next) {
@@ -1498,7 +788,6 @@ function opsAuthGate(req, res, next) {
   next();
 }
 app.use('/api/ops/', opsAuthGate);
-app.use('/api/evals/', opsAuthGate);
 
 app.use((req, _res, next) => {
   if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html', '/guess-the-agent.html'].includes(req.path)) {
@@ -2090,68 +1379,9 @@ function persistGrowthMetricsSnapshot() {
   return payload;
 }
 
-function registerRoast({ battleId, agentId, agentName, text }) {
-  const policyVariant = arenaCanary.assignRoom(battleId);
-  const moderated = moderateRoast(text, { maxLength: 280, variant: policyVariant });
-  const safeText = moderated.ok
-    ? moderated.text
-    : `[${String(agentName || 'Bot').slice(0, 24)} • light] Your pitch deck has side effects.`;
-
-  arenaCanary.recordDecision(policyVariant, moderated.ok);
-
-  logStructured('roast_policy_decision', {
-    source: 'arena-auto-battle',
-    battleId,
-    actorId: agentId,
-    policyCode: moderated.code,
-    policyVariant,
-    allowed: moderated.ok,
-  });
-
-  const roast = {
-    id: shortId(10),
-    battleId,
-    agentId,
-    agentName,
-    text: safeText,
-    upvotes: 0,
-    createdAt: Date.now(),
-    policyCode: moderated.code,
-    policyVariant,
-  };
-  roastFeed.unshift(roast);
-  if (roastFeed.length > 400) roastFeed.length = 400;
-  persistState();
-  return roast;
-}
-
-function ensureSeedAgents() {
-  if (agentProfiles.size >= 3) return;
-  ['savage_ops', 'deadpan_rx', 'roastor_prime'].forEach((name, i) => {
-    const id = shortId(10);
-    const persona = buildArenaPersona({
-      style: i % 2 ? 'deadpan' : 'witty',
-      intensity: 6 + i,
-    });
-    agentProfiles.set(id, {
-      id,
-      owner: 'system',
-      name,
-      deployed: true,
-      mmr: 1000 + i * 8,
-      karma: 0,
-      persona,
-      openclaw: { connected: true, mode: 'seed' },
-      createdAt: Date.now(),
-    });
-  });
-  persistState();
-}
-
 function isPublicRankedAgent(agent) {
   if (!agent) return false;
   if (agent.owner === 'system') return false;
-  if (agent.openclaw?.mode === 'seed') return false;
   return true;
 }
 
@@ -2211,10 +1441,12 @@ async function resolveSiteSession(req) {
         durable: true,
       };
     }
-  } catch (_err) {
-    // fall through to in-memory session state
+  } catch (err) {
+    logStructured('error.resolveSiteSession', { error: err.message });
+    if (IS_PRODUCTION) return null;
   }
 
+  // Non-production fallback: check in-memory session cache
   const fallback = getCachedSession(token);
   if (!fallback) return null;
   return {
@@ -2241,8 +1473,10 @@ async function bindOwnedAgent(ownerUserId, agentId) {
       agentId: cleanAgentId,
       error: err.message,
     });
+    if (IS_PRODUCTION) throw err;
   }
 
+  // Non-production fallback: also update in-memory session cache
   for (const session of sessions.values()) {
     if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
     if (session?.userId === cleanUserId) session.agentId = cleanAgentId;
@@ -2416,24 +1650,6 @@ function agentRuntimeRequiredError() {
       message: 'Your agent is not online in the live arena yet. Finish the OpenClaw runtime connection first.',
     },
   };
-}
-
-function runAutoBattle() {
-  ensureSeedAgents();
-  const deployed = [...agentProfiles.values()].filter((a) => a.deployed);
-  if (deployed.length < 2) return null;
-
-  const shuffled = fisherYatesShuffle(deployed).slice(0, Math.min(4, deployed.length));
-  const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
-  const battleId = shortId(8);
-
-  for (const agent of shuffled) {
-    const intensity = Number(agent.persona?.intensity || 6);
-    const roastText = generateBotRoast(theme, agent.name, intensity, agent.persona?.style || 'witty');
-    registerRoast({ battleId, agentId: agent.id, agentName: agent.name, text: roastText });
-  }
-
-  return { battleId, theme, participants: shuffled.map((a) => ({ id: a.id, name: a.name })) };
 }
 
 let publicArenaQueueRunning = false;
@@ -2633,7 +1849,11 @@ app.post('/api/auth/session', async (req, res) => {
       ownedAgent: null,
     });
   } catch (err) {
-    // Fallback to in-memory only if DB isn't initialized
+    logStructured('error.auth.session.create', { error: err.message });
+    if (IS_PRODUCTION) {
+      return res.status(503).json({ ok: false, error: 'Session storage unavailable' });
+    }
+    // Non-production fallback: issue in-memory session
     const token2 = shortId(20);
     const fallbackExpiresAt = expiresAtFromNow();
     setCachedSession({ token: token2, userId, createdAt: Date.now(), expiresAt: fallbackExpiresAt });
