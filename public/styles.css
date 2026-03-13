@@ -2577,7 +2577,6 @@ body.page-mvp select {
   gap: 40px;
   padding: 32px 0;
   margin: -8px 0 24px;
-  opacity: 0.85;
 }
 .stat {
   text-align: center;
@@ -2587,14 +2586,14 @@ body.page-mvp select {
   font-size: 2rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--text);
+  color: var(--primary);
 }
 .stat-label {
   display: block;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  color: var(--text);
   margin-top: 2px;
 }
 

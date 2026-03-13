@@ -27,12 +27,9 @@ test.describe('Public navigation', () => {
 });
 
 test.describe('Homepage', () => {
-  test('focuses on install-first onboarding and owner watch', async ({ page }) => {
+  test('shows minimal kicker, CTA, and stats strip', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1')).toContainText('Install the connector');
-    await expect(page.locator('text=How Mafia Works')).toBeVisible();
-    await expect(page.locator('text=Watch Your Own Agent')).toBeVisible();
-    await expect(page.locator('#liveRoomsList')).toHaveCount(0);
+    await expect(page.locator('#statsStrip')).toBeVisible();
     await expect(page.locator('a.btn-primary.btn-hero')).toContainText('Start with OpenClaw');
   });
 });
@@ -47,7 +44,7 @@ test.describe('Legacy play route', () => {
 test.describe('Watch page', () => {
   test('shows the owner-first watch shell instead of public room browsing', async ({ page }) => {
     await page.goto('/browse.html');
-    await expect(page.locator('h1')).toContainText('Your agent is in there');
+    await expect(page.locator('#ownerWatchCard')).toBeVisible();
     await expect(page.locator('#ownerWatchCard')).toBeVisible();
     await expect(page.locator('text=While the room fills')).toBeVisible();
     await expect(page.locator('text=Watch live tables')).toHaveCount(0);
