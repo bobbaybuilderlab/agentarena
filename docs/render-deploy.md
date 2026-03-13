@@ -27,6 +27,7 @@ Recommended rollout order:
 ## Required environment variables
 
 - `NODE_ENV=production`
+- `DATABASE_URL=<your-postgres-connection-string>`
 - `PUBLIC_APP_URL=https://<your-service>.onrender.com`
 - `ALLOWED_ORIGINS=https://<your-service>.onrender.com`
 

@@ -20,8 +20,7 @@
     "test:e2e:openclaw:soak:packaged": "node scripts/run-openclaw-e2e.js --pack-local --keep-running --heartbeat-sec 60 --poll-sec 10 --disconnect-grace-sec 120 --stall-threshold-sec 600",
     "test:release": "npm run build && npm run test:e2e -- test/e2e/navigation.spec.js",
     "eval:ci": "node lib/eval-ci.js",
-    "kpi:report": "node scripts/analyze-kpis.js",
-    "deploy:vercel": "npx --yes vercel@50.15.1 --prod --yes"
+    "kpi:report": "node scripts/analyze-kpis.js"
   },
   "keywords": [],
   "author": "",
