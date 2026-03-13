@@ -94,6 +94,8 @@ const pageIsOwnerWatch = document.body.classList.contains('page-watch-owner');
 let me = { roomId: '', playerId: '', game: PUBLIC_MODE };
 let currentState = null;
 let ownedAgent = null;
+let ownedAgentStats = null;
+let ownedRecentMatches = [];
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
@@ -121,6 +123,96 @@ function latestOwnedDiscussion(state) {
     .slice()
     .reverse()
     .find((event) => event?.type === 'DISCUSSION_MESSAGE' && event.actorId === me.playerId) || null;
+}
+
+function formatPercent(value) {
+  return `${Math.max(0, Number(value) || 0)}%`;
+}
+
+function buildOwnerRecentMatchesMarkup(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return '<p class="text-sm text-muted">Recent matches will appear here after your first tracked game.</p>';
+  }
+
+  return matches.map((match) => {
+    const isWin = isMatchWin(match);
+    const resultClass = isWin ? 'win' : 'loss';
+    const resultText = isWin ? 'W' : 'L';
+    const role = match.role ? ` / ${escapeHtml(roleLabel(match.role))}` : '';
+    const rounds = match.rounds ? `${escapeHtml(match.rounds)}r` : '';
+    const ago = (match.finished_at || match.finishedAt) ? timeAgo(match.finished_at || match.finishedAt) : '';
+    const killCredit = Number(match.nightKillCredits || match.night_kill_credits || 0);
+    const meta = [rounds, ago, killCredit > 0 ? `${killCredit} night kill${killCredit === 1 ? '' : 's'}` : '']
+      .filter(Boolean)
+      .join(' · ');
+
+    return `<div class="recent-game-row">
+      <span class="recent-game-result ${resultClass}">${resultText}</span>
+      <span class="recent-game-mode">${escapeHtml(modeLabel(match.mode || 'mafia'))}</span>
+      <span class="text-sm">${escapeHtml(match.playerName || match.player_name || ownedAgent?.name || '')}${role}</span>
+      <span class="recent-game-meta">${meta}</span>
+    </div>`;
+  }).join('');
+}
+
+function buildOwnerStatsMarkup() {
+  if (!ownedAgent) return '';
+
+  const stats = ownedAgentStats;
+  const hasHistory = Boolean(stats && Number(stats.gamesPlayed || 0) > 0);
+
+  const summaryMarkup = hasHistory
+    ? `
+      <div class="grid-2 mb-12" style="gap:0.75rem;">
+        <article class="match-chip">
+          <p class="field-label">Lifetime</p>
+          <h3>${stats.gamesPlayed} games</h3>
+          <p class="text-xs text-muted">${stats.wins} wins · ${stats.losses} losses · ${formatPercent(stats.winRate)} win rate</p>
+        </article>
+        <article class="match-chip">
+          <p class="field-label">Survival</p>
+          <h3>${formatPercent(stats.survivalRate)}</h3>
+          <p class="text-xs text-muted">${stats.survivals} survived · ${stats.eliminationsSuffered} eliminations suffered</p>
+        </article>
+        <article class="match-chip">
+          <p class="field-label">Night kills</p>
+          <h3>${stats.nightKillCredits}</h3>
+          <p class="text-xs text-muted">Credited when your mafia vote matched the resolved victim.</p>
+        </article>
+        <article class="match-chip">
+          <p class="field-label">Last played</p>
+          <h3>${stats.lastPlayedAt ? escapeHtml(timeAgo(stats.lastPlayedAt)) : 'Waiting'}</h3>
+          <p class="text-xs text-muted">${stats.lastPlayedAt ? escapeHtml(new Date(stats.lastPlayedAt).toLocaleString()) : 'No finished tracked matches yet.'}</p>
+        </article>
+      </div>
+      <div class="grid-2 mb-12" style="gap:0.75rem;">
+        <article class="match-chip">
+          <p class="field-label">Town split</p>
+          <h3>${stats.byRole?.town?.wins || 0} / ${stats.byRole?.town?.gamesPlayed || 0}</h3>
+          <p class="text-xs text-muted">Town wins / town games</p>
+        </article>
+        <article class="match-chip">
+          <p class="field-label">Mafia split</p>
+          <h3>${stats.byRole?.mafia?.wins || 0} / ${stats.byRole?.mafia?.gamesPlayed || 0}</h3>
+          <p class="text-xs text-muted">Mafia wins / mafia games</p>
+        </article>
+      </div>`
+    : `<p class="text-sm text-muted mb-12">${escapeHtml(ownedAgent.name)} is connected, but there are no durable tracked matches yet.</p>`;
+
+  return `
+    <div style="display:grid; gap:0.75rem;">
+      <div>
+        <p class="section-title mb-8">Lifetime Snapshot</p>
+        <p class="text-xs text-muted mb-8">Durable record for ${escapeHtml(ownedAgent.name)} across deploys and restarts.</p>
+      </div>
+      ${summaryMarkup}
+      <article class="match-chip">
+        <p class="field-label">Recent matches</p>
+        <div style="display:grid; gap:0.4rem; margin-top:0.5rem;">
+          ${buildOwnerRecentMatchesMarkup(ownedRecentMatches)}
+        </div>
+      </article>
+    </div>`;
 }
 
 function renderOwnerWatchCard() {
@@ -243,11 +335,31 @@ async function fetchOwnedAgent() {
   }
 }
 
+async function fetchOwnedMatches(limit = 6) {
+  const token = getAuthToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`/api/matches/mine?limit=${encodeURIComponent(limit)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401) return null;
+    const data = await res.json();
+    return data?.ok ? data : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
 async function refreshOwnerWatch() {
   if (!pageIsOwnerWatch) return;
 
-  const data = await fetchOwnedAgent();
+  const [data, recent] = await Promise.all([
+    fetchOwnedAgent(),
+    fetchOwnedMatches(),
+  ]);
   ownedAgent = data?.agent || null;
+  ownedAgentStats = data?.stats || null;
+  ownedRecentMatches = recent?.matches || [];
 
   if (ownedAgent?.arena?.activePlayerId) me.playerId = ownedAgent.arena.activePlayerId;
   if (ownedAgent?.name && playerName) playerName.value = ownedAgent.name;
@@ -271,7 +383,7 @@ async function refreshOwnerWatch() {
     if (phaseTimeline) phaseTimeline.style.display = 'none';
     if (spectatorReadSection) spectatorReadSection.style.display = 'none';
     if (gameContentSection) gameContentSection.style.display = 'none';
-    if (ownerDigestCard) ownerDigestCard.style.display = 'none';
+    renderOwnerDigest(currentState);
     if (gamePicker) gamePicker.style.display = '';
   }
 }
@@ -1264,14 +1376,18 @@ function suggestedRefinement(result) {
 
 function renderOwnerDigest(state) {
   if (!ownerDigestCard) return;
-  if (!state || state.status !== 'finished' || !me.playerId) {
-    ownerDigestCard.style.display = 'none';
-    return;
-  }
+  const statsMarkup = buildOwnerStatsMarkup();
+  const mePlayer = state && state.status === 'finished' && me.playerId
+    ? (state.players || []).find((p) => p.id === me.playerId) || null
+    : null;
 
-  const mePlayer = (state.players || []).find((p) => p.id === me.playerId);
   if (!mePlayer) {
-    ownerDigestCard.style.display = 'none';
+    if (!statsMarkup) {
+      ownerDigestCard.style.display = 'none';
+      return;
+    }
+    ownerDigestCard.style.display = 'block';
+    ownerDigestCard.innerHTML = statsMarkup;
     return;
   }
 
@@ -1283,14 +1399,13 @@ function renderOwnerDigest(state) {
       : mePlayer.alive !== false)
     : Boolean(role && winner && role === winner);
   const resultTag = didWin ? '✅ Win' : '❌ Loss';
-  const aliveTag = mePlayer.alive === false ? 'eliminated' : 'survived';
-  const gameLabel = modeLabel(me.game);
   const result = { didWin, role, winner };
 
   const totalPlayers = (state.players || []).length;
   const survived = (state.players || []).filter((p) => p.alive !== false).length;
   const rounds = state.round || state.day || state.turn || 0;
   const placement = mePlayer.alive !== false ? `top ${survived}` : `${survived + 1}th`;
+  const statsSection = statsMarkup ? `<div style="margin-top:1rem;">${statsMarkup}</div>` : '';
 
   ownerDigestCard.style.display = 'block';
   ownerDigestCard.innerHTML = `
@@ -1316,19 +1431,23 @@ function renderOwnerDigest(state) {
         </div>
       </div>
       <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
-        <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
-        <div id="rematchCountdownContainer"></div>
-        <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
-          <button class="btn btn-ghost btn-sm" onclick="instantPlay(me.game || 'mafia')">New Game</button>
-          <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share Result</button>
-        </div>
-        <div id="postGameLeaderboard" class="post-game-leaderboard"></div>
-      </div>
+      ${pageIsOwnerWatch ? '' : `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
+          <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
+          <div id="rematchCountdownContainer"></div>
+          <div class="row" style="justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="instantPlay(me.game || 'mafia')">New Game</button>
+            <button class="btn btn-ghost btn-sm" id="shareResultBtn" onclick="shareResult()">Share Result</button>
+          </div>
+          <div id="postGameLeaderboard" class="post-game-leaderboard"></div>
+        </div>`}
+      ${statsSection}
     </div>`;
 
-  startRematchCountdown();
-  renderPostGameLeaderboard();
+  if (!pageIsOwnerWatch) {
+    startRematchCountdown();
+    renderPostGameLeaderboard();
+  }
 }
 
 async function renderPostGameLeaderboard() {
@@ -2026,8 +2145,9 @@ function getStoredUserId() {
 }
 
 async function loadRecentMatches() {
+  const token = getAuthToken();
   const userId = getStoredUserId();
-  if (!userId) return; // no session — skip for first-time visitors
+  if (!token && !userId) return; // no session — skip for first-time visitors
 
   const section = document.getElementById('recentGamesSection');
   const list = document.getElementById('recentGamesList');
@@ -2035,7 +2155,11 @@ async function loadRecentMatches() {
   if (!section || !list) return;
 
   try {
-    const res = await fetch(`/api/matches?userId=${encodeURIComponent(userId)}&limit=5`);
+    const res = token
+      ? await fetch('/api/matches/mine?limit=5', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      : await fetch(`/api/matches?userId=${encodeURIComponent(userId)}&limit=5`);
     const data = await res.json();
     if (!data.ok || !data.matches || data.matches.length === 0) return;
 

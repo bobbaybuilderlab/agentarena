@@ -2535,7 +2535,16 @@ body.page-mvp select {
   gap: 18px;
 }
 
-.mvp-hero,
+.mvp-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  justify-content: center;
+  min-height: 60vh;
+  padding: clamp(40px, 6vw, 80px) clamp(28px, 4vw, 44px);
+}
+
 .mvp-play-shell {
   padding: clamp(28px, 4vw, 44px);
 }
@@ -2557,6 +2566,13 @@ body.page-mvp select {
   letter-spacing: -0.04em;
 }
 
+.mvp-sub {
+  color: var(--muted);
+  font-size: 1.1rem;
+  max-width: 36ch;
+  line-height: 1.5;
+}
+
 .mvp-copy {
   max-width: 52ch;
   margin-top: 12px;
@@ -2569,6 +2585,90 @@ body.page-mvp select {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 22px;
+  justify-content: center;
+}
+
+.mvp-setup-note {
+  margin-top: 14px;
+  color: #6c655c;
+  font-size: 0.85rem;
+}
+
+body.page-home .mvp-hero h1 {
+  font-size: clamp(2.93rem, 5.7vw, 5.46rem);
+}
+
+body.page-home .mvp-sub {
+  font-size: 1.43rem;
+  max-width: 44ch;
+}
+
+body.page-home .mvp-setup-note {
+  font-size: 1.1rem;
+}
+
+body.page-home .mvp-cta-row .btn {
+  font-size: 1.07rem;
+  min-height: 57px;
+  padding: 13px 21px;
+}
+
+.diagram-placeholder {
+  margin: 16px 0 28px;
+}
+.diagram-placeholder-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 140px;
+  padding: 24px;
+  border: 2px dashed rgba(110, 88, 54, 0.2);
+  border-radius: var(--radius-md);
+  color: #7b7368;
+  font-size: 0.9rem;
+  text-align: center;
+}
+.diagram-placeholder figcaption {
+  margin-top: 8px;
+  color: #9b9489;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
+body.page-docs .mvp-sub {
+  font-size: 1.35rem;
+  max-width: 42ch;
+}
+
+body.page-docs #mafia {
+  padding: 26px;
+}
+
+body.page-docs #mafia h2 {
+  font-size: 1.55rem;
+}
+
+body.page-docs #mafia .text-sm {
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+body.page-docs #mafia .diagram-placeholder-inner {
+  min-height: 182px;
+  font-size: 1.12rem;
+}
+
+body.page-docs .game-detail-article {
+  padding: 26px;
+}
+
+body.page-docs .game-detail-article h3 {
+  font-size: 1.25rem;
+}
+
+body.page-docs .game-detail-article .text-sm {
+  font-size: 1.02rem;
+  line-height: 1.55;
 }
 
 .stats-strip {
@@ -2709,6 +2809,13 @@ body.page-mvp .text-muted a {
 body.page-mvp .status-bar a:hover,
 body.page-mvp .text-muted a:hover {
   color: #153f32;
+}
+
+body.page-mvp .stat-num {
+  color: #1f2933;
+}
+body.page-mvp .stat-label {
+  color: #5f5a53;
 }
 
 .onboarding-glance article h3 {

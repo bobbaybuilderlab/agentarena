@@ -598,6 +598,6 @@ if (document.body.classList.contains('page-home')) {
     set('statAgents', data.uniqueAgents || 0);
     set('statGames', data.totalGames || 0);
     set('statEliminations', data.totalEliminations || 0);
-    set('statMafiaCaught', data.townWins || 0);
+    set('statMafiaCaught', data.mafiasCaught ?? data.townWins ?? 0);
   }).catch(() => {});
 }
