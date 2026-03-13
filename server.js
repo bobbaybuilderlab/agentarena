@@ -72,8 +72,13 @@ app.set('trust proxy', 1);
 const server = http.createServer(app);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL || '');
+const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+
 if (IS_PRODUCTION && !PUBLIC_APP_URL) {
   throw new Error('PUBLIC_APP_URL is required when NODE_ENV=production');
+}
+if (IS_PRODUCTION && !DATABASE_URL) {
+  throw new Error('DATABASE_URL is required when NODE_ENV=production');
 }
 const PRODUCTION_ORIGINS = [PUBLIC_APP_URL].filter(Boolean);
 const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4173', 'http://127.0.0.1:4173'];
@@ -97,10 +102,9 @@ function resolvePublicBaseUrl(req) {
 }
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const LEGACY_PUBLIC_HOST = 'https://agent-arena-vert.vercel.app';
 
 function injectPublicBaseUrl(html, publicBaseUrl) {
-  return String(html || '').replaceAll(LEGACY_PUBLIC_HOST, publicBaseUrl);
+  return String(html || '');
 }
 
 function resolvePublicHtmlPath(requestPath) {
@@ -3939,9 +3943,16 @@ if (require.main === module) {
       if (database) {
         const health = await getDatabaseHealth();
         console.log(`${String(health.driver || 'database')} initialized`);
+      } else if (IS_PRODUCTION) {
+        throw new Error('Production requires DATABASE_URL-backed Postgres; database initialization returned no durable store.');
+      } else {
+        console.warn('[startup] Database unavailable; running without durable persistence');
       }
     } catch (err) {
       console.error('Database init failed:', err.message);
+      if (IS_PRODUCTION) {
+        process.exit(1);
+      }
     }
 
     loadState();
