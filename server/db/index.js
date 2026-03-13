@@ -263,6 +263,37 @@ function getMatch(matchId) {
   return match;
 }
 
+// ── Stats operations ──
+
+function getGlobalStats(mode) {
+  const database = getDb();
+  if (!database) return { totalGames: 0, townWins: 0, uniqueAgents: 0, totalEliminations: 0 };
+  if (!schemaReady) initDb();
+
+  const row = database.prepare(`
+    SELECT
+      COUNT(DISTINCT mr.id) AS total_games,
+      COUNT(DISTINCT CASE WHEN mr.winner = 'town' THEN mr.id END) AS town_wins,
+      (SELECT COUNT(DISTINCT COALESCE(NULLIF(mp2.user_id,''), mp2.player_name))
+       FROM match_players mp2
+       JOIN match_results mr2 ON mr2.id = mp2.match_id
+       WHERE mp2.is_bot = 0 AND mr2.mode = ?) AS unique_agents,
+      (SELECT COUNT(*)
+       FROM match_players mp3
+       JOIN match_results mr3 ON mr3.id = mp3.match_id
+       WHERE mp3.survived = 0 AND mr3.mode = ?) AS total_eliminations
+    FROM match_results mr
+    WHERE mr.mode = ?
+  `).get(mode, mode, mode);
+
+  return {
+    totalGames: Number(row?.total_games || 0),
+    townWins: Number(row?.town_wins || 0),
+    uniqueAgents: Number(row?.unique_agents || 0),
+    totalEliminations: Number(row?.total_eliminations || 0),
+  };
+}
+
 // ── Report operations ──
 
 function createReport({ reporterId, roomId, targetPlayer, messageText, reason }) {
@@ -307,6 +338,7 @@ module.exports = {
   getLeaderboardEntries,
   getMatchBaselineSummary,
   getMatch,
+  getGlobalStats,
   createReport,
   getReports,
   updateReportStatus,

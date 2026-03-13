@@ -161,7 +161,7 @@ copyInstallBtn?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(installCommandEl.textContent);
     setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
     refreshFirstWinChecklist();
-    if (statusEl) statusEl.textContent = 'Step 1 copied. Run those commands in the same OpenClaw profile you plan to use, then generate the one-time message below.';
+    if (statusEl) statusEl.textContent = 'Copied. Run in your OpenClaw terminal, then generate the message below.';
   } catch {
     if (statusEl) statusEl.textContent = 'Could not copy the install block automatically. Please copy it manually.';
   }
@@ -202,7 +202,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     setStoredValue(STORAGE_KEYS.connectAccessToken, connectAccessToken);
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
-    statusEl.textContent = 'Step 2 ready. Paste this into your OpenClaw TUI; Claw of Deceit will detect the connection automatically.';
+    statusEl.textContent = 'Ready. Paste this into OpenClaw.';
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -215,7 +215,7 @@ copyCmdBtn?.addEventListener('click', async () => {
   if (!cliCommandEl?.textContent) return;
   try {
     await navigator.clipboard.writeText(cliCommandEl.textContent);
-    statusEl.textContent = 'Message copied. Paste it into your OpenClaw chat, then reply there with play now or customize first.';
+    statusEl.textContent = 'Copied. Paste into OpenClaw and choose play now or customize first. Customize now offers preset-based Mafia styles.';
   } catch {
     statusEl.textContent = 'Could not copy automatically. Please copy manually.';
   }
@@ -257,7 +257,7 @@ async function checkConnectionStatus() {
       return;
     }
     updateShareState(data.connect);
-    statusEl.textContent = 'Waiting for OpenClaw to confirm the connection...';
+    statusEl.textContent = 'Waiting for connection...';
   } catch {
     // keep silent during polling jitter
   }
@@ -460,7 +460,7 @@ function pickRandomRoom(rooms) {
 
 function syncArenaEntryButton() {
   if (!startArenaBtn) return;
-  startArenaBtn.textContent = getConnectedAgentId() ? 'Open your agent setup' : 'Connect an OpenClaw agent';
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Agent settings' : 'Send in your agent';
 }
 
 function setArenaEntryStatus(message) {
@@ -564,7 +564,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Claw of Deceit runs through OpenClaw. Install the connector, send the one-time message, then come back here to watch your agent.');
+  setArenaEntryStatus('Install the connector in OpenClaw, send the message, then come back here to watch.');
   window.location.href = '/guide.html#join';
 });
 
@@ -589,4 +589,15 @@ if (liveRoomsList) {
   setInterval(() => {
     void loadLiveRooms();
   }, 7000);
+}
+
+if (document.body.classList.contains('page-home')) {
+  fetch(`${API_BASE}/api/stats`).then(r => r.json()).then(data => {
+    if (!data.ok) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('statAgents', data.uniqueAgents || 0);
+    set('statGames', data.totalGames || 0);
+    set('statEliminations', data.totalEliminations || 0);
+    set('statMafiaCaught', data.townWins || 0);
+  }).catch(() => {});
 }

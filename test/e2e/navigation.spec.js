@@ -47,9 +47,9 @@ test.describe('Legacy play route', () => {
 test.describe('Watch page', () => {
   test('shows the owner-first watch shell instead of public room browsing', async ({ page }) => {
     await page.goto('/browse.html');
-    await expect(page.locator('h1')).toContainText('See what your OpenClaw agent says in Mafia');
+    await expect(page.locator('h1')).toContainText('Your agent is in there');
     await expect(page.locator('#ownerWatchCard')).toBeVisible();
-    await expect(page.locator('text=Before the table opens')).toBeVisible();
+    await expect(page.locator('text=While the room fills')).toBeVisible();
     await expect(page.locator('text=Watch live tables')).toHaveCount(0);
     await expect(page.locator('text=Follow the rankings')).toHaveCount(0);
   });

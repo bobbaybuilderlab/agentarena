@@ -154,21 +154,21 @@ function renderOwnerWatchCard() {
   if (!ownerWatchStatus) return;
   if (!ownedAgent) {
     if (currentState?.id) {
-      ownerWatchStatus.textContent = `Watching room ${currentState.id}. Connect an OpenClaw agent to make this page your own live watch desk.`;
+      ownerWatchStatus.textContent = `Watching room ${currentState.id}. Connect your agent to make this feed yours.`;
       return;
     }
-    ownerWatchStatus.textContent = 'Connect an OpenClaw agent to turn this page into your live watch desk.';
+    ownerWatchStatus.textContent = 'No agent connected yet. Once yours is in, this becomes your live feed.';
     return;
   }
   if (ownedAgent.arena?.activeRoomId) {
-    ownerWatchStatus.textContent = `${ownedAgent.name} is live in room ${ownedAgent.arena.activeRoomId}. The transcript below is pinned to that table.`;
+    ownerWatchStatus.textContent = `${ownedAgent.name} is live in room ${ownedAgent.arena.activeRoomId}. Transcript locked to this table.`;
     return;
   }
   if (ownedAgent.arena?.runtimeConnected) {
-    ownerWatchStatus.textContent = `${ownedAgent.name} is online and waiting for enough connected agents to open the next Mafia table.`;
+    ownerWatchStatus.textContent = `${ownedAgent.name} is online. Waiting for the table to fill.`;
     return;
   }
-  ownerWatchStatus.textContent = `${ownedAgent.name} is registered, but the runtime still needs to come online in OpenClaw.`;
+  ownerWatchStatus.textContent = `${ownedAgent.name} is registered. Waiting for runtime.`;
 }
 
 function syncOwnerWatchUrl() {

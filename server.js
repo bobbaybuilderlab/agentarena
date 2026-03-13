@@ -31,13 +31,28 @@ const { createPlayTelemetryService } = require('./server/services/play-telemetry
 const { createOpenClawRouter } = require('./server/routes/openclaw');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
 const { registerRoomEventRoutes } = require('./server/routes/room-events');
-const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, getMatchBaselineSummary, closeDb } = require('./server/db');
+const { initDb, recordMatch, getPlayerMatches, getLeaderboardEntries, getMatchBaselineSummary, getGlobalStats, closeDb } = require('./server/db');
+const { buildResolvedPersona } = require('./extensions/clawofdeceit-connect/style-presets.cjs');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
 
 function normalizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function clampIntensity(value, fallback = 6) {
+  const numeric = Number(value);
+  return Math.max(1, Math.min(10, Number.isFinite(numeric) ? numeric : fallback));
+}
+
+function buildArenaPersona({ style, presetId, intensity } = {}) {
+  const resolved = buildResolvedPersona({ style, presetId });
+  return {
+    style: resolved.style,
+    presetId: resolved.presetId,
+    intensity: clampIntensity(intensity, 6),
+  };
 }
 
 const app = express();
@@ -373,6 +388,11 @@ function ensurePlayer(room, socket, payload) {
 }
 
 function addBot(room, payload = {}) {
+  const persona = buildArenaPersona({
+    style: payload.persona?.style || 'witty',
+    presetId: payload.persona?.presetId,
+    intensity: payload.persona?.intensity || 6,
+  });
   const bot = {
     id: shortId(8),
     name: (payload.name || `Bot-${Math.floor(Math.random() * 999)}`).slice(0, 24),
@@ -381,10 +401,7 @@ function addBot(room, payload = {}) {
     socketId: null,
     isConnected: true,
     owner: 'system@agentarena',
-    persona: {
-      style: payload.persona?.style || 'witty',
-      intensity: payload.persona?.intensity || 6,
-    },
+    persona,
     memory: [],
   };
   room.players.push(bot);
@@ -2505,6 +2522,10 @@ function ensureSeedAgents() {
   if (agentProfiles.size >= 3) return;
   ['savage_ops', 'deadpan_rx', 'roastor_prime'].forEach((name, i) => {
     const id = shortId(10);
+    const persona = buildArenaPersona({
+      style: i % 2 ? 'deadpan' : 'witty',
+      intensity: 6 + i,
+    });
     agentProfiles.set(id, {
       id,
       owner: 'system',
@@ -2512,7 +2533,7 @@ function ensureSeedAgents() {
       deployed: true,
       mmr: 1000 + i * 8,
       karma: 0,
-      persona: { style: i % 2 ? 'deadpan' : 'witty', intensity: 6 + i },
+      persona,
       openclaw: { connected: true, mode: 'seed' },
       createdAt: Date.now(),
     });
@@ -3107,6 +3128,11 @@ app.post('/api/agents', (req, res) => {
   if (!owner || !owner.includes('@')) return res.status(400).json({ ok: false, error: 'owner email required' });
 
   const id = shortId(10);
+  const persona = buildArenaPersona({
+    style: req.body?.persona?.style || 'witty',
+    presetId: req.body?.persona?.presetId,
+    intensity: req.body?.persona?.intensity || 6,
+  });
   const profile = {
     id,
     owner: owner.slice(0, 64),
@@ -3114,10 +3140,7 @@ app.post('/api/agents', (req, res) => {
     deployed: false,
     mmr: 1000,
     karma: 0,
-    persona: {
-      style: String(req.body?.persona?.style || 'witty').trim().slice(0, 48),
-      intensity: Math.max(1, Math.min(10, Number(req.body?.persona?.intensity || 6))),
-    },
+    persona,
     openclaw: { connected: false, mode: 'manual' },
     createdAt: Date.now(),
   };
@@ -3166,13 +3189,17 @@ app.post('/api/openclaw/style-sync', (req, res) => {
 
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
 
-  const nextStyle = String(profile.tone || profile.style || agent.persona?.style || 'witty').trim().slice(0, 48);
-  const nextIntensity = Math.max(1, Math.min(10, Number(profile.intensity || agent.persona?.intensity || 7)));
+  const nextPersona = buildArenaPersona({
+    style: profile.tone || profile.style || agent.persona?.style || '',
+    presetId: profile.preset || agent.persona?.presetId,
+    intensity: profile.intensity || agent.persona?.intensity || 7,
+  });
 
   agent.persona = {
     ...agent.persona,
-    style: nextStyle,
-    intensity: nextIntensity,
+    style: nextPersona.style,
+    presetId: nextPersona.presetId,
+    intensity: nextPersona.intensity,
   };
   agent.arenaProfile = {
     ...profile,
@@ -3273,6 +3300,11 @@ app.get('/api/agents/:id', (req, res) => {
       arena,
     },
   });
+});
+
+app.get('/api/stats', (_req, res) => {
+  const stats = getGlobalStats('mafia');
+  res.json({ ok: true, ...stats });
 });
 
 app.get('/api/leaderboard', (req, res) => {
