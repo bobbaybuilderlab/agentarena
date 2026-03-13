@@ -215,12 +215,43 @@ function buildOwnerStatsMarkup() {
     </div>`;
 }
 
+function renderPersonaViewer() {
+  const viewer = document.getElementById('personaViewer');
+  const content = document.getElementById('personaContent');
+  const guidance = document.getElementById('strategyGuidance');
+  if (!viewer || !content) return;
+
+  if (!ownedAgent || !ownedAgent.persona) {
+    viewer.style.display = 'none';
+    if (guidance) guidance.style.display = 'none';
+    return;
+  }
+
+  viewer.style.display = '';
+  if (guidance) guidance.style.display = '';
+  const p = ownedAgent.persona;
+
+  const fields = [];
+  if (p.preset) fields.push({ label: 'Preset', value: p.preset });
+  if (p.style) fields.push({ label: 'Style', value: p.style });
+  if (p.intensity) fields.push({ label: 'Intensity', value: p.intensity });
+  if (p.phrases && p.phrases.length) fields.push({ label: 'Phrases', value: p.phrases.join(', ') });
+
+  content.innerHTML = fields.map((f) => `
+    <div class="persona-field">
+      <p class="field-label">${escapeHtml(f.label)}</p>
+      <p class="persona-field-value">${escapeHtml(f.value)}</p>
+    </div>`).join('') || '<p class="text-xs text-muted">Default persona active.</p>';
+}
+
 function renderOwnerWatchCard() {
   if (!ownerWatchCard) return;
 
   const activeRoomId = ownedAgent?.arena?.activeRoomId || null;
   const currentRoomId = activeRoomId || (currentState?.status === 'finished' ? currentState.id : null);
   const quoteEvent = latestOwnedDiscussion(currentState);
+
+  renderPersonaViewer();
 
   if (ownerWatchAgentName) {
     if (!ownedAgent) ownerWatchAgentName.textContent = 'No connected agent';
@@ -488,6 +519,47 @@ function stopWaitingTips() {
     clearInterval(waitingTipTimer);
     waitingTipTimer = null;
   }
+}
+
+// Terminal-style waiting flavor text rotation for gamePicker
+let terminalFlavorTimer = null;
+let terminalFlavorIdx = 0;
+const terminalFlavorLines = [
+  'The mafia knows each other — town must figure out who to trust.',
+  'Pay attention to voting patterns. Consistent allies may be covering for each other.',
+  'As mafia, blend in. Accuse others early to deflect suspicion.',
+  'The doctor can save one player per night. Protect the most vocal town member.',
+  'A quiet player isn\'t always innocent — silence can be a strategy.',
+  'Discussion phase is your best weapon. Use it wisely.',
+  'Watch who defends eliminated players — they may share allegiance.',
+];
+
+function startTerminalFlavor() {
+  stopTerminalFlavor();
+  const el = document.getElementById('waitingFlavor');
+  if (!el) return;
+  terminalFlavorIdx = Math.floor(Math.random() * terminalFlavorLines.length);
+  el.textContent = terminalFlavorLines[terminalFlavorIdx];
+  terminalFlavorTimer = setInterval(() => {
+    el.classList.add('fading');
+    setTimeout(() => {
+      terminalFlavorIdx = (terminalFlavorIdx + 1) % terminalFlavorLines.length;
+      el.textContent = terminalFlavorLines[terminalFlavorIdx];
+      el.classList.remove('fading');
+    }, 300);
+  }, 5000);
+}
+
+function stopTerminalFlavor() {
+  if (terminalFlavorTimer) {
+    clearInterval(terminalFlavorTimer);
+    terminalFlavorTimer = null;
+  }
+}
+
+// Start flavor text if gamePicker is visible on load
+if (document.getElementById('waitingFlavor')) {
+  startTerminalFlavor();
 }
 
 function clearRematchCountdown() {
@@ -935,7 +1007,7 @@ function renderState(state) {
 
   currentState = state;
   renderOwnerWatchCard();
-  if (gamePicker) gamePicker.style.display = 'none';
+  if (gamePicker) { gamePicker.style.display = 'none'; stopTerminalFlavor(); }
   if (matchHudSection) matchHudSection.style.display = '';
   if (gameContentSection) gameContentSection.style.display = '';
 
@@ -1100,15 +1172,16 @@ function formatMafiaFeedEvent(state, event) {
     const speaker = event.actorName || formatPlayerName(state, event.actorId);
     const isOwnedLine = Boolean(me.playerId && event.actorId === me.playerId);
     return {
-      kicker: isOwnedLine ? 'Your agent' : 'Table talk',
+      kicker: isOwnedLine ? '> your agent' : '  table talk',
       title: speaker || 'Unknown agent',
       body: String(event.text || '').trim() || 'A public read just landed on the table.',
       at,
       isOwnedLine,
+      eventClass: '',
     };
   }
   if (event.type === 'GAME_STARTED') {
-    return { kicker: 'Match start', title: `Day ${event.day || 1} begins`, body: 'Roles are locked and the first night is underway.', at };
+    return { kicker: '[ match start ]', title: `Day ${event.day || 1} begins`, body: 'Roles are locked and the first night is underway.', at, eventClass: 'is-system' };
   }
   if (event.type === 'PHASE') {
     const label = event.phase ? `${String(event.phase).charAt(0).toUpperCase()}${String(event.phase).slice(1)}` : 'Phase update';
@@ -1119,31 +1192,32 @@ function formatMafiaFeedEvent(state, event) {
         : event.phase === 'night'
           ? 'The room has reset for the next night.'
           : 'State changed.';
-    return { kicker: 'Phase change', title: label, body: copy, at };
+    return { kicker: '[ phase ]', title: label, body: copy, at, eventClass: 'is-system' };
   }
   if (event.type === 'NIGHT_ELIMINATION') {
     const victimName = formatPlayerName(state, event.targetId);
-    return { kicker: 'Night result', title: `${victimName} was eliminated`, body: 'The mafia resolved its night action and the room is moving back into open reads.', at };
+    return { kicker: '[ eliminated ]', title: `${victimName} was eliminated`, body: 'The mafia resolved its night action.', at, eventClass: 'is-elimination' };
   }
   if (event.type === 'DAY_EXECUTION') {
     const targetName = formatPlayerName(state, event.targetId);
-    return { kicker: 'Vote result', title: `${targetName} was voted out`, body: 'The room reached a clear execution result.', at };
+    return { kicker: '[ voted out ]', title: `${targetName} was voted out`, body: 'The room reached a clear execution result.', at, eventClass: 'is-elimination' };
   }
   if (event.type === 'VOTE_TIED') {
-    return { kicker: 'Vote result', title: 'Split vote, no elimination', body: 'No single target separated from the pack this round.', at };
+    return { kicker: '[ vote result ]', title: 'Split vote, no elimination', body: 'No single target separated from the pack this round.', at, eventClass: 'is-system' };
   }
   if (event.type === 'PLAYER_FORFEITED') {
     const playerName = formatPlayerName(state, event.playerId);
-    return { kicker: 'Roster change', title: `${playerName} dropped`, body: 'The room continued after a disconnect or forfeit.', at };
+    return { kicker: '[ dropped ]', title: `${playerName} dropped`, body: 'The room continued after a disconnect or forfeit.', at, eventClass: 'is-elimination' };
   }
   if (event.type === 'GAME_FINISHED') {
-    return { kicker: 'Match end', title: `${winnerLabel(event.winner)} wins`, body: 'The current room has concluded. Spectators will roll into the next live table shortly.', at };
+    return { kicker: '[ match end ]', title: `${winnerLabel(event.winner)} wins`, body: 'The current room has concluded.', at, eventClass: 'is-system' };
   }
   return {
-    kicker: 'Room event',
+    kicker: '  room event',
     title: String(event.type || 'Update').replaceAll('_', ' '),
     body: 'The room state changed.',
     at,
+    eventClass: 'is-system',
   };
 }
 
@@ -1217,7 +1291,7 @@ function maybeScheduleSpectatorRedirect(state) {
   clearSpectatorRedirect();
   if (!isSpectating() || !state || state.status !== 'finished') return;
   if (pageIsOwnerWatch) {
-    if (spectatorIntermission) spectatorIntermission.textContent = 'Waiting for your agent\'s next table...';
+    if (spectatorIntermission) spectatorIntermission.innerHTML = 'Your agent is queuing for the next table<span class="terminal-cursor"></span>';
     return;
   }
 
@@ -1337,14 +1411,19 @@ function renderSpectatorReadability(state) {
     .reverse()
     .map((event) => formatMafiaFeedEvent(state, event))
     .filter(Boolean)
-    .map((item) => `
-      <article class="spectator-feed-item${item.isOwnedLine ? ' is-owner' : ''}">
+    .map((item) => {
+      const cls = ['spectator-feed-item'];
+      if (item.isOwnedLine) cls.push('is-owner');
+      if (item.eventClass) cls.push(item.eventClass);
+      return `
+      <article class="${cls.join(' ')}">
         <p class="spectator-feed-kicker">${escapeHtml(item.kicker)}</p>
         <h3>${escapeHtml(item.title)}</h3>
         <p class="text-sm text-muted">${escapeHtml(item.body)}</p>
         <p class="text-xs text-muted">${escapeHtml(item.at)}</p>
-      </article>`);
-  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted">Public transcript lines will appear here.</p>';
+      </article>`;
+    });
+  spectatorFeed.innerHTML = feedItems.join('') || '<p class="text-sm text-muted" style="padding:1rem;">Waiting for transcript data<span class="terminal-cursor"></span></p>';
 }
 
 function suggestedRefinement(result) {
@@ -1358,6 +1437,22 @@ function suggestedRefinement(result) {
     return 'Sharpen discussion discipline: require one evidence line + one clear vote reason every meeting to reduce noisy eliminations.';
   }
   return 'Run a fast check-in pass: keep what worked, replace one weak behavior, and test again in the next match.';
+}
+
+function coachingNudge(result) {
+  const preset = ownedAgent?.persona?.preset || 'pragmatic';
+  if (result.didWin) {
+    return `Your <strong>${escapeHtml(preset)}</strong> preset delivered. Run it again or tell your OpenClaw to try a bolder style.`;
+  }
+  if (result.role === 'mafia' || result.role === 'imposter') {
+    const alt = preset === 'chaotic' ? 'charming' : 'chaotic';
+    return `Your agent was caught as mafia. Try the <strong>${alt}</strong> preset for better deception. Tell your OpenClaw: "change my preset to ${alt}"`;
+  }
+  if (result.role === 'town' || result.role === 'crew') {
+    const alt = preset === 'analytical' ? 'paranoid' : 'analytical';
+    return `Town didn't catch the mafia in time. Try the <strong>${alt}</strong> preset for sharper reads. Tell your OpenClaw: "change my preset to ${alt}"`;
+  }
+  return `Experiment with a different preset. Tell your OpenClaw: "change my preset to chaotic" or any style that fits.`;
 }
 
 function renderOwnerDigest(state) {
@@ -1417,7 +1512,11 @@ function renderOwnerDigest(state) {
         </div>
       </div>
       <p class="text-xs text-muted mb-12">${suggestedRefinement(result)}</p>
-      ${pageIsOwnerWatch ? '' : `
+      <div class="coaching-nudge mb-12">
+        <p class="coaching-label">Next move</p>
+        <p>${coachingNudge(result)}</p>
+      </div>
+      ${pageIsOwnerWatch ? '<p class="text-sm text-muted" style="font-family:\'Space Mono\',monospace;color:#27d5ad;">Your agent is queuing for the next table...</p>' : `
         <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
           <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
           <div id="rematchCountdownContainer"></div>

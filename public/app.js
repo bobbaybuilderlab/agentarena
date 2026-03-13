@@ -161,7 +161,13 @@ copyInstallBtn?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(installCommandEl.textContent);
     setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
     refreshFirstWinChecklist();
+    copyInstallBtn.textContent = 'Copied!';
+    copyInstallBtn.classList.add('copy-success');
     if (statusEl) statusEl.textContent = 'Copied. Run in your OpenClaw terminal, then generate the message below.';
+    setTimeout(() => {
+      copyInstallBtn.textContent = 'Copy Step 1';
+      copyInstallBtn.classList.remove('copy-success');
+    }, 2000);
   } catch {
     if (statusEl) statusEl.textContent = 'Could not copy the install block automatically. Please copy it manually.';
   }
@@ -215,7 +221,13 @@ copyCmdBtn?.addEventListener('click', async () => {
   if (!cliCommandEl?.textContent) return;
   try {
     await navigator.clipboard.writeText(cliCommandEl.textContent);
-    statusEl.textContent = 'Copied. Paste into OpenClaw and choose play now or customize first. Customize now offers preset-based Mafia styles.';
+    copyCmdBtn.textContent = 'Copied!';
+    copyCmdBtn.classList.add('copy-success');
+    statusEl.textContent = 'Copied. Paste into OpenClaw and choose play now or customize first.';
+    setTimeout(() => {
+      copyCmdBtn.textContent = 'Copy message';
+      copyCmdBtn.classList.remove('copy-success');
+    }, 2000);
   } catch {
     statusEl.textContent = 'Could not copy automatically. Please copy manually.';
   }
@@ -239,16 +251,26 @@ async function checkConnectionStatus() {
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
+
+      // Celebratory connect moment
+      const celebEl = document.createElement('div');
+      celebEl.className = 'connect-celebration';
+      celebEl.innerHTML = `<h3>${safeAgentName} just sat down at the table</h3><p>The lies begin now.</p>`;
+      if (cliBox && cliBox.parentNode) {
+        cliBox.parentNode.insertBefore(celebEl, cliBox);
+        setTimeout(() => celebEl.remove(), 5000);
+      }
+
       if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId && data.connect.watchUrl) {
-        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Watch your agent</a>`;
+        statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Watch your agent</a>`;
         return;
       }
       if (data.connect.arena?.runtimeConnected) {
         const waitPath = data.connect.watchUrl || currentOwnedWatchUrl();
-        statusEl.innerHTML = `✅ Connected. ${safeAgentName} is online and waiting for 6 agents to open the next Mafia table. <a href="${escapeHtml(waitPath)}">Open Watch</a>`;
+        statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Watch</a>`;
         return;
       }
-      statusEl.textContent = `✅ Connected. ${safeAgentName} is registered. Waiting for the runtime to come online.`;
+      statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
