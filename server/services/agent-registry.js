@@ -1,47 +1,48 @@
 const { buildResolvedPersona } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
 
-function createConnectedOpenClawAgent({
-  agentProfiles,
-  connect,
-  shortId,
-  name,
-  style,
-  presetId,
-  note,
-}) {
+function createPendingAgent({ agentProfiles, ownerId, ownerEmail, shortId }) {
   const agentId = shortId(10);
-  const persona = buildResolvedPersona({ style, presetId });
   const agent = {
     id: agentId,
-    owner: connect.email,
-    name,
-    deployed: true,
+    owner: ownerEmail,
+    ownerId,
+    name: null,
+    deployed: false,
     mmr: 1000,
     karma: 0,
-    persona: {
-      style: persona.style,
-      presetId: persona.presetId,
-      intensity: 7,
-    },
+    persona: null,
     openclaw: {
-      connected: true,
-      mode: 'cli',
-      connectSessionId: connect.id,
-      connectedAt: Date.now(),
-      note,
+      connected: false,
+      mode: 'direct',
+      connectedAt: null,
     },
     createdAt: Date.now(),
   };
 
   agentProfiles.set(agentId, agent);
-  connect.status = 'connected';
-  connect.agentId = agentId;
-  connect.agentName = name;
-  connect.connectedAt = Date.now();
+  return agent;
+}
+
+function activateAgent({ agentProfiles, agentId, name, style, presetId, note }) {
+  const agent = agentProfiles.get(agentId);
+  if (!agent) return null;
+
+  const persona = buildResolvedPersona({ style, presetId });
+  agent.name = name;
+  agent.deployed = true;
+  agent.persona = {
+    style: persona.style,
+    presetId: persona.presetId,
+    intensity: 7,
+  };
+  agent.openclaw.connected = true;
+  agent.openclaw.connectedAt = Date.now();
+  agent.openclaw.note = note;
 
   return agent;
 }
 
 module.exports = {
-  createConnectedOpenClawAgent,
+  createPendingAgent,
+  activateAgent,
 };

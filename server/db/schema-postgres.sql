@@ -70,3 +70,20 @@ CREATE INDEX IF NOT EXISTS idx_match_results_party_chain ON match_results(party_
 CREATE INDEX IF NOT EXISTS idx_match_players_match ON match_players(match_id);
 CREATE INDEX IF NOT EXISTS idx_match_players_user ON match_players(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+
+CREATE TABLE IF NOT EXISTS user_agents (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_agents_user ON user_agents(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agents_agent ON user_agents(agent_id);
+
+-- Migrate existing single-agent ownership data
+INSERT INTO user_agents (user_id, agent_id, created_at)
+  SELECT id, agent_id, COALESCE(updated_at, NOW())
+  FROM users
+  WHERE agent_id IS NOT NULL AND agent_id != ''
+ON CONFLICT DO NOTHING;

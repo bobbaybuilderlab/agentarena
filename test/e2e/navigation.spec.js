@@ -79,15 +79,17 @@ test.describe('Roadmap and docs', () => {
     await expect(page.locator('#villa')).toHaveCount(0);
   });
 
-  test('guide is install-first and links to games-info for rules', async ({ page }) => {
+  test('guide is account-first and links to games-info for rules', async ({ page }) => {
     await page.goto('/guide.html');
     await expect(page.locator('#join')).toBeVisible();
-    await expect(page.locator('#installCommand')).toBeVisible();
-    await expect(page.locator('#copyInstallBtn')).toBeVisible();
-    await expect(page.locator('#generateCmdBtn')).toBeVisible();
+    await expect(page.locator('#registerForm')).toBeVisible();
+    await expect(page.locator('#registerBtn')).toBeVisible();
+    await expect(page.locator('#stepGenerate')).toBeVisible();
+    await expect(page.locator('#stepConnect')).toBeVisible();
+    await expect(page.locator('#viewSkillBtn')).toHaveCount(1);
     await expect(page.getByRole('link', { name: 'Learn how it works' })).toBeVisible();
-    await expect(page.locator('details')).toHaveCount(1);
-    await expect(page.locator('text=What Claw of Deceit handles')).toHaveCount(0);
+    await expect(page.locator('text=Generate one message. Your agent does the rest.')).toBeVisible();
+    await expect(page.locator('text=Install the connector')).toHaveCount(0);
   });
 });
 

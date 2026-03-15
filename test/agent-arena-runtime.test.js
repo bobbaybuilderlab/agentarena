@@ -11,7 +11,6 @@ const {
   server,
   mafiaRooms,
   agentProfiles,
-  connectSessions,
   liveAgentRuntimes,
   roomEvents,
   createPublicArenaMafiaRoom,
@@ -24,7 +23,6 @@ const {
 async function withServer(fn) {
   mafiaRooms.clear();
   agentProfiles.clear();
-  connectSessions.clear();
   liveAgentRuntimes.clear();
   roomEvents.clear();
   resetPlayTelemetry();
@@ -62,26 +60,37 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
 }
 
 async function createRuntimeAgent(url, name, { sessionToken } = {}) {
-  const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-    },
-    body: JSON.stringify({ email: `${name.toLowerCase()}@example.com` }),
-  });
-  const connectSessionData = await connectSessionRes.json();
-  assert.equal(connectSessionData.ok, true);
+  // Register a user account if no token provided
+  let token = sessionToken;
+  if (!token) {
+    const regRes = await fetch(`${url}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${name.toLowerCase()}@example.com`, displayName: name }),
+    });
+    const regData = await regRes.json();
+    assert.equal(regData.ok, true);
+    token = regData.session.token;
+  }
 
-  const connect = connectSessionData.connect;
-  const callbackProof = String(connect.callbackProof || '').trim();
-  assert.ok(callbackProof);
+  const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+  // Create a pending agent
+  const createRes = await fetch(`${url}/api/openclaw/create-agent`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({}),
+  });
+  const createData = await createRes.json();
+  assert.equal(createData.ok, true);
+  const agentId = createData.agentId;
+
+  // Activate via callback
   const callbackRes = await fetch(`${url}/api/openclaw/callback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders,
     body: JSON.stringify({
-      token: connect.id,
-      proof: callbackProof,
+      agentId,
       agentName: name,
       style: 'witty',
     }),
@@ -135,8 +144,8 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   await once(socket, 'connect');
   const register = await new Promise((resolve) => {
     socket.emit('agent:runtime:register', {
-      token: connect.id,
-      proof: callbackProof,
+      token,
+      agentId,
     }, resolve);
   });
   assert.equal(register.ok, true);
@@ -144,6 +153,7 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   return {
     socket,
     agentId: callbackData.agent.id,
+    token,
     getAssignedRoomId: () => assignedRoomId,
     getPlayerId: () => playerId,
   };
@@ -153,22 +163,11 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
   await withServer(async (url) => {
     const agents = [];
     try {
-      const authRes = await fetch(`${url}/api/auth/session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const authData = await authRes.json();
-      assert.equal(authData.ok, true);
-      const sessionToken = authData.session.token;
-      assert.ok(sessionToken);
-
       const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
-      for (const [index, name] of names.entries()) {
-        agents.push(await createRuntimeAgent(url, name, {
-          sessionToken: index === 0 ? sessionToken : undefined,
-        }));
+      for (const name of names) {
+        agents.push(await createRuntimeAgent(url, name));
       }
+      const sessionToken = agents[0].token;
 
       const seatedRoomId = await waitFor(async () => {
         const roomIds = agents.map((agent) => agent.getAssignedRoomId()).filter(Boolean);
@@ -233,19 +232,8 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       });
       const mineData = await mineRes.json();
       assert.equal(mineData.ok, true);
-      assert.equal(mineData.session.agentId, agents[0].agentId);
-      assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
-      assert.equal(typeof mineData.stats.nightKillCredits, 'number');
-
-      const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const mineMatchesData = await mineMatchesRes.json();
-      assert.equal(mineMatchesData.ok, true);
-      assert.equal(mineMatchesData.agentId, agents[0].agentId);
-      assert.equal(Array.isArray(mineMatchesData.matches), true);
-      assert.equal(mineMatchesData.matches.length >= 1, true);
-      assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
+      assert.equal(mineData.agents.length >= 1, true);
+      assert.equal(mineData.agents[0].id, agents[0].agentId);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

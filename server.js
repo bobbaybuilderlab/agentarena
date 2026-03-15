@@ -39,6 +39,8 @@ const {
   getUserById,
   getSessionByToken,
   setUserAgentId,
+  addUserAgent,
+  getUserAgentIds,
   createAnonymousUser,
   createSession,
   upgradeUser,
@@ -107,9 +109,20 @@ function resolvePublicBaseUrl(req) {
 }
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const LEGACY_PUBLIC_BASE_URLS = [
+  'https://agent-arena-vert.vercel.app',
+  'https://agent-arena-xi0b.onrender.com',
+];
 
 function injectPublicBaseUrl(html, publicBaseUrl) {
-  return String(html || '');
+  const normalizedBaseUrl = normalizeBaseUrl(publicBaseUrl);
+  if (!normalizedBaseUrl) return String(html || '');
+
+  let injected = String(html || '');
+  for (const legacyBaseUrl of LEGACY_PUBLIC_BASE_URLS) {
+    injected = injected.split(legacyBaseUrl).join(normalizedBaseUrl);
+  }
+  return injected;
 }
 
 function resolvePublicHtmlPath(requestPath) {
@@ -498,29 +511,35 @@ io.on('connection', (socket) => {
   });
   socket.on('agent:runtime:register', async (payload, cb) => {
     const token = String(payload?.token || '').trim();
-    const proof = String(payload?.proof || '').trim();
-    const connect = connectSessions.get(token);
-    if (!connect) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_NOT_FOUND', message: 'connect session not found' } });
-    if (Date.now() > (connect.expiresAt || 0)) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_EXPIRED', message: 'connect session expired' } });
-    if (!proof || (proof !== connect.callbackProof && proof !== connect.accessToken)) {
-      return cb?.({ ok: false, error: { code: 'INVALID_RUNTIME_PROOF', message: 'invalid runtime proof' } });
-    }
-    if (!connect.agentId) return cb?.({ ok: false, error: { code: 'AGENT_NOT_READY', message: 'agent profile not ready yet' } });
+    const agentId = String(payload?.agentId || '').trim();
 
-    const agent = agentProfiles.get(connect.agentId);
+    if (!token) return cb?.({ ok: false, error: { code: 'TOKEN_REQUIRED', message: 'session token is required' } });
+    if (!agentId) return cb?.({ ok: false, error: { code: 'AGENT_ID_REQUIRED', message: 'agentId is required' } });
+
+    // Resolve session from token
+    const siteSession = await resolveSiteSession({ headers: { authorization: `Bearer ${token}` } });
+    if (!siteSession?.userId) {
+      return cb?.({ ok: false, error: { code: 'INVALID_SESSION', message: 'invalid or expired session token' } });
+    }
+
+    const agent = agentProfiles.get(agentId);
     if (!agent) return cb?.({ ok: false, error: { code: 'AGENT_NOT_FOUND', message: 'agent not found' } });
+    if (agent.ownerId !== siteSession.userId) {
+      return cb?.({ ok: false, error: { code: 'AGENT_NOT_OWNED', message: 'agent does not belong to this account' } });
+    }
+    if (!agent.deployed) return cb?.({ ok: false, error: { code: 'AGENT_NOT_READY', message: 'agent has not been activated yet' } });
 
     const prior = getAgentRuntime(agent.id);
     if (prior?.socketId && prior.socketId !== socket.id) {
       io.sockets.sockets.get(prior.socketId)?.disconnect(true);
     }
 
-    socket.data.agentRuntime = { agentId: agent.id, connectSessionId: connect.id };
+    socket.data.agentRuntime = { agentId: agent.id, userId: siteSession.userId };
     agentRuntimeSockets.set(socket.id, agent.id);
     setAgentRuntimeStatus(agent.id, 'idle', {
       connected: true,
       socketId: socket.id,
-      connectSessionId: connect.id,
+      userId: siteSession.userId,
       connectedAt: Date.now(),
     });
     markAgentProfileConnection(agent.id, true, 'live runtime connected');
@@ -813,7 +832,7 @@ const GROWTH_METRICS_FILE = path.join(__dirname, 'growth-metrics.json');
 const agentProfiles = new Map();
 // pair vote caps removed: agent voting is unlimited except self/owner restrictions
 const sessions = new Map();
-const connectSessions = new Map();
+// connectSessions removed — account-based ownership replaces ephemeral sessions
 const completedMatchRooms = new Set();
 const COMPLETED_MATCH_RECORD_CAP = 500;
 const IN_MEMORY_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -1475,7 +1494,7 @@ async function bindOwnedAgent(ownerUserId, agentId) {
   if (!cleanUserId || !cleanAgentId) return;
 
   try {
-    await setUserAgentId(cleanUserId, cleanAgentId);
+    await addUserAgent(cleanUserId, cleanAgentId);
   } catch (err) {
     logStructured('warn.bindOwnedAgent.persistence_unavailable', {
       userId: cleanUserId,
@@ -1483,12 +1502,6 @@ async function bindOwnedAgent(ownerUserId, agentId) {
       error: err.message,
     });
     if (IS_PRODUCTION) throw err;
-  }
-
-  // Non-production fallback: also update in-memory session cache
-  for (const session of sessions.values()) {
-    if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
-    if (session?.userId === cleanUserId) session.agentId = cleanAgentId;
   }
 }
 
@@ -1540,7 +1553,7 @@ function upsertAgentRuntime(agentId, patch) {
     connected: false,
     status: 'offline',
     socketId: null,
-    connectSessionId: null,
+    userId: null,
     currentRoomId: null,
     currentPlayerId: null,
     connectedAt: 0,
@@ -1973,7 +1986,9 @@ app.get('/api/matches/mine', async (req, res) => {
     const siteSession = await resolveSiteSession(req);
     if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
-    const agentId = String(siteSession.agentId || '').trim();
+    const requestedAgentId = String(req.query.agentId || '').trim();
+    const agentIds = await getUserAgentIds(siteSession.userId);
+    const agentId = requestedAgentId && agentIds.includes(requestedAgentId) ? requestedAgentId : agentIds[0] || '';
     let matches = [];
     let source = 'none';
     let durability = 'none';
@@ -1996,9 +2011,8 @@ app.get('/api/matches/mine', async (req, res) => {
 });
 
 app.use('/api/openclaw', createOpenClawRouter({
-  bindOwnedAgent,
+  addUserAgent,
   agentProfiles,
-  connectSessions,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
@@ -2049,19 +2063,12 @@ app.get('/api/agents/mine', async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
   }
 
-  const agent = summarizeOwnedAgent(siteSession.agentId);
-  const statsBundle = siteSession.agentId ? await buildOwnedAgentStats(siteSession.agentId) : null;
+  const agentIds = await getUserAgentIds(siteSession.userId);
+  const agents = agentIds.map(summarizeOwnedAgent).filter(Boolean);
   res.json({
     ok: true,
-    session: {
-      userId: siteSession.userId,
-      agentId: siteSession.agentId || null,
-    },
-    agent,
-    stats: statsBundle?.stats || null,
-    statsSource: statsBundle?.source || 'none',
-    statsDurability: statsBundle?.durability || 'none',
-    statsCapped: Boolean(statsBundle?.capped),
+    session: { userId: siteSession.userId },
+    agents,
     arena: buildArenaAvailability(),
   });
 });
@@ -3209,7 +3216,6 @@ module.exports = {
   io,
   mafiaRooms,
   agentProfiles,
-  connectSessions,
   liveAgentRuntimes,
   roomEvents,
   PUBLIC_APP_URL,

@@ -980,6 +980,77 @@ async function getDatabaseHealth() {
   }
 }
 
+// In-memory fallback for user_agents when no DB is available
+const memoryUserAgents = new Map(); // userId -> Set<agentId>
+
+async function addUserAgent(userId, agentId) {
+  if (!userId || !agentId) return;
+  const adapter = await ensureDb();
+
+  if (!adapter || adapter.kind === 'none') {
+    if (!memoryUserAgents.has(userId)) memoryUserAgents.set(userId, new Set());
+    memoryUserAgents.get(userId).add(agentId);
+    return;
+  }
+
+  if (adapter.kind === 'postgres') {
+    await adapter.pool.query(
+      'INSERT INTO user_agents (user_id, agent_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [userId, agentId],
+    );
+    return;
+  }
+
+  adapter.database.prepare(
+    'INSERT OR IGNORE INTO user_agents (user_id, agent_id) VALUES (?, ?)',
+  ).run(userId, agentId);
+}
+
+async function getUserAgentIds(userId) {
+  if (!userId) return [];
+  const adapter = await ensureDb();
+
+  if (!adapter || adapter.kind === 'none') {
+    const set = memoryUserAgents.get(userId);
+    return set ? [...set] : [];
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(
+      'SELECT agent_id FROM user_agents WHERE user_id = $1 ORDER BY created_at ASC',
+      [userId],
+    );
+    return result.rows.map(r => r.agent_id);
+  }
+
+  return adapter.database.prepare(
+    'SELECT agent_id FROM user_agents WHERE user_id = ? ORDER BY created_at ASC',
+  ).all(userId).map(r => r.agent_id);
+}
+
+async function removeUserAgent(userId, agentId) {
+  if (!userId || !agentId) return;
+  const adapter = await ensureDb();
+
+  if (!adapter || adapter.kind === 'none') {
+    const set = memoryUserAgents.get(userId);
+    if (set) set.delete(agentId);
+    return;
+  }
+
+  if (adapter.kind === 'postgres') {
+    await adapter.pool.query(
+      'DELETE FROM user_agents WHERE user_id = $1 AND agent_id = $2',
+      [userId, agentId],
+    );
+    return;
+  }
+
+  adapter.database.prepare(
+    'DELETE FROM user_agents WHERE user_id = ? AND agent_id = ?',
+  ).run(userId, agentId);
+}
+
 module.exports = {
   getDb,
   initDb,
@@ -989,6 +1060,9 @@ module.exports = {
   getUserByToken,
   getUserById,
   setUserAgentId,
+  addUserAgent,
+  getUserAgentIds,
+  removeUserAgent,
   createSession,
   getSessionByToken,
   recordMatch,

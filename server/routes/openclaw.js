@@ -1,8 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
-const { authorizeConnectSession, createConnectSession, readConnectAccessToken, sanitizeConnectSession } = require('../services/connect-sessions');
-const { createConnectedOpenClawAgent } = require('../services/agent-registry');
+const { createPendingAgent, activateAgent } = require('../services/agent-registry');
 const { buildOnboardingContract } = require('../services/onboarding-contract');
 const { cleanStylePhrase, normalizePresetToken } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
 
@@ -21,12 +20,15 @@ function createLimiterHandler(errorMessage) {
 }
 
 function getRateLimitKey(req) {
-  const sessionId = String(req.params?.id || req.body?.token || '').trim();
-  const accessToken = readConnectAccessToken(req);
-  if (sessionId && accessToken) return `session:${sessionId}:${accessToken}`;
-  if (sessionId) return `session:${sessionId}`;
-  if (accessToken) return `token:${accessToken}`;
+  const token = readBearerToken(req);
+  if (token) return `token:${token}`;
   return `ip:${ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || 'unknown')}`;
+}
+
+function readBearerToken(req) {
+  const header = String(req.headers?.authorization || '').trim();
+  if (header.startsWith('Bearer ')) return header.slice(7).trim();
+  return String(req.body?.token || req.query?.token || '').trim() || null;
 }
 
 function createOpenClawLimiter(max, errorMessage) {
@@ -53,26 +55,16 @@ function normalizeAgentPresetId(value) {
   return normalizePresetToken(value).slice(0, 32);
 }
 
-function appendConnectStarted(roomEvents, connect) {
-  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_STARTED', {
-    status: connect.status,
-    emailDomain: connect.email.split('@')[1] || null,
-  });
-}
-
-function appendConnectCompleted(roomEvents, connect, agent) {
-  roomEvents.append('growth', connect.id, 'CONNECT_SESSION_CONNECTED', {
-    status: connect.status,
+function appendAgentCreated(roomEvents, userId, agent) {
+  roomEvents.append('growth', userId, 'AGENT_CREATED', {
     agentId: agent.id,
     agentName: agent.name,
-    emailDomain: String(connect.email || '').split('@')[1] || null,
   });
 }
 
 function createOpenClawRouter({
-  bindOwnedAgent,
+  addUserAgent,
   agentProfiles,
-  connectSessions,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
@@ -88,75 +80,41 @@ function createOpenClawRouter({
   );
   const callbackLimiter = createOpenClawLimiter(
     Number(process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX || 120),
-    'Too many connector callbacks. Please retry in a moment.',
-  );
-  const statusLimiter = createOpenClawLimiter(
-    Number(process.env.OPENCLAW_STATUS_RATE_LIMIT_MAX || 240),
-    'Too many onboarding status checks. Please wait a moment and retry.',
+    'Too many onboarding callbacks. Please retry in a moment.',
   );
 
-  function sendConnectSession(res, connect, req, includeSecrets = false) {
-    res.json({
-      ok: true,
-      connect: sanitizeConnectSession(connect, {
-        includeSecrets,
-        publicBaseUrl: resolvePublicBaseUrl(req),
-        summarizeAgentArenaState,
-      }),
-    });
-  }
-
-  async function confirmSession(req, res, note) {
-    const connect = connectSessions.get(req.params.id || String(req.body?.token || '').trim());
-    if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-    if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-    if (req.params.id && !authorizeConnectSession(req, connect)) {
-      return res.status(401).json({ ok: false, error: 'connect session auth required' });
+  router.post('/create-agent', createLimiter, async (req, res) => {
+    incrementGrowthMetric('funnel.createAgentStarts', 1);
+    const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
+    if (!siteSession?.userId) {
+      return res.status(401).json({ ok: false, error: 'Sign up required to create an agent.' });
     }
-    const providedProof = String(req.body?.proof || '').trim();
-    if (!req.params.id && (!providedProof || providedProof !== connect.callbackProof)) {
-      return res.status(401).json({ ok: false, error: 'invalid callback proof' });
+    if (siteSession.email === null || siteSession.email === undefined) {
+      return res.status(403).json({ ok: false, error: 'Please register with an email before creating an agent.' });
     }
 
-    if (connect.status === 'connected') {
-      return sendConnectSession(res, connect, req, false);
-    }
-
-    const agent = createConnectedOpenClawAgent({
+    const agent = createPendingAgent({
       agentProfiles,
-      connect,
+      ownerId: siteSession.userId,
+      ownerEmail: siteSession.email || 'anonymous',
       shortId,
-      name: normalizeAgentName(req.body?.agentName, shortId),
-      style: normalizeAgentStyle(req.body?.style),
-      presetId: normalizeAgentPresetId(req.body?.presetId),
-      note,
     });
-    if (typeof bindOwnedAgent === 'function') await bindOwnedAgent(connect.ownerUserId, agent.id);
-    appendConnectCompleted(roomEvents, connect, agent);
+
+    if (typeof addUserAgent === 'function') await addUserAgent(siteSession.userId, agent.id);
     persistState();
 
+    const onboarding = buildOnboardingContract({
+      publicBaseUrl: resolvePublicBaseUrl(req),
+      sessionToken: siteSession.token,
+      agentId: agent.id,
+    });
+
     res.json({
       ok: true,
-      connect: sanitizeConnectSession(connect, {
-        publicBaseUrl: resolvePublicBaseUrl(req),
-        summarizeAgentArenaState,
-      }),
-      agent,
+      agentId: agent.id,
+      joinMessage: onboarding.joinMessage,
+      onboarding,
     });
-  }
-
-  router.post('/connect-session', createLimiter, async (req, res) => {
-    incrementGrowthMetric('funnel.connectSessionStarts', 1);
-    const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
-    const connect = createConnectSession({
-      connectSessions,
-      email: req.body?.email,
-      ownerUserId: siteSession?.userId || null,
-      publicBaseUrl: resolvePublicBaseUrl(req),
-      shortId,
-    });
-    appendConnectStarted(roomEvents, connect);
-    sendConnectSession(res, connect, req, true);
   });
 
   router.get('/onboarding', (req, res) => {
@@ -164,27 +122,55 @@ function createOpenClawRouter({
       ok: true,
       onboarding: buildOnboardingContract({
         publicBaseUrl: resolvePublicBaseUrl(req),
-        token: '',
-        callbackUrl: `${String(resolvePublicBaseUrl(req) || '').replace(/\/+$/, '')}/api/openclaw/callback`,
-        callbackProof: '',
+        sessionToken: '',
+        agentId: '',
       }),
     });
   });
 
   router.post('/callback', callbackLimiter, async (req, res) => {
-    await confirmSession(req, res, 'connected through OpenClaw CLI callback');
-  });
+    const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
+    if (!siteSession?.userId) {
+      return res.status(401).json({ ok: false, error: 'Invalid or expired session token.' });
+    }
 
-  router.get('/connect-session/:id', statusLimiter, (req, res) => {
-    const connect = connectSessions.get(req.params.id);
-    if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-    if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-    if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
-    sendConnectSession(res, connect, req, false);
-  });
+    const agentId = String(req.body?.agentId || '').trim();
+    if (!agentId) {
+      return res.status(400).json({ ok: false, error: 'agentId is required.' });
+    }
 
-  router.post('/connect-session/:id/confirm', callbackLimiter, async (req, res) => {
-    await confirmSession(req, res, 'connected through OpenClaw CLI confirmation flow');
+    const agent = agentProfiles.get(agentId);
+    if (!agent) {
+      return res.status(404).json({ ok: false, error: 'Agent not found.' });
+    }
+    if (agent.ownerId !== siteSession.userId) {
+      return res.status(403).json({ ok: false, error: 'Agent does not belong to this account.' });
+    }
+    if (agent.deployed) {
+      return res.json({
+        ok: true,
+        agent,
+        arena: summarizeAgentArenaState(agent.id),
+      });
+    }
+
+    const activated = activateAgent({
+      agentProfiles,
+      agentId,
+      name: normalizeAgentName(req.body?.agentName, shortId),
+      style: normalizeAgentStyle(req.body?.style),
+      presetId: normalizeAgentPresetId(req.body?.presetId),
+      note: 'connected through direct runtime onboarding callback',
+    });
+
+    appendAgentCreated(roomEvents, siteSession.userId, activated);
+    persistState();
+
+    res.json({
+      ok: true,
+      agent: activated,
+      arena: summarizeAgentArenaState(activated.id),
+    });
   });
 
   return router;

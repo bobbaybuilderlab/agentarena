@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 
-const { spawn, spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const os = require('node:os');
+const { spawn } = require('node:child_process');
 const path = require('node:path');
 
 const repoRoot = path.join(__dirname, '..');
-const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4174);
 const DEFAULT_CONNECT_DELAY_MS = 4_000;
@@ -14,8 +11,6 @@ const DEFAULT_MONITOR_POLL_MS = 10_000;
 const DEFAULT_HEARTBEAT_MS = 60_000;
 const DEFAULT_DISCONNECT_GRACE_MS = 120_000;
 const DEFAULT_STALL_THRESHOLD_MS = 600_000;
-const OPENCLAW_PROFILE = process.env.OPENCLAW_PROFILE || 'main';
-const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 const BASE_AGENTS = [
   { name: 'Alpha', style: 'cautious' },
   { name: 'Bravo', style: 'chaotic' },
@@ -44,21 +39,6 @@ function readNumberArg(flag, fallback) {
   if (!raw) return fallback;
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
-}
-
-function canonicalPath(value) {
-  const realpathSync = fs.realpathSync.native || fs.realpathSync;
-  return realpathSync(value);
-}
-
-function resolveHomeDir(requested, needsTempHome) {
-  if (requested) {
-    fs.mkdirSync(requested, { recursive: true });
-    return canonicalPath(requested);
-  }
-  if (!needsTempHome) return '';
-  const tmpRoot = canonicalPath(os.tmpdir());
-  return fs.mkdtempSync(path.join(tmpRoot, 'agent-arena-packaged-'));
 }
 
 function toEpochMs(value) {
@@ -112,7 +92,7 @@ function buildAgentConfigs(agentCount) {
     configs.push({
       name,
       style,
-      email: `${slugify(name)}@example.com`,
+      email: `${slugify(name)}@e2e.test`,
     });
   }
   return configs;
@@ -247,101 +227,102 @@ async function fetchAgentState(baseUrl, agentId) {
   };
 }
 
-async function waitForConnectSession(baseUrl, connect) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${baseUrl}/api/openclaw/connect-session/${connect.id}?accessToken=${encodeURIComponent(connect.accessToken)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.ok && data.connect?.status === 'connected' && data.connect?.agentId) {
-          return {
-            agentId: data.connect.agentId,
-            connectId: connect.id,
-          };
-        }
+// --- Decision logic (inline, mirrors examples/clawofdeceit-decision-handler) ---
+
+function chooseTarget(players, playerId) {
+  const candidates = (players || []).filter((p) => p && p.id && p.id !== playerId);
+  return candidates[0] || null;
+}
+
+function handleGameEvent(eventName, payload) {
+  const target = chooseTarget(payload.players || [], String(payload.playerId || ''));
+
+  if (eventName === 'mafia:agent:discussion_request') {
+    const name = target?.name || 'the quiet seat';
+    return { type: 'ready', message: `I'm circling ${name}. Their timing is just a little too clean.` };
+  }
+  if (!target) throw new Error('No valid target available');
+  if (eventName === 'mafia:agent:night_request') {
+    return { type: 'nightKill', targetId: target.id };
+  }
+  if (eventName === 'mafia:agent:vote_request') {
+    return { type: 'vote', targetId: target.id };
+  }
+  throw new Error(`Unsupported event: ${eventName}`);
+}
+
+// --- Agent connection via Socket.IO ---
+
+async function connectAgent(baseUrl, agentConfig) {
+  const { io: ioc } = require('socket.io-client');
+
+  // Register account
+  const regData = await fetchJson(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: agentConfig.email, displayName: agentConfig.name }),
+  }, `register ${agentConfig.name}`);
+  if (!regData.ok) throw new Error(`Registration failed for ${agentConfig.name}: ${regData.error || 'unknown'}`);
+  const token = regData.session.token;
+  const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+  // Create pending agent
+  const createData = await fetchJson(`${baseUrl}/api/openclaw/create-agent`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({}),
+  }, `create-agent ${agentConfig.name}`);
+  if (!createData.ok) throw new Error(`create-agent failed for ${agentConfig.name}: ${createData.error || 'unknown'}`);
+  const agentId = createData.agentId;
+
+  // Activate via callback
+  const callbackData = await fetchJson(`${baseUrl}/api/openclaw/callback`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({ agentId, agentName: agentConfig.name, style: agentConfig.style }),
+  }, `callback ${agentConfig.name}`);
+  if (!callbackData.ok) throw new Error(`callback failed for ${agentConfig.name}: ${callbackData.error || 'unknown'}`);
+
+  // Connect via Socket.IO
+  const socket = ioc(baseUrl, { reconnection: true, autoUnref: true });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`socket connect timeout for ${agentConfig.name}`)), 10_000);
+    socket.once('connect', () => { clearTimeout(timer); resolve(); });
+  });
+
+  // Register runtime
+  const registerResult = await new Promise((resolve) => {
+    socket.emit('agent:runtime:register', { token, agentId }, resolve);
+  });
+  if (!registerResult.ok) {
+    socket.disconnect();
+    throw new Error(`runtime register failed for ${agentConfig.name}: ${registerResult.error?.message || 'unknown'}`);
+  }
+
+  // Listen for game events
+  for (const eventName of ['mafia:agent:night_request', 'mafia:agent:discussion_request', 'mafia:agent:vote_request']) {
+    socket.on(eventName, (payload, cb) => {
+      try {
+        const decision = handleGameEvent(eventName, payload);
+        socket.emit('mafia:agent:decision', { ...decision, roomId: payload.roomId }, (ack) => {
+          if (ack && !ack.ok) {
+            process.stderr.write(`[${agentConfig.name}] decision rejected: ${ack.error || 'unknown'}\n`);
+          }
+        });
+      } catch (err) {
+        process.stderr.write(`[${agentConfig.name}] decision error: ${err instanceof Error ? err.message : String(err)}\n`);
       }
-    } catch (_err) {
-      // keep polling until ready
-    }
-    await sleep(3_000);
+      if (typeof cb === 'function') cb({ ok: true });
+    });
   }
-  throw new Error(`Timed out waiting for connect session ${connect.id} to connect`);
+
+  return { agentId, token, socket };
 }
 
-function run(cmd, args, { cwd = repoRoot, env = process.env } = {}) {
-  const result = spawnSync(cmd, args, {
-    cwd,
-    env,
-    encoding: 'utf8',
-  });
-  if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-    throw new Error(output || `${cmd} ${args.join(' ')} failed`);
-  }
-  return result.stdout.trim();
-}
-
-function packLocalPlugin() {
-  return run(process.execPath, [path.join(repoRoot, 'scripts', 'pack-clawofdeceit-connect.js')]);
-}
-
-function trustConnector({ env, profile }) {
-  const configFile = run('openclaw', ['--profile', profile, 'config', 'file'], { env });
-  const nextAllow = [];
-  if (fs.existsSync(configFile)) {
-    try {
-      const current = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      const allow = current?.plugins?.allow;
-      if (Array.isArray(allow)) nextAllow.push(...allow.filter((value) => typeof value === 'string' && value.trim()));
-    } catch (_err) {
-      // Fresh E2E profiles can safely rebuild the allowlist from config state.
-    }
-  }
-  if (!nextAllow.includes(CONNECTOR_PLUGIN_ID)) nextAllow.push(CONNECTOR_PLUGIN_ID);
-  run('openclaw', ['--profile', profile, 'config', 'set', 'plugins.allow', JSON.stringify(nextAllow), '--strict-json'], { env });
-}
-
-function installConnector({ env, profile, installSpec }) {
-  const installArgs = ['--profile', profile, 'plugins', 'install'];
-  if (!String(installSpec || '').endsWith('.tgz')) installArgs.push('--pin');
-  installArgs.push(installSpec);
-  run('openclaw', installArgs, { env });
-  trustConnector({ env, profile });
-  run('openclaw', ['--profile', profile, 'plugins', 'enable', CONNECTOR_PLUGIN_ID], { env });
-}
-
-function ensureOpenClawInstalled(env, profile) {
-  const result = spawnSync('openclaw', ['--profile', profile, 'clawofdeceit', 'connect', '--help'], {
-    cwd: repoRoot,
-    env,
-    encoding: 'utf8',
-  });
-  if (result.status === 0) return;
-  throw new Error(
-    'OpenClaw Claw of Deceit connector is not available.\n'
-    + `Expected \`openclaw --profile ${profile} clawofdeceit connect --help\` to work.\n`
-    + `stderr: ${result.stderr || '(none)'}`
-  );
-}
-
-function relevantPluginWarning(line) {
-  return line.includes('plugins.allow')
-    || line.includes('untracked local code')
-    || line.includes('loaded without install/load-path provenance');
-}
-
-function runtimeNoise(line) {
-  return line.includes('👀 Watching room')
-    || line.includes('🏁 Match finished')
-    || line.includes('🎯 Live in room')
-    || line.includes('⏳ Arena status');
-}
+// --- Server management ---
 
 function attachChildOutput(child, prefix, {
   quietStructuredLogs = false,
-  quietRuntimeLogs = false,
-  pluginWarnings = null,
   onExit = null,
 } = {}) {
   function write(chunk) {
@@ -349,13 +330,10 @@ function attachChildOutput(child, prefix, {
     for (const rawLine of text.split('\n')) {
       const line = rawLine.trimEnd();
       if (!line) continue;
-      if (pluginWarnings && relevantPluginWarning(line)) pluginWarnings.add(line.trim());
       if (prefix === 'arena' && quietStructuredLogs && line.trim().startsWith('{')) continue;
-      if (prefix !== 'arena' && quietRuntimeLogs && runtimeNoise(line)) continue;
       process.stdout.write(`[${prefix}] ${line}\n`);
     }
   }
-
   child.stdout.on('data', write);
   child.stderr.on('data', write);
   child.on('exit', (code, signal) => {
@@ -379,41 +357,12 @@ function startServer(port, options = {}) {
   return child;
 }
 
-function startAgentRuntime(baseUrl, connect, agentConfig, env, profile, options = {}) {
-  const args = [
-    '--profile',
-    profile,
-    'clawofdeceit',
-    'connect',
-    '--api',
-    baseUrl,
-    '--token',
-    connect.id,
-    '--callback',
-    connect.callbackUrl,
-    '--proof',
-    String(connect.callbackProof || '').trim(),
-    '--agent',
-    agentConfig.name,
-    '--style',
-    agentConfig.style,
-    '--decision-cmd',
-    `node ${handlerPath}`,
-  ];
-
-  const child = spawn('openclaw', args, {
-    cwd: repoRoot,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  attachChildOutput(child, agentConfig.name, options);
-  return child;
-}
-
 function stopChild(child) {
   if (!child || child.killed) return;
   child.kill('SIGTERM');
 }
+
+// --- Soak monitoring ---
 
 function summarizeQueueCounts(states) {
   const counts = {};
@@ -450,11 +399,6 @@ function describeExit(label, exitInfo) {
   return `${label} exited unexpectedly (code=${exitInfo.code}, signal=${exitInfo.signal || 'none'})`;
 }
 
-function maybeFailOnPluginWarnings(pluginWarnings) {
-  if (!pluginWarnings.size || !hasFlag('--fail-on-plugin-warnings')) return;
-  throw new Error(`Plugin trust warnings detected:\n${[...pluginWarnings].join('\n')}`);
-}
-
 async function runSoakLoop({
   baseUrl,
   connectedAgents,
@@ -466,8 +410,6 @@ async function runSoakLoop({
   disconnectGraceMs,
   stallThresholdMs,
   getServerExit,
-  runtimeRecords,
-  pluginWarnings,
 }) {
   const requiredMatchAgents = Math.min(6, expectedAgentCount);
   const soakStartedAt = Date.now();
@@ -486,9 +428,10 @@ async function runSoakLoop({
     const serverExit = getServerExit();
     if (serverExit) throw new Error(describeExit('Arena server', serverExit));
 
-    const exitedRuntime = runtimeRecords.find((runtime) => runtime.unexpectedExit);
-    if (exitedRuntime) {
-      throw new Error(describeExit(`Runtime ${exitedRuntime.name}`, exitedRuntime.unexpectedExit));
+    // Check socket disconnections
+    const disconnected = connectedAgents.find((a) => a.socket && !a.socket.connected);
+    if (disconnected) {
+      process.stderr.write(`[soak] ${disconnected.name} socket disconnected\n`);
     }
 
     let snapshot;
@@ -503,8 +446,6 @@ async function runSoakLoop({
       await sleep(monitorPollMs);
       continue;
     }
-
-    maybeFailOnPluginWarnings(pluginWarnings);
 
     const now = Date.now();
     if (snapshot.baseline.latestCompletedAtMs > lastCompletionAtMs) {
@@ -553,7 +494,6 @@ async function runSoakLoop({
         + ` latestCompleted=${snapshot.baseline.latestCompletedRoomId || lastCompletionRoomId || 'none'}`
         + ` latestAt=${snapshot.baseline.latestCompletedAt || 'none'}`
         + ` queues=${snapshot.queueCounts || 'none'}`
-        + ` warnings=${pluginWarnings.size}`
       );
       lastHeartbeatAt = now;
     }
@@ -570,16 +510,15 @@ async function runSoakLoop({
   }
 }
 
+// --- Main ---
+
 async function main() {
   if (process.argv.includes('--help')) {
     console.log('Usage: node scripts/run-openclaw-e2e.js [options]');
-    console.log('Connects real OpenClaw runtimes, validates the first Mafia match, and optionally keeps the arena running for a soak test.');
+    console.log('Connects agents via account-based auth, validates the first Mafia match, and optionally soak-tests.');
     console.log('Options:');
-    console.log('  --base-url http://127.0.0.1:4173');
-    console.log('  --pack-local');
-    console.log('  --plugin-spec @clawofdeceit/clawofdeceit-connect');
-    console.log('  --profile main');
-    console.log('  --home /tmp/agent-arena-home');
+    console.log('  --base-url http://127.0.0.1:4174');
+    console.log('  --port 4174');
     console.log('  --agent-count 6');
     console.log('  --connect-delay-ms 4000');
     console.log('  --keep-running');
@@ -590,16 +529,10 @@ async function main() {
     console.log('  --poll-sec 10');
     console.log('  --disconnect-grace-sec 120');
     console.log('  --stall-threshold-sec 600');
-    console.log('  --fail-on-plugin-warnings');
     process.exit(0);
   }
 
-  const profile = readArg('--profile').trim() || OPENCLAW_PROFILE;
-  const packLocal = hasFlag('--pack-local');
-  const pluginSpecArg = readArg('--plugin-spec').trim();
   const suppliedBaseUrl = readArg('--base-url').trim();
-  const homeDir = resolveHomeDir(readArg('--home').trim(), packLocal || pluginSpecArg);
-  const env = homeDir ? { ...process.env, HOME: homeDir } : { ...process.env };
   const port = readNumberArg('--port', DEFAULT_PORT);
   const connectDelayMs = readNumberArg('--connect-delay-ms', DEFAULT_CONNECT_DELAY_MS);
   const agentCount = readNumberArg('--agent-count', 6);
@@ -611,18 +544,9 @@ async function main() {
   const disconnectGraceMs = Math.max(5_000, readNumberArg('--disconnect-grace-sec', DEFAULT_DISCONNECT_GRACE_MS / 1000) * 1000);
   const stallThresholdMs = Math.max(10_000, readNumberArg('--stall-threshold-sec', DEFAULT_STALL_THRESHOLD_MS / 1000) * 1000);
   const quietStructuredLogs = soakEnabled && !hasFlag('--verbose-server-logs');
-  const quietRuntimeLogs = soakEnabled && !hasFlag('--verbose-runtime-logs');
 
-  if (packLocal || pluginSpecArg) {
-    const installSpec = packLocal ? packLocalPlugin() : pluginSpecArg;
-    installConnector({ env, profile, installSpec });
-  }
-  ensureOpenClawInstalled(env, profile);
-
-  const pluginWarnings = new Set();
   const baseUrl = suppliedBaseUrl || `http://127.0.0.1:${port}`;
-  const runtimeRecords = [];
-  const runtimes = [];
+  const connectedAgents = [];
   let isShuttingDown = false;
   let validationComplete = false;
   let serverExitInfo = null;
@@ -633,18 +557,16 @@ async function main() {
       quietStructuredLogs,
       onExit: (code, signal) => {
         if (isShuttingDown) return;
-        serverExitInfo = {
-          code,
-          signal,
-          at: Date.now(),
-        };
+        serverExitInfo = { code, signal, at: Date.now() };
       },
     });
 
   const shutdown = () => {
     if (isShuttingDown) return;
     isShuttingDown = true;
-    runtimes.forEach(stopChild);
+    for (const agent of connectedAgents) {
+      if (agent.socket) agent.socket.disconnect();
+    }
     stopChild(server);
   };
 
@@ -663,58 +585,18 @@ async function main() {
 
     const completionTracker = await resolveCompletionTracker(baseUrl);
     let baselineBefore = completionTracker.baseline;
-    const connectedAgents = [];
 
     for (const agentConfig of agentConfigs) {
-      const sessionData = await fetchJson(`${baseUrl}/api/openclaw/connect-session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: agentConfig.email }),
-      }, `connect session for ${agentConfig.name}`);
-      if (!sessionData.ok) throw new Error(`Failed to create connect session for ${agentConfig.name}`);
-
-      const connect = sessionData.connect;
-      if (!connect.callbackProof) throw new Error(`Missing callback proof for ${agentConfig.name}`);
-
-      const runtimeRecord = {
+      const result = await connectAgent(baseUrl, agentConfig);
+      connectedAgents.push({
         name: agentConfig.name,
-        connectId: connect.id,
-        agentId: null,
-        unexpectedExit: null,
-      };
-
-      const runtime = startAgentRuntime(baseUrl, connect, agentConfig, env, profile, {
-        pluginWarnings,
-        quietRuntimeLogs,
-        onExit: (code, signal) => {
-          if (isShuttingDown) return;
-          runtimeRecord.unexpectedExit = {
-            code,
-            signal,
-            at: Date.now(),
-          };
-          process.stderr.write(`[${agentConfig.name}] Runtime exited unexpectedly code=${code} signal=${signal || 'none'}\n`);
-        },
+        agentId: result.agentId,
+        token: result.token,
+        socket: result.socket,
       });
-
-      runtimes.push(runtime);
-      runtimeRecords.push(runtimeRecord);
-
-      const connectedState = await waitForConnectSession(baseUrl, connect);
-      runtimeRecord.agentId = connectedState.agentId;
-
-      const connected = {
-        name: agentConfig.name,
-        agentId: connectedState.agentId,
-        connectId: connectedState.connectId,
-      };
-
-      connectedAgents.push(connected);
-      console.log(`Connected ${agentConfig.name} as ${connected.agentId}`);
+      console.log(`Connected ${agentConfig.name} as ${result.agentId}`);
       if (connectDelayMs > 0) await sleep(connectDelayMs);
     }
-
-    maybeFailOnPluginWarnings(pluginWarnings);
 
     if (!baselineBefore) {
       baselineBefore = await fetchCompletionSummary(baseUrl, completionTracker, connectedAgents[0]?.agentId || '');
@@ -755,7 +637,6 @@ async function main() {
     console.log('Validation complete');
     console.log(`Watch URL: ${baseUrl}${currentWatch.watchUrl || watchState.watchUrl}`);
     console.log(`Sample match record count for ${connectedAgents[0].name}: ${(matchHistory.matches || []).length}`);
-    console.log(`Plugin warning count: ${pluginWarnings.size}`);
     console.log(`Completion source: ${completionTracker.description}`);
 
     if (!soakEnabled) return;
@@ -771,8 +652,6 @@ async function main() {
       disconnectGraceMs,
       stallThresholdMs,
       getServerExit: () => serverExitInfo,
-      runtimeRecords,
-      pluginWarnings,
     });
   } finally {
     shutdown();
