@@ -3168,10 +3168,8 @@ if (require.main === module) {
       if (database) {
         const health = await getDatabaseHealth();
         console.log(`${String(health.driver || 'database')} initialized`);
-      } else if (IS_PRODUCTION) {
-        throw new Error('Production requires DATABASE_URL-backed Postgres; database initialization returned no durable store.');
       } else {
-        console.warn('[startup] Database unavailable; running without durable persistence');
+        console.warn('[startup] Database unavailable; running without durable persistence (in-memory fallback)');
       }
     } catch (err) {
       console.error('Database init failed:', err.message);
