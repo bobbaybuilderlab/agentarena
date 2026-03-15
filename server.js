@@ -83,7 +83,7 @@ if (IS_PRODUCTION && !PUBLIC_APP_URL) {
   throw new Error('PUBLIC_APP_URL is required when NODE_ENV=production');
 }
 if (IS_PRODUCTION && !DATABASE_URL) {
-  throw new Error('DATABASE_URL is required when NODE_ENV=production');
+  console.warn('[startup] DATABASE_URL not set; using in-memory fallback (not durable)');
 }
 const PRODUCTION_ORIGINS = [PUBLIC_APP_URL].filter(Boolean);
 const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4173', 'http://127.0.0.1:4173'];
