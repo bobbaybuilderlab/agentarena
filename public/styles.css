@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
 
 :root {
   --font-display: 'Inter', 'Plus Jakarta Sans', sans-serif;
@@ -3422,6 +3423,965 @@ body.page-watch-owner #spectatorReadSection .text-muted {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+}
+
+/* ===== CLAW PAGE — Dark "How It Works" / Join Redesign ===== */
+
+.claw-page {
+  --claw-bg: #0A0A0F;
+  --claw-surface: #12121A;
+  --claw-border: #2A2A3A;
+  --claw-text: #F0F0F5;
+  --claw-text-secondary: #8888A0;
+  --claw-text-muted: #55556A;
+  --claw-red: #DC2626;
+  --claw-green: #10B981;
+  --claw-amber: #F59E0B;
+  --claw-orange: #FF8400;
+  font-family: 'Geist', 'Inter', sans-serif;
+  color: var(--claw-text);
+  background: var(--claw-bg);
+  min-height: 100vh;
+}
+
+.claw-page *,
+.claw-page *::before,
+.claw-page *::after {
+  box-sizing: border-box;
+}
+
+/* — Nav — */
+.claw-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 80px;
+  width: 100%;
+}
+
+.claw-nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+}
+
+.claw-nav-logo svg {
+  width: 28px;
+  height: 28px;
+  color: var(--claw-red);
+}
+
+.claw-nav-logo span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--claw-text);
+}
+
+.claw-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+}
+
+.claw-nav-links a {
+  font-family: 'Geist', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--claw-text-secondary);
+  text-decoration: none;
+  transition: color 150ms;
+}
+
+.claw-nav-links a:hover,
+.claw-nav-links a.active {
+  color: var(--claw-red);
+  font-weight: 600;
+}
+
+.claw-nav-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--claw-orange);
+  color: #111;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  height: 40px;
+  transition: filter 150ms;
+}
+
+.claw-nav-cta:hover {
+  filter: brightness(1.1);
+}
+
+/* — Hero — */
+.claw-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 120px 80px 80px;
+  gap: 24px;
+  width: 100%;
+}
+
+.claw-hero h1 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 72px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--claw-text);
+  margin: 0;
+  text-align: center;
+}
+
+.claw-hero p {
+  font-family: 'Geist', sans-serif;
+  font-size: 26px;
+  color: var(--claw-text-secondary);
+  line-height: 1.5;
+  text-align: center;
+  max-width: 800px;
+  margin: 0;
+}
+
+.claw-hero-accent {
+  width: 80px;
+  height: 4px;
+  background: var(--claw-red);
+  border-radius: 2px;
+}
+
+/* — Overview — */
+.claw-overview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px 120px;
+  gap: 24px;
+  width: 100%;
+}
+
+.claw-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--claw-red);
+  text-transform: uppercase;
+}
+
+.claw-overview p {
+  font-family: 'Geist', sans-serif;
+  font-size: 22px;
+  color: var(--claw-text-secondary);
+  line-height: 1.7;
+  text-align: center;
+  max-width: 900px;
+  margin: 0;
+}
+
+/* — Steps Section — */
+.claw-steps {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px 80px;
+  gap: 48px;
+  width: 100%;
+}
+
+.claw-steps h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 42px;
+  font-weight: 700;
+  color: var(--claw-text);
+  margin: 0;
+}
+
+.claw-steps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  width: 100%;
+}
+
+.claw-step-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 32px 28px;
+  background: var(--claw-surface);
+  border: 1px solid var(--claw-border);
+  border-radius: 12px;
+}
+
+.claw-step-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 64px;
+  font-weight: 700;
+  color: var(--claw-red);
+  opacity: 0.3;
+  line-height: 1;
+}
+
+.claw-step-card svg {
+  width: 32px;
+  height: 32px;
+  color: var(--claw-red);
+}
+
+.claw-step-card h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--claw-text);
+  margin: 0;
+}
+
+.claw-step-card p {
+  font-family: 'Geist', sans-serif;
+  font-size: 18px;
+  color: var(--claw-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* — Divider — */
+.claw-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--claw-border);
+}
+
+/* — Roles Section — */
+.claw-roles {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 100px 80px;
+  gap: 64px;
+  width: 100%;
+}
+
+.claw-roles-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.claw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  border: 1px solid var(--claw-border);
+  border-radius: 999px;
+}
+
+.claw-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.claw-badge span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--claw-text-secondary);
+}
+
+.claw-roles h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 64px;
+  font-weight: 800;
+  color: var(--claw-text);
+  text-align: center;
+  margin: 0;
+}
+
+.claw-roles-header > p {
+  font-family: 'Geist', sans-serif;
+  font-size: 24px;
+  color: #BEBECE;
+  line-height: 1.6;
+  text-align: center;
+  max-width: 800px;
+  margin: 0;
+}
+
+.claw-roles-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 32px;
+  width: 100%;
+}
+
+.claw-role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 48px;
+  background: var(--claw-surface);
+  border-radius: 16px;
+}
+
+.claw-role-card--claw {
+  border: 1px solid var(--claw-red);
+  box-shadow: 0 0 80px #DC262640;
+}
+
+.claw-role-card--prey {
+  border: 1px solid var(--claw-green);
+  box-shadow: 0 0 80px #10B98140;
+}
+
+.claw-role-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+}
+
+.claw-role-card--claw .claw-role-icon {
+  background: #DC262620;
+}
+
+.claw-role-card--prey .claw-role-icon {
+  background: #10B98120;
+}
+
+.claw-role-icon svg {
+  width: 32px;
+  height: 32px;
+}
+
+.claw-role-card--claw .claw-role-icon svg { color: var(--claw-red); }
+.claw-role-card--prey .claw-role-icon svg { color: var(--claw-green); }
+
+.claw-role-card h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 38px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.claw-role-card--claw h3 { color: var(--claw-red); }
+.claw-role-card--prey h3 { color: var(--claw-green); }
+
+.claw-role-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 3px;
+}
+
+.claw-role-card--claw .claw-role-tag { color: var(--claw-red); }
+.claw-role-card--prey .claw-role-tag { color: var(--claw-green); }
+
+.claw-role-card > p {
+  font-family: 'Geist', sans-serif;
+  font-size: 19px;
+  color: #C8C8D8;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.claw-traits {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.claw-trait {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.claw-trait svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.claw-role-card--claw .claw-trait svg { color: var(--claw-red); }
+.claw-role-card--prey .claw-trait svg { color: var(--claw-green); }
+
+.claw-trait span {
+  font-family: 'Geist', sans-serif;
+  font-size: 18px;
+  color: #C8C8D8;
+}
+
+/* — Mechanics Section — */
+.claw-mechanics {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 100px 80px;
+  gap: 64px;
+  width: 100%;
+}
+
+.claw-mechanics-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.claw-mechanics h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 64px;
+  font-weight: 800;
+  color: var(--claw-text);
+  text-align: center;
+  margin: 0;
+}
+
+.claw-mechanics-header > p {
+  font-family: 'Geist', sans-serif;
+  font-size: 24px;
+  color: #BEBECE;
+  line-height: 1.6;
+  text-align: center;
+  max-width: 800px;
+  margin: 0;
+}
+
+.claw-phases-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  width: 100%;
+}
+
+.claw-phase-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 32px;
+  background: var(--claw-surface);
+  border: 1px solid var(--claw-border);
+  border-radius: 16px;
+}
+
+.claw-phase-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 60px;
+  font-weight: 800;
+  color: #F59E0B20;
+  line-height: 1;
+}
+
+.claw-phase-card svg {
+  width: 28px;
+  height: 28px;
+  color: var(--claw-amber);
+}
+
+.claw-phase-card h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--claw-text);
+  margin: 0;
+}
+
+.claw-phase-card p {
+  font-family: 'Geist', sans-serif;
+  font-size: 17px;
+  color: #C8C8D8;
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* — CTA Section — */
+.claw-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 120px 80px;
+  gap: 32px;
+  width: 100%;
+  background: linear-gradient(180deg, #0A0A0F 0%, #1A0A0A 50%, #0A0A0F 100%);
+}
+
+.claw-cta blockquote {
+  font-family: 'Geist', sans-serif;
+  font-size: 22px;
+  font-style: italic;
+  color: var(--claw-text-muted);
+  line-height: 1.6;
+  text-align: center;
+  max-width: 700px;
+  margin: 0;
+}
+
+.claw-cta h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 58px;
+  font-weight: 800;
+  color: var(--claw-text);
+  text-align: center;
+  margin: 0;
+}
+
+.claw-cta > p {
+  font-family: 'Geist', sans-serif;
+  font-size: 22px;
+  color: var(--claw-text-secondary);
+  line-height: 1.6;
+  text-align: center;
+  max-width: 750px;
+  margin: 0;
+}
+
+.claw-cta-spacer {
+  height: 16px;
+}
+
+.claw-cta-buttons {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.claw-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 36px;
+  background: var(--claw-red);
+  color: var(--claw-text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 32px #DC262640;
+  transition: filter 150ms, transform 150ms;
+  text-decoration: none;
+}
+
+.claw-btn-primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.claw-btn-primary svg {
+  width: 18px;
+  height: 18px;
+  color: var(--claw-text);
+}
+
+.claw-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 36px;
+  background: transparent;
+  color: var(--claw-text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 600;
+  border: 1px solid var(--claw-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+  text-decoration: none;
+}
+
+.claw-btn-secondary:hover {
+  border-color: var(--claw-text-secondary);
+  color: var(--claw-text);
+}
+
+/* — Footer — */
+.claw-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+  padding: 48px 80px;
+  width: 100%;
+}
+
+.claw-footer-top {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.claw-footer-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 300px;
+}
+
+.claw-footer-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.claw-footer-logo svg {
+  width: 22px;
+  height: 22px;
+  color: var(--claw-red);
+}
+
+.claw-footer-logo span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--claw-text);
+}
+
+.claw-footer-tagline {
+  font-family: 'Geist', sans-serif;
+  font-size: 13px;
+  color: var(--claw-text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.claw-footer-links {
+  display: flex;
+  gap: 80px;
+}
+
+.claw-footer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.claw-footer-col h4 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--claw-text-muted);
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.claw-footer-col a {
+  font-family: 'Geist', sans-serif;
+  font-size: 14px;
+  color: var(--claw-text-secondary);
+  text-decoration: none;
+  transition: color 150ms;
+}
+
+.claw-footer-col a:hover {
+  color: var(--claw-text);
+}
+
+.claw-footer-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 24px;
+  border-top: 1px solid var(--claw-border);
+}
+
+.claw-footer-bottom span {
+  font-family: 'Geist', sans-serif;
+  font-size: 12px;
+  color: var(--claw-text-muted);
+}
+
+.claw-footer-meta {
+  display: flex;
+  gap: 24px;
+}
+
+.claw-footer-meta a {
+  font-family: 'Geist', sans-serif;
+  font-size: 12px;
+  color: var(--claw-text-muted);
+  text-decoration: none;
+  transition: color 150ms;
+}
+
+.claw-footer-meta a:hover {
+  color: var(--claw-text-secondary);
+}
+
+/* — Hamburger / Drawer overrides for claw-page — */
+.claw-page .nav-hamburger {
+  color: var(--claw-text);
+}
+
+.claw-page .nav-hamburger:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.claw-page .nav-drawer {
+  background: rgba(10, 10, 15, 0.96);
+}
+
+.claw-page .nav-drawer a {
+  color: var(--claw-text-secondary);
+}
+
+.claw-page .nav-drawer a:hover {
+  color: var(--claw-text);
+}
+
+/* — Deploy Modal — */
+.claw-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  align-items: center;
+  justify-content: center;
+}
+
+.claw-modal.active {
+  display: flex;
+}
+
+.claw-modal-content {
+  position: relative;
+  background: var(--claw-surface);
+  border: 1px solid var(--claw-border);
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 640px;
+  width: calc(100% - 48px);
+  max-height: 90vh;
+  overflow-y: auto;
+  color: var(--claw-text);
+}
+
+.claw-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: 1px solid var(--claw-border);
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--claw-text-secondary);
+  cursor: pointer;
+  font-size: 20px;
+  transition: border-color 150ms, color 150ms;
+}
+
+.claw-modal-close:hover {
+  border-color: var(--claw-text-secondary);
+  color: var(--claw-text);
+}
+
+.claw-modal-content .section-header {
+  margin-bottom: 10px;
+}
+
+.claw-modal-content .section-title {
+  color: var(--claw-text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.claw-modal-content .text-xs {
+  color: var(--claw-text-muted) !important;
+}
+
+.claw-modal-content .text-muted,
+.claw-modal-content .text-sm {
+  color: var(--claw-text-secondary) !important;
+}
+
+.claw-modal-content .checklist-item {
+  color: var(--claw-text-secondary);
+  font-size: 0.82rem;
+}
+
+.claw-modal-content .checklist-item.done {
+  color: var(--claw-green);
+}
+
+.claw-modal-content h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--claw-text);
+  margin: 0 0 8px;
+}
+
+.claw-modal-content h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--claw-text);
+  margin: 0;
+}
+
+.claw-modal-content p {
+  color: var(--claw-text-secondary);
+  font-size: 14px;
+}
+
+.claw-modal-content .code-block {
+  background: var(--claw-bg);
+  border: 1px solid var(--claw-border);
+  color: var(--claw-text);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  word-break: break-all;
+  display: block;
+}
+
+.claw-modal-content .onboarding-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-top: 16px;
+}
+
+.claw-modal-content .onboarding-step {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--claw-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.claw-modal-content .onboarding-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--claw-red);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.claw-modal-content .onboarding-main-cta {
+  background: var(--claw-red) !important;
+  border-color: var(--claw-red) !important;
+  color: #fff !important;
+  border-radius: 8px !important;
+}
+
+.claw-modal-content .onboarding-main-cta:hover {
+  filter: brightness(1.1);
+}
+
+.claw-modal-content .btn {
+  border-color: var(--claw-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--claw-text);
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.claw-modal-content .btn:hover {
+  border-color: var(--claw-text-secondary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.claw-modal-content .btn-primary {
+  background: var(--claw-red);
+  border-color: var(--claw-red);
+  color: #fff;
+}
+
+.claw-modal-content .btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.claw-modal-content .status {
+  color: var(--claw-text-secondary);
+  font-size: 0.85rem;
+  padding: 12px 16px;
+  border: 1px solid var(--claw-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.claw-modal-content .mvp-cta-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* — Responsive — */
+@media (max-width: 1100px) {
+  .claw-phases-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .claw-nav { padding: 16px 24px; }
+  .claw-hero { padding: 80px 24px 60px; }
+  .claw-hero h1 { font-size: 36px; }
+  .claw-overview { padding: 40px 24px; }
+  .claw-steps { padding: 40px 24px; }
+  .claw-steps-grid { grid-template-columns: 1fr; }
+  .claw-roles { padding: 60px 24px; }
+  .claw-roles h2 { font-size: 36px; }
+  .claw-roles-grid { grid-template-columns: 1fr; }
+  .claw-mechanics { padding: 60px 24px; }
+  .claw-mechanics h2 { font-size: 36px; }
+  .claw-phases-grid { grid-template-columns: 1fr; }
+  .claw-cta { padding: 80px 24px; }
+  .claw-cta h2 { font-size: 32px; }
+  .claw-footer { padding: 32px 24px; }
+  .claw-footer-top { flex-direction: column; gap: 32px; }
+  .claw-footer-links { gap: 40px; flex-wrap: wrap; }
+  .claw-nav-links { display: none; }
+  .claw-nav-cta { display: none; }
+  .claw-role-card { padding: 32px; }
+}
+
+@media (max-width: 600px) {
+  .claw-hero h1 { font-size: 28px; }
+  .claw-roles h2 { font-size: 28px; }
+  .claw-mechanics h2 { font-size: 28px; }
+  .claw-cta h2 { font-size: 24px; }
+  .claw-cta-buttons { flex-direction: column; width: 100%; }
+  .claw-btn-primary, .claw-btn-secondary { width: 100%; justify-content: center; }
+  .claw-footer-bottom { flex-direction: column; gap: 12px; align-items: flex-start; }
+}
+
 
 /* ═══════════════════════════════════════════════════════════
    REVAMPED LEADERBOARD PAGE

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-03-15T16:02:49.849Z",
+  "updatedAt": "2026-03-15T16:47:37.530Z",
   "window": "all_time",
   "funnel": {
-    "visits": 0,
+    "visits": 3,
     "connectSessionStarts": 0,
     "quickJoinStarts": 0,
     "firstMatchesCompleted": 0,
