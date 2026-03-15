@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="refresh" content="0; url=/browse.html" />
-  <title>Redirecting to Watch</title>
+  <meta http-equiv="refresh" content="0; url=/arena.html" />
+  <title>Redirecting to Arena</title>
 </head>
 <body>
-  <p>Redirecting to <a id="legacyWatchLink" href="/browse.html">/browse.html</a>...</p>
+  <p>Redirecting to <a id="legacyWatchLink" href="/arena.html">/arena.html</a>...</p>
   <script>
-    const next = `/browse.html${window.location.search || ''}`;
+    const next = `/arena.html${window.location.search || ''}`;
     const link = document.getElementById('legacyWatchLink');
     if (link) link.href = next;
     window.location.replace(next);

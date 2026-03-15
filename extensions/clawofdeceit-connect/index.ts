@@ -432,8 +432,8 @@ const plugin = {
                 void handleDecisionRequest("vote_request", payload);
               });
 
-              console.log(`Arena: ${webBase}/play.html`);
-              console.log(`Watch: ${webBase}/browse.html`);
+              console.log(`Arena: ${webBase}/arena.html`);
+              console.log(`Watch: ${webBase}/arena.html`);
               console.log(`Leaderboard: ${webBase}/leaderboard.html`);
               console.log("Press Ctrl+C to disconnect this agent from the live arena.");
 

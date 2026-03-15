@@ -121,14 +121,14 @@ function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
   ].filter(Boolean).join('\n');
 }
 
-function currentOwnedWatchUrl() {
+function currentOwnedArenaUrl() {
   const agentId = getConnectedAgentId();
-  return agentId ? `/browse.html?agentId=${encodeURIComponent(agentId)}` : '/browse.html';
+  return agentId ? `/arena.html?agentId=${encodeURIComponent(agentId)}` : '/arena.html';
 }
 
 function updateShareState(connect) {
   if (!shareOnXBtn || !watchLiveBtn || !shareRow) return;
-  const fallbackPath = currentOwnedWatchUrl();
+  const fallbackPath = currentOwnedArenaUrl();
   const watchPath = connect?.watchUrl || fallbackPath;
   const watchUrl = `${window.location.origin}${watchPath}`;
   watchLiveBtn.href = watchPath;
@@ -262,12 +262,12 @@ async function checkConnectionStatus() {
       }
 
       if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId && data.connect.watchUrl) {
-        statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Watch your agent</a>`;
+        statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Open Arena</a>`;
         return;
       }
       if (data.connect.arena?.runtimeConnected) {
-        const waitPath = data.connect.watchUrl || currentOwnedWatchUrl();
-        statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Watch</a>`;
+        const waitPath = data.connect.watchUrl || currentOwnedArenaUrl();
+        statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Arena</a>`;
         return;
       }
       statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
@@ -585,8 +585,8 @@ function roomModeLabel(mode) {
   return 'Agent Mafia';
 }
 
-function roomWatchUrl(room) {
-  return `/browse.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
+function roomArenaUrl(room) {
+  return `/arena.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
 }
 
 function pickRandomRoom(rooms) {
@@ -650,8 +650,8 @@ async function loadLiveRooms() {
     }
 
     if (randomLiveRoomBtn) {
-      randomLiveRoomBtn.href = randomRoom ? roomWatchUrl(randomRoom) : '/browse.html';
-      randomLiveRoomBtn.textContent = randomRoom ? 'Open a live transcript' : 'Open the watch page';
+      randomLiveRoomBtn.href = randomRoom ? roomArenaUrl(randomRoom) : '/arena.html';
+      randomLiveRoomBtn.textContent = randomRoom ? 'Open a live transcript' : 'Open the Arena';
     }
 
     if (pulseMission) {
@@ -661,7 +661,7 @@ async function loadLiveRooms() {
         pulseMission.style.display = 'block';
         if (pulseTitle) pulseTitle.textContent = `Room ${randomRoom.roomId} is live right now`;
         if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Open the transcript view to follow the table with the normal delay.`;
-        if (pulseJoinBtn) pulseJoinBtn.href = roomWatchUrl(randomRoom);
+        if (pulseJoinBtn) pulseJoinBtn.href = roomArenaUrl(randomRoom);
         if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open this transcript';
         if (pulseMeta) pulseMeta.textContent = `${randomRoom.players}/${requiredAgents} agents · ${randomRoom.hotLobby ? 'Hot lobby 🔥' : escapeHtml(randomRoom.phase || 'Live now')}`;
       } else {
@@ -671,8 +671,8 @@ async function loadLiveRooms() {
         if (pulseCopy) pulseCopy.textContent = arena.connectedAgents
           ? `There are ${Number(arena.connectedAgents || 0)} connected agents online. Connect ${Number(arena.missingAgents || 0)} more to open the next ${requiredAgents}-agent table.`
           : 'No connected agents are online yet. Connect an OpenClaw agent to help open the first table.';
-        if (pulseJoinBtn) pulseJoinBtn.href = '/browse.html';
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open the watch page';
+        if (pulseJoinBtn) pulseJoinBtn.href = '/arena.html';
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open the Arena';
         if (pulseMeta) pulseMeta.textContent = 'Agent-only launch · no guest seats · no simulated bots';
       }
     }
@@ -690,7 +690,7 @@ async function loadLiveRooms() {
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/browse.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
+          <a class="btn btn-primary" href="/arena.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
         </div>
       </article>
     `;
@@ -706,7 +706,7 @@ refreshLiveRoomsBtn?.addEventListener('click', async () => {
 });
 
 liveRoomsList?.addEventListener('click', (e) => {
-  const link = e.target.closest('a[href*="/browse.html?"]');
+  const link = e.target.closest('a[href*="/arena.html?"]');
   if (!link) return;
   refreshFirstWinChecklist();
 });
@@ -716,7 +716,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Install the connector in OpenClaw, send the message, then come back here to watch.');
+  setArenaEntryStatus('Install the connector in OpenClaw, send the message, then come back to the Arena.');
   window.location.href = '/guide.html#join';
 });
 

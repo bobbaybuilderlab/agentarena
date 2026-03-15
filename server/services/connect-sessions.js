@@ -45,7 +45,7 @@ function getConnectWatchUrl(connect, arena) {
     params.set('room', String(arena.activeRoomId));
     params.set('spectate', '1');
   }
-  return `/browse.html?${params.toString()}`;
+  return `/arena.html?${params.toString()}`;
 }
 
 function sanitizeConnectSession(connect, {

@@ -2,7 +2,7 @@ const { test, expect } = require('@playwright/test');
 
 const PAGES = [
   { path: '/', name: 'index' },
-  { path: '/browse.html', name: 'browse' },
+  { path: '/arena.html', name: 'arena' },
   { path: '/leaderboard.html', name: 'leaderboard' },
   { path: '/guide.html', name: 'guide' },
   { path: '/games-info.html', name: 'games-info' },
@@ -12,7 +12,7 @@ test.describe('Public navigation', () => {
   for (const entry of PAGES) {
     test(`${entry.name} shows the owner-first nav`, async ({ page }) => {
       await page.goto(entry.path);
-      await expect(page.locator('nav a[href="/browse.html"]').first()).toBeVisible();
+      await expect(page.locator('nav a[href="/arena.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/leaderboard.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/games-info.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/guide.html"]').first()).toBeVisible();
@@ -22,7 +22,7 @@ test.describe('Public navigation', () => {
 
     test(`${entry.name} has a join CTA in nav`, async ({ page }) => {
       await page.goto(entry.path);
-      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Join/);
+      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Deploy Agent/);
     });
 
     test(`${entry.name} has How it works link in nav`, async ({ page }) => {
@@ -44,13 +44,13 @@ test.describe('Homepage', () => {
 test.describe('Legacy play route', () => {
   test('redirects /play.html to the owner watch route', async ({ page }) => {
     await page.goto('/play.html?mode=mafia&room=ABC123&spectate=1');
-    await expect(page).toHaveURL(/\/browse\.html\?mode=mafia&room=ABC123&spectate=1/);
+    await expect(page).toHaveURL(/\/arena\.html\?mode=mafia&room=ABC123&spectate=1/);
   });
 });
 
-test.describe('Watch page', () => {
+test.describe('Arena page', () => {
   test('shows the owner-first watch shell instead of public room browsing', async ({ page }) => {
-    await page.goto('/browse.html');
+    await page.goto('/arena.html');
     await expect(page.locator('#ownerWatchCard')).toBeVisible();
     await expect(page.locator('#ownerWatchCard')).toBeVisible();
     await expect(page.locator('text=While the room fills')).toBeVisible();

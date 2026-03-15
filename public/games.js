@@ -982,6 +982,274 @@ function updateControlState(state) {
 let prevStateForSfx = null;
 let _lastStateJson = '';
 
+// ── Arena render functions ──────────────────────────────────
+
+const arenaGameId = document.getElementById('arenaGameId');
+const arenaRound = document.getElementById('arenaRound');
+const arenaPhase = document.getElementById('arenaPhase');
+const arenaTimerText = document.getElementById('arenaTimerText');
+const arenaSpectatorsText = document.getElementById('arenaSpectatorsText');
+const arenaAgentGrid = document.getElementById('arenaAgentGrid');
+const arenaMiniChat = document.getElementById('arenaMiniChat');
+const arenaMain = document.getElementById('arenaMain');
+const discussionFeed = document.getElementById('discussionFeed');
+const votingStatus = document.getElementById('votingStatus');
+const agentStatusStrip = document.getElementById('agentStatusStrip');
+const leaveGameBtn = document.getElementById('leaveGameBtn');
+const gameStatusBar = document.getElementById('gameStatusBar');
+const isArenaPage = document.body.classList.contains('page-arena');
+
+let arenaTimerInterval = null;
+let arenaAutoScroll = true;
+
+const ARENA_AGENT_COLORS = ['emerald', 'emerald', 'emerald', 'emerald', 'amber', 'red'];
+
+function getAgentColor(player, index, state) {
+  if (!player.alive) return 'red';
+  // High vote count = suspicious (amber)
+  const voteCount = state?.tally?.[player.id] || 0;
+  const alivePlayers = (state?.players || []).filter(p => p.alive !== false);
+  if (voteCount > 0 && voteCount >= Math.floor(alivePlayers.length / 3)) return 'amber';
+  // Known role if game finished
+  if (state?.status === 'finished' && (player.role === 'mafia' || player.role === 'imposter')) return 'red';
+  return 'emerald';
+}
+
+function getAgentInitials(name) {
+  if (!name) return '??';
+  const parts = String(name).replace(/[_\-]/g, ' ').trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+function isOwnedPlayer(player) {
+  return Boolean(
+    (me.playerId && player.id === me.playerId) ||
+    (ownedAgent?.arena?.activePlayerId && player.id === ownedAgent.arena.activePlayerId)
+  );
+}
+
+function getAgentStatusLabel(player, state) {
+  if (!player.alive) return { text: 'ELIMINATED', cls: 'status-eliminated' };
+  const voteCount = state?.tally?.[player.id] || 0;
+  const alivePlayers = (state?.players || []).filter(p => p.alive !== false);
+  if (voteCount > 0 && voteCount >= Math.floor(alivePlayers.length / 3)) return { text: 'SUSPICIOUS', cls: 'status-suspicious' };
+  if (state?.status === 'finished' && player.role) {
+    const label = player.role === 'mafia' ? 'MAFIA' : player.role === 'town' ? 'VILLAGER' : roleLabel(player.role).toUpperCase();
+    return { text: `ALIVE · ${label}`, cls: 'status-alive' };
+  }
+  return { text: 'ALIVE', cls: 'status-alive' };
+}
+
+function renderArenaStatusBar(state) {
+  if (!gameStatusBar || !isArenaPage) return;
+  if (!state || state.status === 'lobby') {
+    gameStatusBar.style.display = 'none';
+    return;
+  }
+  gameStatusBar.style.display = '';
+
+  const room = state.id || me.roomId || '';
+  if (arenaGameId) arenaGameId.textContent = `GAME #${escapeHtml(room)} — ${state.status === 'finished' ? 'FINISHED' : 'LIVE'}`;
+  if (arenaRound) arenaRound.textContent = `ROUND ${state.day || state.round || 1} OF 5`;
+  if (arenaPhase) {
+    const phase = state.status === 'finished' ? 'finished' : (state.phase || 'lobby');
+    arenaPhase.textContent = `${phase.toUpperCase()} PHASE`;
+    arenaPhase.className = 'arena-phase-badge';
+    if (phase === 'night') arenaPhase.classList.add('phase-night');
+    else if (phase === 'discussion') arenaPhase.classList.add('phase-discussion');
+    else if (phase === 'voting') arenaPhase.classList.add('phase-voting');
+  }
+
+  // Timer countdown
+  if (arenaTimerInterval) { clearInterval(arenaTimerInterval); arenaTimerInterval = null; }
+  const updateTimer = () => {
+    if (!arenaTimerText) return;
+    if (!state.phaseEndsAt || state.status === 'finished') {
+      arenaTimerText.textContent = state.status === 'finished' ? formatDuration(state.durationMs || 0) : '--:--';
+      return;
+    }
+    const remainMs = Math.max(0, Number(state.phaseEndsAt) - Date.now());
+    const secs = Math.ceil(remainMs / 1000);
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    arenaTimerText.textContent = `${m}:${String(s).padStart(2, '0')}`;
+  };
+  updateTimer();
+  if (state.phaseEndsAt && state.status !== 'finished') {
+    arenaTimerInterval = setInterval(updateTimer, 1000);
+  }
+
+  if (arenaSpectatorsText) {
+    const count = state.spectatorCount || 0;
+    arenaSpectatorsText.textContent = count > 0 ? `${count} spectator${count !== 1 ? 's' : ''}` : 'spectating';
+  }
+}
+
+function renderArenaVisualization(state) {
+  if (!arenaAgentGrid || !isArenaPage) return;
+  if (!state || !state.players?.length) {
+    arenaAgentGrid.innerHTML = '<p class="arena-placeholder-msg">Waiting for players...</p>';
+    return;
+  }
+
+  arenaAgentGrid.innerHTML = state.players.map((p, i) => {
+    const color = getAgentColor(p, i, state);
+    const initials = getAgentInitials(p.name);
+    const isYou = isOwnedPlayer(p);
+    const status = getAgentStatusLabel(p, state);
+    const classes = ['arena-agent-node'];
+    if (isYou) classes.push('is-you');
+    if (!p.alive) classes.push('is-eliminated');
+
+    return `
+      <div class="${classes.join(' ')}">
+        <div class="arena-agent-avatar color-${color}">${escapeHtml(initials)}</div>
+        <div class="arena-agent-name">${escapeHtml(p.name)}</div>
+        <div class="arena-agent-status ${status.cls}">${isYou && p.alive ? 'ALIVE · ' + (p.role ? roleLabel(p.role).toUpperCase() : 'YOU') : status.text}</div>
+        ${isYou ? '<span class="arena-you-tag">YOU</span>' : ''}
+        ${!p.alive ? '<span class="arena-agent-x">✕</span>' : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderArenaMiniChat(state) {
+  if (!arenaMiniChat || !isArenaPage) return;
+  const events = (state?.events || []).filter(e => e.type === 'DISCUSSION_MESSAGE').slice(-3);
+  if (!events.length) { arenaMiniChat.innerHTML = ''; return; }
+
+  arenaMiniChat.innerHTML = events.map(e => {
+    const speaker = e.actorName || formatPlayerName(state, e.actorId);
+    const p = (state?.players || []).find(pl => pl.id === e.actorId);
+    const color = p ? getAgentColor(p, 0, state) : 'emerald';
+    const initials = getAgentInitials(speaker);
+    const text = String(e.text || '').trim();
+    return `
+      <div class="arena-mini-msg">
+        <span class="arena-mini-msg-name color-${color}">${escapeHtml(initials)}:</span>
+        <span class="arena-mini-msg-text">${escapeHtml(text.length > 80 ? text.slice(0, 80) + '…' : text)}</span>
+      </div>`;
+  }).join('');
+}
+
+function renderArenaDiscussion(state) {
+  if (!discussionFeed || !isArenaPage) return;
+  if (!state || state.status === 'lobby') {
+    discussionFeed.innerHTML = '<p class="arena-placeholder-msg">Discussion will appear here once the game begins.</p>';
+    if (votingStatus) votingStatus.style.display = 'none';
+    return;
+  }
+
+  const events = (state.events || []).filter(Boolean);
+  const msgs = events.map(event => {
+    const formatted = formatMafiaFeedEvent(state, event);
+    if (!formatted) return '';
+
+    if (event.type === 'DISCUSSION_MESSAGE') {
+      const p = (state.players || []).find(pl => pl.id === event.actorId);
+      const color = p ? getAgentColor(p, 0, state) : 'emerald';
+      const isYou = p && isOwnedPlayer(p);
+      return `
+        <div class="arena-msg ${isYou ? 'is-yours' : ''}">
+          <div class="arena-msg-header">
+            <span class="arena-msg-dot color-${color}"></span>
+            <span class="arena-msg-name color-${color}">${escapeHtml(formatted.title)}</span>
+            <span class="arena-msg-time">${escapeHtml(formatted.at)}</span>
+          </div>
+          <div class="arena-msg-body">${escapeHtml(formatted.body)}</div>
+        </div>`;
+    }
+
+    // System messages
+    return `
+      <div class="arena-msg-system">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        ${escapeHtml(formatted.title)}${formatted.body ? ' — ' + escapeHtml(formatted.body) : ''}
+      </div>`;
+  }).filter(Boolean);
+
+  discussionFeed.innerHTML = msgs.join('') || '<p class="arena-placeholder-msg">No discussion yet.</p>';
+
+  // Auto-scroll
+  if (arenaAutoScroll) {
+    discussionFeed.scrollTop = discussionFeed.scrollHeight;
+  }
+
+  // Voting footer
+  if (votingStatus) {
+    const tally = state.tally || {};
+    const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+    if (entries.length > 0 && state.status !== 'lobby') {
+      votingStatus.style.display = '';
+      const tallyHtml = entries.map(([pid, votes]) => {
+        const name = formatPlayerName(state, pid);
+        const p = (state.players || []).find(pl => pl.id === pid);
+        const color = p ? getAgentColor(p, 0, state) : 'muted';
+        return `<span class="arena-vote-item color-${color}">${escapeHtml(name)}: ${votes}</span>`;
+      }).join('');
+
+      votingStatus.innerHTML = `
+        <div class="arena-vote-label">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          CURRENT VOTES
+        </div>
+        <div class="arena-vote-tallies">${tallyHtml}</div>`;
+    } else {
+      votingStatus.style.display = 'none';
+    }
+  }
+}
+
+function renderArenaAgentStrip(state) {
+  if (!agentStatusStrip || !isArenaPage) return;
+  if (!state || !state.players?.length) {
+    agentStatusStrip.style.display = 'none';
+    return;
+  }
+  agentStatusStrip.style.display = '';
+
+  agentStatusStrip.innerHTML = state.players.map((p, i) => {
+    const color = getAgentColor(p, i, state);
+    const initials = getAgentInitials(p.name);
+    const isYou = isOwnedPlayer(p);
+    const status = getAgentStatusLabel(p, state);
+    const voteCount = state.tally?.[p.id] || 0;
+    const classes = ['arena-agent-card'];
+    if (isYou) classes.push('is-you');
+    if (!p.alive) classes.push('is-eliminated');
+
+    return `
+      <div class="${classes.join(' ')}">
+        <div class="arena-card-avatar color-${color}">${escapeHtml(initials)}</div>
+        <div class="arena-card-info">
+          <div class="arena-card-name">
+            ${escapeHtml(p.name)}
+            ${isYou ? '<span class="arena-you-tag">YOU</span>' : ''}
+          </div>
+          <div class="arena-card-status ${status.cls}">${status.text}</div>
+        </div>
+        ${voteCount > 0 ? `<div class="arena-card-votes">${voteCount} vote${voteCount !== 1 ? 's' : ''}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+// Auto-scroll detection for discussion panel
+if (discussionFeed) {
+  discussionFeed.addEventListener('scroll', () => {
+    const atBottom = discussionFeed.scrollHeight - discussionFeed.scrollTop - discussionFeed.clientHeight < 30;
+    arenaAutoScroll = atBottom;
+    const badge = document.getElementById('autoScrollBadge');
+    if (badge) badge.style.opacity = atBottom ? '1' : '0.4';
+  });
+}
+
+// Leave game button
+if (leaveGameBtn) {
+  leaveGameBtn.addEventListener('click', () => {
+    window.location.href = '/';
+  });
+}
+
 function renderState(state) {
   // Skip re-render if state is identical to last render
   const stateStr = JSON.stringify(state);
@@ -1027,6 +1295,23 @@ function renderState(state) {
   updateMatchHud(state);
   renderPhaseTimeline(state);
   renderSpectatorReadability(state);
+
+  // Arena page rendering
+  if (isArenaPage) {
+    renderArenaStatusBar(state);
+    if (state && state.status !== 'lobby') {
+      if (arenaMain) arenaMain.style.display = '';
+      renderArenaVisualization(state);
+      renderArenaMiniChat(state);
+      renderArenaDiscussion(state);
+      renderArenaAgentStrip(state);
+    } else {
+      if (arenaMain) arenaMain.style.display = 'none';
+      if (agentStatusStrip) agentStatusStrip.style.display = 'none';
+    }
+    // Keep spectator redirect behavior
+    maybeScheduleSpectatorRedirect(state);
+  }
 
   if (!playersView || !actionsView) return;
 
@@ -2051,7 +2336,7 @@ function shareResult() {
   const mode = modeLabel(me.game);
   const modeKey = me.game || 'mafia';
   const rounds = currentState.round || currentState.day || currentState.turn || 0;
-  const shareUrl = `${window.location.origin}/browse.html?mode=${encodeURIComponent(modeKey)}`;
+  const shareUrl = `${window.location.origin}/arena.html?mode=${encodeURIComponent(modeKey)}`;
 
   const text = `${winnerLabel(winner)} just won ${mode} in ${rounds} rounds. Can you beat them?`;
 
