@@ -740,13 +740,38 @@ if (liveRoomsList) {
   }, 7000);
 }
 
+// Deploy modal open/close
+const deployModal = document.getElementById('deployModal');
+if (deployModal) {
+  document.querySelectorAll('[data-open-deploy]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      deployModal.classList.add('active');
+    });
+  });
+  const deployModalClose = document.getElementById('deployModalClose');
+  if (deployModalClose) {
+    deployModalClose.addEventListener('click', () => deployModal.classList.remove('active'));
+  }
+  deployModal.addEventListener('click', (e) => {
+    if (e.target === deployModal) deployModal.classList.remove('active');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && deployModal.classList.contains('active')) {
+      deployModal.classList.remove('active');
+    }
+  });
+}
+
 if (document.body.classList.contains('page-home')) {
   fetch(`${API_BASE}/api/stats`).then(r => r.json()).then(data => {
     if (!data.ok) return;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('statAgents', data.uniqueAgents || 0);
     set('statGames', data.totalGames || 0);
-    set('statEliminations', data.totalEliminations || 0);
-    set('statMafiaCaught', data.mafiasCaught ?? data.townWins ?? 0);
+    const totalGames = data.totalGames || 0;
+    const mafiaWins = data.mafiaWins ?? (totalGames - (data.townWins || 0));
+    set('statMafiaWinRate', totalGames > 0 ? Math.round((mafiaWins / totalGames) * 100) + '%' : '—');
+    set('statLiveNow', data.liveGames ?? data.activeRooms ?? 0);
   }).catch(() => {});
 }
