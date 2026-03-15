@@ -799,7 +799,7 @@ function opsAuthGate(req, res, next) {
 app.use('/api/ops/', opsAuthGate);
 
 app.use((req, _res, next) => {
-  if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/browse.html', '/for-agents.html', '/guess-the-agent.html'].includes(req.path)) {
+  if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/arena.html', '/for-agents.html', '/guess-the-agent.html'].includes(req.path)) {
     incrementGrowthMetric('funnel.visits', 1);
   }
   next();
@@ -984,7 +984,7 @@ function decorateLeaderboardEntry(entry) {
     activeRoomId,
     queueStatus: arena.queueStatus || 'offline',
     runtimeConnected: Boolean(arena.runtimeConnected),
-    watchUrl: buildAgentWatchUrl(entry.id, arena),
+    watchUrl: buildAgentArenaUrl(entry.id, arena),
   };
 }
 
@@ -1418,16 +1418,16 @@ function buildArenaAvailability() {
   };
 }
 
-function buildAgentWatchUrl(agentId, arena = summarizeAgentArenaState(agentId)) {
+function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) {
   const cleanAgentId = String(agentId || '').trim();
-  if (!cleanAgentId) return '/browse.html';
+  if (!cleanAgentId) return '/arena.html';
   const params = new URLSearchParams({ agentId: cleanAgentId });
   if (arena?.activeRoomId) {
     params.set('mode', 'mafia');
     params.set('room', String(arena.activeRoomId));
     params.set('spectate', '1');
   }
-  return `/browse.html?${params.toString()}`;
+  return `/arena.html?${params.toString()}`;
 }
 
 async function resolveSiteSession(req) {
@@ -1525,7 +1525,7 @@ function summarizeOwnedAgent(agentId) {
     name: agent.name,
     deployed: !!agent.deployed,
     persona: agent.persona || null,
-    watchUrl: buildAgentWatchUrl(agent.id, arena),
+    watchUrl: buildAgentArenaUrl(agent.id, arena),
     arena,
   };
 }
@@ -2084,7 +2084,7 @@ app.get('/api/agents/:id', (req, res) => {
       deployed: !!agent.deployed,
       openclawConnected: arena.runtimeConnected,
       persona: agent.persona || null,
-      watchUrl: buildAgentWatchUrl(agent.id, arena),
+      watchUrl: buildAgentArenaUrl(agent.id, arena),
       arena,
     },
   });
@@ -2818,7 +2818,7 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: runtime.currentRoomId,
       activePlayerId: runtime.currentPlayerId,
-      watchUrl: buildAgentWatchUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
+      watchUrl: buildAgentArenaUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
       message: 'Your agent is already in a live Mafia match.',
     });
   }
@@ -2832,7 +2832,7 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: refreshed.currentRoomId,
       activePlayerId: refreshed.currentPlayerId,
-      watchUrl: buildAgentWatchUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
+      watchUrl: buildAgentArenaUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
       message: 'Your agent has been seated in the next live Mafia match.',
     });
   }
@@ -2865,7 +2865,7 @@ app.get('/api/play/watch', (_req, res) => {
       found: true,
       roomId: best.roomId,
       mode: best.mode,
-      watchUrl: `/browse.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
+      watchUrl: `/arena.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
       players: best.players,
     });
   }
@@ -2926,7 +2926,7 @@ app.get('/match/:matchId', async (req, res) => {
   <nav class="topnav">
     <a class="brand" href="/">Claw of Deceit</a>
     <div class="nav-links">
-      <a href="/browse.html">Watch</a>
+      <a href="/arena.html">Arena</a>
       <a href="/leaderboard.html">Leaderboard</a>
       <a href="/guide.html#join">Join</a>
     </div>
@@ -2940,7 +2940,7 @@ app.get('/match/:matchId', async (req, res) => {
         <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
         <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
         <div class="row mt-12" style="justify-content: center; gap: 1rem;">
-          <a class="btn btn-primary" href="/browse.html">Watch your agent</a>
+          <a class="btn btn-primary" href="/arena.html">Open Arena</a>
           <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
         </div>
       </div>
@@ -2962,7 +2962,11 @@ app.get('/config.js', (req, res) => {
 
 app.get('/play.html', (req, res) => {
   const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(302, `/browse.html${search}`);
+  res.redirect(302, `/arena.html${search}`);
+});
+
+app.get('/browse.html', (req, res) => {
+  res.redirect(301, '/arena.html' + (req._parsedUrl.search || ''));
 });
 
 app.use(sendRuntimeHtml);
