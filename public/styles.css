@@ -2595,86 +2595,499 @@ body.page-mvp select {
   font-size: 0.85rem;
 }
 
-body.page-home .mvp-hero {
-  position: relative;
-  overflow: hidden;
-  min-height: 70vh;
+/* ── page-home: Dark "Claw of Deceit" homepage ── */
+body.page-home {
+  background: #0A0A0F;
+  color: #F0F0F5;
+  font-family: 'Geist', 'Inter', sans-serif;
 }
+body.page-home::before,
+body.page-home::after { display: none; }
 
-body.page-home .mvp-hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(600px 400px at 50% 30%, rgba(255, 50, 50, 0.06), transparent 70%),
-    radial-gradient(400px 300px at 20% 60%, rgba(39, 213, 173, 0.05), transparent 60%),
-    radial-gradient(500px 350px at 80% 40%, rgba(69, 185, 255, 0.04), transparent 60%);
-  pointer-events: none;
-  z-index: 0;
+/* Nav overrides */
+body.page-home .topnav {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
-
-body.page-home .mvp-hero > * {
-  position: relative;
-  z-index: 1;
+body.page-home .brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  color: #F0F0F5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-
-body.page-home .mvp-hero h1 {
-  font-family: var(--font-display);
-  font-size: clamp(3.2rem, 7vw, 6.5rem);
-  font-weight: 800;
-  letter-spacing: -0.04em;
-  line-height: 0.95;
-  max-width: 14ch;
-  text-shadow: 0 4px 40px rgba(255, 50, 50, 0.08), 0 2px 20px rgba(69, 185, 255, 0.1);
+body.page-home .nav-links a {
+  color: #8888A0;
+  font-family: 'Geist', 'Inter', sans-serif;
 }
-
-body.page-home .mvp-sub {
-  font-size: 1.3rem;
-  max-width: 38ch;
-  line-height: 1.55;
-  color: #9cb0ca;
-}
-
-body.page-home .mvp-setup-note {
-  font-size: 0.85rem;
-  font-family: 'Space Mono', monospace;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #4a6a5a;
-}
-
-body.page-home .mvp-cta-row .btn {
-  font-size: 1.07rem;
-  min-height: 57px;
-  padding: 13px 28px;
-}
-
-body.page-home .mvp-cta-row .btn-primary {
-  background: linear-gradient(140deg, #ff6b6b, #cc3333);
+body.page-home .nav-links a:hover { color: #F0F0F5; background: rgba(255,255,255,0.05); }
+body.page-home .btn-primary.btn-sm {
+  background: #DC2626;
   border-color: transparent;
   color: #fff;
-  box-shadow: 0 4px 20px rgba(255, 50, 50, 0.25);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+body.page-home .btn-primary.btn-sm:hover { background: #ef4444; }
+
+/* Nav drawer */
+body.page-home .nav-drawer {
+  background: #12121A;
+  border-color: #2A2A3A;
+}
+body.page-home .nav-drawer a { color: #F0F0F5; }
+
+/* Hero */
+body.page-home .home-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 60px;
+  padding: 100px 0 60px;
+  min-height: 80vh;
+}
+body.page-home .home-hero-content {
+  flex: 1;
+  max-width: 600px;
+}
+body.page-home .live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 100px;
+  padding: 6px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #10B981;
+  margin-bottom: 32px;
+}
+body.page-home .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10B981;
+  display: inline-block;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+body.page-home .home-hero h1 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(2.8rem, 5vw, 5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: #F0F0F5;
+  margin: 0 0 24px;
+}
+body.page-home .text-red { color: #DC2626; }
+body.page-home .home-hero-sub {
+  font-size: 1.15rem;
+  line-height: 1.65;
+  color: #8888A0;
+  max-width: 480px;
+  margin: 0 0 36px;
+}
+body.page-home .home-hero-ctas {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+body.page-home .btn-red-glow {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 28px;
+  background: #DC2626;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 0 30px rgba(220, 38, 38, 0.35);
+  transition: all 0.2s;
+}
+body.page-home .btn-red-glow:hover {
+  background: #ef4444;
+  box-shadow: 0 0 40px rgba(220, 38, 38, 0.5);
+  transform: translateY(-1px);
+}
+body.page-home .btn-outlined {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 28px;
+  background: transparent;
+  color: #F0F0F5;
+  border: 1px solid #2A2A3A;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+body.page-home .btn-outlined:hover {
+  border-color: #55556A;
+  background: rgba(255, 255, 255, 0.03);
 }
 
-body.page-home .mvp-cta-row .btn-primary:hover {
-  background: linear-gradient(140deg, #ff7b7b, #dd4444);
-  box-shadow: 0 8px 30px rgba(255, 50, 50, 0.35);
+/* Arena Viz */
+body.page-home .arena-viz {
+  width: 420px;
+  min-width: 360px;
+  background: #12121A;
+  border: 1px solid #2A2A3A;
+  border-radius: 16px;
+  padding: 20px;
+  position: relative;
+  flex-shrink: 0;
+}
+body.page-home .arena-viz-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+body.page-home .arena-viz-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #10B981;
+}
+body.page-home .arena-viz-round { color: #55556A; }
+body.page-home .arena-viz-ring {
+  position: relative;
+  width: 280px;
+  height: 280px;
+  margin: 0 auto 20px;
+}
+body.page-home .arena-agent {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-110px) rotate(calc(-1 * var(--angle)));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+body.page-home .agent-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #fff;
+}
+body.page-home .agent-avatar.dead { opacity: 0.4; }
+body.page-home .agent-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  color: #8888A0;
+  letter-spacing: 0.02em;
+}
+body.page-home .dead-label { color: #55556A; text-decoration: line-through; }
+body.page-home .arena-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid #2A2A3A;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.5rem;
+  color: #55556A;
+}
+body.page-home .arena-chat {
+  background: rgba(10, 10, 15, 0.6);
+  border: 1px solid #2A2A3A;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+body.page-home .chat-msg {
+  font-size: 0.75rem;
+  color: #8888A0;
+  line-height: 1.4;
+}
+body.page-home .chat-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  margin-right: 4px;
+}
+body.page-home .arena-viewers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: #55556A;
 }
 
-body.page-home .stats-strip {
-  border-top: 1px solid rgba(39, 213, 173, 0.1);
-  padding-top: 24px;
+/* Stats strip */
+body.page-home .home-stats {
+  display: flex;
+  justify-content: space-between;
+  padding: 32px 0;
+  border-top: 1px solid #2A2A3A;
+  border-bottom: 1px solid #2A2A3A;
 }
-
-body.page-home .stat-num {
-  color: #27d5ad;
-  font-family: 'Space Mono', monospace;
+body.page-home .home-stats .stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
-
-body.page-home .stat-label {
-  font-family: 'Space Mono', monospace;
+body.page-home .home-stats .stat-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 2.25rem;
+  font-weight: 700;
+  color: #F0F0F5;
+}
+body.page-home .home-stats .stat-num.stat-red { color: #DC2626; }
+body.page-home .home-stats .stat-num.stat-green { color: #10B981; }
+body.page-home .home-stats .stat-label {
+  font-family: 'JetBrains Mono', monospace;
   font-size: 0.68rem;
-  color: #4a6a5a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #55556A;
+}
+
+/* How It Works */
+body.page-home .home-how {
+  padding: 100px 0;
+  text-align: center;
+}
+body.page-home .home-how-label {
+  display: inline-block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #DC2626;
+  margin-bottom: 16px;
+}
+body.page-home .home-how-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  font-weight: 800;
+  color: #F0F0F5;
+  margin: 0 0 12px;
+}
+body.page-home .home-how-sub {
+  font-size: 1.05rem;
+  color: #8888A0;
+  max-width: 520px;
+  margin: 0 auto 48px;
+  line-height: 1.6;
+}
+body.page-home .home-how-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+body.page-home .home-how-card {
+  background: #12121A;
+  border: 1px solid #2A2A3A;
+  border-radius: 12px;
+  padding: 32px 24px;
+  text-align: left;
+}
+body.page-home .home-how-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #DC2626;
+  display: block;
+  margin-bottom: 16px;
+}
+body.page-home .home-how-icon {
+  color: #8888A0;
+  margin-bottom: 16px;
+}
+body.page-home .home-how-card h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #F0F0F5;
+  margin: 0 0 10px;
+}
+body.page-home .home-how-card p {
+  font-size: 0.9rem;
+  color: #8888A0;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Final CTA */
+body.page-home .home-cta-final {
+  text-align: center;
+  padding: 100px 0;
+  background: linear-gradient(180deg, #0A0A0F 0%, #1a0a0a 50%, #0A0A0F 100%);
+  margin: 0 calc(-1 * max(0px, (100vw - 1200px) / 2 + 24px));
+  padding-left: max(24px, (100vw - 1200px) / 2);
+  padding-right: max(24px, (100vw - 1200px) / 2);
+}
+body.page-home .home-cta-quote {
+  font-family: 'Geist', 'Inter', sans-serif;
+  font-size: 1rem;
+  font-style: italic;
+  color: #55556A;
+  margin: 0 0 24px;
+}
+body.page-home .home-cta-final h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(1.8rem, 3vw, 2.8rem);
+  font-weight: 800;
+  color: #F0F0F5;
+  margin: 0 0 12px;
+}
+body.page-home .home-cta-sub {
+  font-size: 1.05rem;
+  color: #8888A0;
+  margin: 0 0 36px;
+}
+body.page-home .home-cta-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Footer */
+body.page-home .home-footer {
+  padding: 60px 0 0;
+}
+body.page-home .home-footer-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px;
+  padding-bottom: 40px;
+}
+body.page-home .home-footer-brand { max-width: 260px; }
+body.page-home .home-footer-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #F0F0F5;
+  margin-bottom: 10px;
+}
+body.page-home .home-footer-tagline {
+  font-size: 0.85rem;
+  color: #55556A;
+  line-height: 1.5;
+  margin: 0;
+}
+body.page-home .home-footer-columns {
+  display: flex;
+  gap: 60px;
+}
+body.page-home .home-footer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+body.page-home .home-footer-col h4 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #55556A;
+  margin: 0 0 4px;
+}
+body.page-home .home-footer-col a {
+  font-size: 0.85rem;
+  color: #8888A0;
+  text-decoration: none;
+}
+body.page-home .home-footer-col a:hover { color: #F0F0F5; }
+body.page-home .home-footer-divider {
+  height: 1px;
+  background: #2A2A3A;
+}
+body.page-home .home-footer-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 0 32px;
+  font-size: 0.78rem;
+  color: #55556A;
+}
+body.page-home .home-footer-legal {
+  display: flex;
+  gap: 20px;
+}
+body.page-home .home-footer-legal a {
+  color: #55556A;
+  text-decoration: none;
+}
+body.page-home .home-footer-legal a:hover { color: #8888A0; }
+
+/* Responsive */
+@media (max-width: 1024px) {
+  body.page-home .home-hero {
+    flex-direction: column;
+    text-align: center;
+    padding: 80px 0 40px;
+    min-height: auto;
+  }
+  body.page-home .home-hero-content { max-width: 100%; }
+  body.page-home .home-hero-sub { margin-left: auto; margin-right: auto; }
+  body.page-home .home-hero-ctas { justify-content: center; }
+  body.page-home .arena-viz { width: 100%; max-width: 420px; min-width: auto; }
+  body.page-home .home-footer-top { flex-direction: column; }
+}
+
+@media (max-width: 768px) {
+  body.page-home .home-how-cards { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
+  body.page-home .home-stats { flex-wrap: wrap; gap: 24px; justify-content: center; }
+  body.page-home .home-stats .stat { min-width: 120px; }
+  body.page-home .home-footer-columns { flex-wrap: wrap; gap: 32px; }
+  body.page-home .home-cta-final { padding: 60px 24px; margin: 0 -24px; }
+}
+
+@media (max-width: 480px) {
+  body.page-home .home-hero h1 { font-size: 2.2rem; }
+  body.page-home .home-stats .stat-num { font-size: 1.5rem; }
+  body.page-home .arena-viz-ring { width: 220px; height: 220px; }
+  body.page-home .arena-agent { transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-85px) rotate(calc(-1 * var(--angle))); }
+  body.page-home .home-footer-bottom { flex-direction: column; gap: 12px; text-align: center; }
+  body.page-home .home-hero-ctas { flex-direction: column; align-items: stretch; }
+  body.page-home .btn-red-glow,
+  body.page-home .btn-outlined { justify-content: center; }
 }
 
 
