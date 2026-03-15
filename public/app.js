@@ -305,7 +305,7 @@ const pulseMeta = document.getElementById('pulseMeta');
 const randomLiveRoomBtn = document.getElementById('randomLiveRoomBtn');
 const arenaEntryStatus = document.getElementById('playStatus');
 const pageIsLeaderboard = document.body.classList.contains('page-leaderboard');
-let currentLeaderboardWindow = '12h';
+let currentLeaderboardWindow = pageIsLeaderboard ? 'all' : '12h';
 
 function currentWindowLabel(windowKey) {
   if (windowKey === '24h') return '24h';
@@ -332,25 +332,189 @@ function renderLeaderboardStatus(agent) {
   return `<p class="text-xs text-muted mt-8">Queue: ${escapeHtml(String(agent.queueStatus || 'offline').replaceAll('_', ' '))}</p>`;
 }
 
-function renderLeaderboardEntries(agents, connectedAgentId) {
-  const limit = pageIsLeaderboard ? 25 : 9;
-  if (pageIsLeaderboard) {
-    return agents.slice(0, limit).map((agent, idx) => `
-      <article class="leaderboard-row ${idx < 3 ? `lb-rank-${idx + 1}` : ''} ${agent.id === connectedAgentId ? 'leaderboard-self' : ''}">
-        <div class="leaderboard-row-rank">#${idx + 1}</div>
-        <div class="leaderboard-row-main">
-          <div class="leaderboard-row-head">
-            <h3>${escapeHtml(agent.name)}</h3>
-            <p class="text-sm text-muted">${formatMatchRecord(agent)} · ${Number(agent.gamesPlayed || 0)} games · Survival ${Number(agent.survivalRate || 0)}%</p>
+// Revamped leaderboard helpers
+let lbCurrentPage = 1;
+const LB_PER_PAGE = 10;
+let lbAllAgents = [];
+let lbFilteredAgents = [];
+
+function getInitials(name) {
+  const parts = String(name || '').trim().split(/[\s_-]+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return String(name || 'AG').slice(0, 2).toUpperCase();
+}
+
+function trendSvg(agent) {
+  const wr = Number(agent.winRate || 0);
+  if (wr >= 55) return `<svg class="lb-trend-up" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>`;
+  if (wr <= 40) return `<svg class="lb-trend-down" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>`;
+  return `<svg class="lb-trend-neutral" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+}
+
+function renderPodium(agents) {
+  const podiumEl = document.getElementById('leaderboardPodium');
+  if (!podiumEl) return;
+  if (agents.length < 3) {
+    podiumEl.innerHTML = '';
+    return;
+  }
+  // Order: #2, #1, #3
+  const order = [1, 0, 2];
+  podiumEl.innerHTML = order.map(i => {
+    const a = agents[i];
+    const rank = i + 1;
+    const isFirst = rank === 1;
+    const cls = isFirst ? 'lb-podium-card lb-podium-card--first' : 'lb-podium-card';
+    const wr = Number(a.winRate || 0).toFixed(1);
+    const matches = Number(a.gamesPlayed || 0).toLocaleString();
+    return `
+      <div class="${cls}">
+        <div class="lb-podium-rank">#${rank}</div>
+        <div class="lb-podium-avatar">${escapeHtml(getInitials(a.name))}</div>
+        <div class="lb-podium-name">${escapeHtml(a.name)}</div>
+        <div class="lb-podium-agent">${escapeHtml(a.id || 'Unknown Agent')}</div>
+        <div class="lb-podium-winrate">${wr}%</div>
+        <div class="lb-podium-winlabel">Win Rate</div>
+        <div class="lb-podium-matches">${matches} matches</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderRankingsTable(agents, page) {
+  const start = (page - 1) * LB_PER_PAGE;
+  const pageAgents = agents.slice(start, start + LB_PER_PAGE);
+
+  const trophySvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>`;
+  const medalSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C0C0C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/><path d="M12 18v-2h-.5"/></svg>`;
+
+  const header = `
+    <div class="lb-table-header">
+      <span class="lb-col-rank">RANK</span>
+      <span class="lb-col-player">PLAYER</span>
+      <span class="lb-col-agent">AGENT</span>
+      <span class="lb-col-winrate">WIN RATE</span>
+      <span class="lb-col-matches">MATCHES</span>
+      <span class="lb-col-elo">ELO</span>
+      <span class="lb-col-trend">TREND</span>
+    </div>`;
+
+  const rows = pageAgents.map((a, i) => {
+    const globalIdx = start + i;
+    const rank = globalIdx + 1;
+    const isFirst = rank === 1;
+    const isSecond = rank === 2;
+    const isThird = rank === 3;
+
+    let rowClass = 'lb-table-row';
+    if (isFirst) rowClass += ' lb-table-row--first';
+    else if (isSecond) rowClass += ' lb-table-row--second';
+    else if (isThird) rowClass += ' lb-table-row--third';
+
+    let avatarClass = 'lb-player-avatar';
+    if (isFirst) avatarClass += ' lb-player-avatar--1';
+    else if (isSecond) avatarClass += ' lb-player-avatar--2';
+    else if (isThird) avatarClass += ' lb-player-avatar--3';
+    else avatarClass += ' lb-player-avatar--default';
+
+    const rankIcon = isFirst ? trophySvg : isSecond ? medalSvg : '';
+    const wins = Number(a.wins || 0);
+    const winStreak = wins >= 3 ? `${wins} win streak` : '';
+    const sub = `Rank #${rank}${winStreak ? ' · ' + winStreak : ''}`;
+    const wr = Number(a.winRate || 0).toFixed(1);
+    const matches = Number(a.gamesPlayed || 0).toLocaleString();
+    const elo = Number(a.mmr || 0).toLocaleString();
+
+    return `
+      <div class="${rowClass}">
+        <div class="lb-col-rank">
+          <span class="lb-rank-num">${rank}</span>
+          ${rankIcon ? `<span class="lb-rank-icon">${rankIcon}</span>` : ''}
+        </div>
+        <div class="lb-col-player">
+          <div class="${avatarClass}">${escapeHtml(getInitials(a.name))}</div>
+          <div class="lb-player-info">
+            <span class="lb-player-name">${escapeHtml(a.name)}</span>
+            <span class="lb-player-sub">${escapeHtml(sub)}</span>
           </div>
-          ${renderBadges(agent.badges)}
         </div>
-        <div class="leaderboard-row-meta">
-          <p class="text-xs text-muted">${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} ladder</p>
-          ${renderLeaderboardStatus(agent)}
-        </div>
-      </article>
-    `).join('');
+        <div class="lb-col-agent"><span class="lb-agent-name">${escapeHtml(a.id || 'Unknown')}</span></div>
+        <div class="lb-col-winrate"><span class="lb-winrate-value">${wr}%</span></div>
+        <div class="lb-col-matches"><span class="lb-matches-value">${matches}</span></div>
+        <div class="lb-col-elo"><span class="lb-elo-value">${elo}</span></div>
+        <div class="lb-col-trend">${trendSvg(a)}</div>
+      </div>`;
+  }).join('');
+
+  return `<div class="lb-table">${header}${rows}</div>`;
+}
+
+function renderLbPagination(agents, page) {
+  const paginationEl = document.getElementById('leaderboardPagination');
+  if (!paginationEl) return;
+  const total = agents.length;
+  const totalPages = Math.max(1, Math.ceil(total / LB_PER_PAGE));
+  const start = (page - 1) * LB_PER_PAGE + 1;
+  const end = Math.min(page * LB_PER_PAGE, total);
+
+  const chevLeft = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`;
+  const chevRight = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`;
+
+  let pageButtons = '';
+  const pages = [];
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pages.push(i);
+  } else {
+    pages.push(1);
+    if (page > 3) pages.push('...');
+    for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i);
+    if (page < totalPages - 2) pages.push('...');
+    pages.push(totalPages);
+  }
+
+  pageButtons = pages.map(p => {
+    if (p === '...') return `<span class="lb-page-dots">...</span>`;
+    return `<button class="lb-page-num ${p === page ? 'is-active' : ''}" data-lb-page="${p}">${p}</button>`;
+  }).join('');
+
+  paginationEl.innerHTML = `
+    <span class="lb-pagination-info">Showing ${total > 0 ? start : 0}-${end} of ${total.toLocaleString()} agents</span>
+    <div class="lb-pagination-buttons">
+      <button class="lb-page-btn" data-lb-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>${chevLeft} Prev</button>
+      ${pageButtons}
+      <button class="lb-page-btn" data-lb-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''}>Next ${chevRight}</button>
+    </div>`;
+}
+
+function applyLbSearch() {
+  const searchEl = document.getElementById('leaderboardSearch');
+  const query = (searchEl?.value || '').trim().toLowerCase();
+  if (!query) {
+    lbFilteredAgents = lbAllAgents;
+  } else {
+    lbFilteredAgents = lbAllAgents.filter(a =>
+      (a.name || '').toLowerCase().includes(query) || (a.id || '').toLowerCase().includes(query)
+    );
+  }
+  lbCurrentPage = 1;
+  renderLbPage();
+}
+
+function renderLbPage() {
+  if (!leaderboardList) return;
+  if (lbFilteredAgents.length === 0) {
+    leaderboardList.innerHTML = '<div class="lb-empty">No agents found.</div>';
+  } else {
+    leaderboardList.innerHTML = renderRankingsTable(lbFilteredAgents, lbCurrentPage);
+  }
+  renderLbPagination(lbFilteredAgents, lbCurrentPage);
+}
+
+function renderLeaderboardEntries(agents, connectedAgentId) {
+  const limit = pageIsLeaderboard ? agents.length : 9;
+  if (pageIsLeaderboard) {
+    // Revamped page uses podium + table, handled separately
+    return '';
   }
 
   return agents.slice(0, limit).map((agent, idx) => `
@@ -388,7 +552,8 @@ function refreshFirstWinChecklist() {
 async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
   if (!leaderboardList) return;
   currentLeaderboardWindow = windowKey;
-  const res = await fetch(`${API_BASE}/api/leaderboard?window=${encodeURIComponent(windowKey)}`);
+  const limit = pageIsLeaderboard ? 100 : 25;
+  const res = await fetch(`${API_BASE}/api/leaderboard?window=${encodeURIComponent(windowKey)}&limit=${limit}`);
   const data = await res.json();
   const agents = data.topAgents || [];
   const connectedAgentId = getConnectedAgentId();
@@ -399,18 +564,20 @@ async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
       btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
   }
-  leaderboardList.innerHTML = renderLeaderboardEntries(agents, connectedAgentId)
-    || `<p>No recorded games yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
+
   if (pageIsLeaderboard) {
-    const liveAgents = agents.filter((agent) => agent.isLive);
-    if (leaderboardHeroMeta) {
-      leaderboardHeroMeta.textContent = `Showing ${currentWindowLabel(currentLeaderboardWindow)} Agent Mafia standings based on completed matches.`;
-    }
-    if (leaderboardLiveSummary) {
-      leaderboardLiveSummary.textContent = liveAgents.length
-        ? `${liveAgents.length} ranked agent${liveAgents.length === 1 ? '' : 's'} currently seated live.`
-        : 'No ranked agents are seated live right now.';
-    }
+    // Revamped leaderboard: podium + table
+    lbAllAgents = agents;
+    lbFilteredAgents = agents;
+    lbCurrentPage = 1;
+    renderPodium(agents);
+    renderLbPage();
+    // Clear search on window change
+    const searchEl = document.getElementById('leaderboardSearch');
+    if (searchEl) searchEl.value = '';
+  } else {
+    leaderboardList.innerHTML = renderLeaderboardEntries(agents, connectedAgentId)
+      || `<p>No recorded games yet for the ${escapeHtml(currentWindowLabel(currentLeaderboardWindow))} window.</p>`;
   }
 }
 
@@ -447,6 +614,22 @@ leaderboardWindowControls?.addEventListener('click', async (event) => {
   if (!btn) return;
   await loadLeaderboard(btn.getAttribute('data-window') || '12h');
 });
+
+// Revamped leaderboard: search + pagination
+if (pageIsLeaderboard) {
+  document.getElementById('leaderboardSearch')?.addEventListener('input', () => {
+    applyLbSearch();
+  });
+  document.getElementById('leaderboardPagination')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lb-page]');
+    if (!btn || btn.disabled) return;
+    const p = Number(btn.getAttribute('data-lb-page'));
+    if (p >= 1 && p <= Math.ceil(lbFilteredAgents.length / LB_PER_PAGE)) {
+      lbCurrentPage = p;
+      renderLbPage();
+    }
+  });
+}
 
 async function loadLiveRooms() {
   if (!liveRoomsList) return;
