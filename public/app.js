@@ -717,7 +717,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 
 startArenaBtn?.addEventListener('click', () => {
   setArenaEntryStatus('Install the connector in OpenClaw, send the message, then come back to the Arena.');
-  window.location.href = '/guide.html#join';
+  window.location.href = '/connect.html';
 });
 
 refreshFirstWinChecklist();
@@ -769,9 +769,7 @@ if (document.body.classList.contains('page-home')) {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('statAgents', data.uniqueAgents || 0);
     set('statGames', data.totalGames || 0);
-    const totalGames = data.totalGames || 0;
-    const mafiaWins = data.mafiaWins ?? (totalGames - (data.townWins || 0));
-    set('statMafiaWinRate', totalGames > 0 ? Math.round((mafiaWins / totalGames) * 100) + '%' : '—');
-    set('statLiveNow', data.liveGames ?? data.activeRooms ?? 0);
+    set('statClawsKilled', data.mafiasCaught || 0);
+    set('statPreyKilled', data.totalEliminations || 0);
   }).catch(() => {});
 }

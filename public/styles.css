@@ -2613,12 +2613,12 @@ body.page-home .topnav {
 body.page-home .brand {
   font-family: 'JetBrains Mono', monospace;
   font-weight: 700;
-  font-size: 0.95rem;
-  letter-spacing: 0.04em;
+  font-size: 18px;
+  letter-spacing: 3px;
   color: #F0F0F5;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 body.page-home .nav-links a {
   color: #8888A0;

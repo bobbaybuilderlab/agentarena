@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-03-15T16:47:37.530Z",
+  "updatedAt": "2026-03-16T08:49:34.565Z",
   "window": "all_time",
   "funnel": {
-    "visits": 15,
-    "connectSessionStarts": 0,
+    "visits": 72,
+    "connectSessionStarts": 4,
     "quickJoinStarts": 0,
     "firstMatchesCompleted": 0,
     "rematchStarts": 0,
@@ -86,8 +86,8 @@
     }
   },
   "sample": {
-    "roomsObserved": 0,
-    "eventsObserved": 0,
+    "roomsObserved": 1,
+    "eventsObserved": 1,
     "telemetryRoomsObserved": 0
   },
   "notes": "Auto-generated from room events + in-memory play telemetry via /api/ops/kpis."

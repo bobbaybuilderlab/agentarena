@@ -1,8 +1,90 @@
 # Claw of Deceit Handover
 
-Last updated: 2026-03-13
+Last updated: 2026-03-15
 
-## Current Checkpoint — 2026-03-13 Backend Trim
+## Current Checkpoint — 2026-03-15 Frontend Redesign
+
+### What changed
+
+**Pages deleted (old design):**
+- `guide.html` — old docs/join page
+- `games-info.html` — old "How Mafia Works" docs page
+- `dobby-dashboard.html` — old Dobby dashboard
+- `play.html` — redirect stub
+- `dashboard.html` — redirect stub
+- `browse.html` — old browse page
+
+**Pages created (new design):**
+- **`how-it-works.html`** — Standalone page explaining Mafia mechanics. Sections: hero, Know Your Role (Claw/Prey role cards), How Each Round Plays Out (4-step cards: Night → Discussion → Voting → Elimination), quote, CTA. Styles are inline using `body.page-hiw` scope. Uses `page-home` body class for shared nav styling.
+- **`connect.html`** — Single-step Moltbook-style onboarding. One "Generate Connect Message" button → user pastes into Openclaw → agent handles install + connection automatically. Reuses same element IDs as old guide.html (`generateCmdBtn`, `cliBox`, `cliCommand`, `copyCmdBtn`) so `app.js` onboarding logic works without changes.
+
+**Pages modified:**
+- **`index.html`** — Nav: removed Docs, added How It Works + Connect Openclaw. Hero CTA: "Connect Your Openclaw →" only (removed "Watch Live Game" buttons). Footer: removed Developers column. Logo: red eye SVG 28px `stroke="#DC2626"`.
+- **`arena.html`** — Nav links updated. Logo fixed to red eye SVG + "CLAW OF DECEIT".
+- **`leaderboard.html`** — Nav: removed Docs. CTA: "CONNECT OPENCLAW". Footer cleaned up.
+- **`ops.html`** — Nav links updated. Logo fixed.
+- **`app.js`** — `startArenaBtn` redirect changed to `/connect.html`.
+- **`styles.css`** — `.brand` updated to 18px font, 3px letter-spacing (matching leaderboard sizing).
+
+**Branding now consistent across all pages:**
+```html
+<svg width="28" height="28" stroke="#DC2626" ...>eye icon</svg>
+CLAW OF DECEIT
+```
+
+**Naming:** "Deploy Agent" → "Connect Openclaw" everywhere. No "Docs" references remain.
+
+### Navigation (all pages)
+
+| Nav Item | URL | Notes |
+|----------|-----|-------|
+| Arena | `/arena.html` | Spectator dashboard |
+| How It Works | `/how-it-works.html` | Mafia rules explainer |
+| Leaderboard | `/leaderboard.html` | Rankings |
+| Connect Openclaw (CTA btn) | `/connect.html` | One-step onboarding |
+
+### What still needs work
+
+**Arena page pre-game state (priority):**
+The new arena layout HTML + CSS exists (`#gameStatusBar`, `#arenaMain` 2-column, `#agentStatusStrip`). JS wires them up in `games.js` line ~1299 when `state.status !== 'lobby'`. The **pre-game state** (before agent connects) still shows old `#ownerWatchCard`. Needs to be restyled or replaced with a cleaner waiting state matching the dark theme.
+
+The in-game rendering functions are implemented:
+- `renderArenaStatusBar()` — line 1045
+- `renderArenaVisualization()` — line 1090
+- `renderArenaMiniChat()` — line 1117
+- `renderArenaDiscussion()` — line 1136
+- `renderArenaAgentStrip()` — line 1204
+
+**Connect page polish:**
+- Code block wrapping fixed but test with real generated commands
+- Consider auto-copy on generate
+
+**Footer inconsistency:**
+- `index.html` uses `home-footer-*` classes
+- Other pages use `lb-footer-*` classes
+- Both render fine but could be unified
+
+### File inventory
+
+| File | Purpose | Body classes |
+|------|---------|-------------|
+| `index.html` | Homepage | `page-home` |
+| `arena.html` | Spectator dashboard | `page-play page-mvp page-watch-owner page-arena` |
+| `how-it-works.html` | Mafia rules | `page-home page-hiw` |
+| `connect.html` | Onboarding | `page-home page-connect` |
+| `leaderboard.html` | Rankings | `page-leaderboard` |
+| `ops.html` | Admin ops | `page-play` |
+
+### Running locally
+```bash
+PORT=3002 node --watch server.js
+# Open http://localhost:3002
+# (ports 3000/3001 may be taken by other workspace instances)
+```
+
+---
+
+## Previous Checkpoint — 2026-03-13 Backend Trim
 
 This repo is now at a clear **Mafia-only checkpoint**.
 

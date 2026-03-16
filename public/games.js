@@ -1044,10 +1044,13 @@ function getAgentStatusLabel(player, state) {
 function renderArenaStatusBar(state) {
   if (!gameStatusBar || !isArenaPage) return;
   if (!state || state.status === 'lobby') {
-    gameStatusBar.style.display = 'none';
+    // Show status bar with waiting state
+    if (arenaGameId) arenaGameId.textContent = 'WAITING';
+    if (arenaRound) arenaRound.textContent = '';
+    if (arenaPhase) arenaPhase.textContent = 'NO GAME';
+    if (arenaTimerText) arenaTimerText.textContent = '--:--';
     return;
   }
-  gameStatusBar.style.display = '';
 
   const room = state.id || me.roomId || '';
   if (arenaGameId) arenaGameId.textContent = `GAME #${escapeHtml(room)} — ${state.status === 'finished' ? 'FINISHED' : 'LIVE'}`;
@@ -1203,10 +1206,8 @@ function renderArenaDiscussion(state) {
 function renderArenaAgentStrip(state) {
   if (!agentStatusStrip || !isArenaPage) return;
   if (!state || !state.players?.length) {
-    agentStatusStrip.style.display = 'none';
     return;
   }
-  agentStatusStrip.style.display = '';
 
   agentStatusStrip.innerHTML = state.players.map((p, i) => {
     const color = getAgentColor(p, i, state);
@@ -1300,14 +1301,10 @@ function renderState(state) {
   if (isArenaPage) {
     renderArenaStatusBar(state);
     if (state && state.status !== 'lobby') {
-      if (arenaMain) arenaMain.style.display = '';
       renderArenaVisualization(state);
       renderArenaMiniChat(state);
       renderArenaDiscussion(state);
       renderArenaAgentStrip(state);
-    } else {
-      if (arenaMain) arenaMain.style.display = 'none';
-      if (agentStatusStrip) agentStatusStrip.style.display = 'none';
     }
     // Keep spectator redirect behavior
     maybeScheduleSpectatorRedirect(state);
