@@ -372,7 +372,8 @@ function formatMatchRecord(row) {
   const wins = Number(row?.wins || 0);
   const gamesPlayed = Number(row?.gamesPlayed || 0);
   const winRate = Number(row?.winRate || 0);
-  return `${wins}-${Math.max(0, gamesPlayed - wins)} · ${winRate}% win rate`;
+  const mmr = Number(row?.mmr || 0).toLocaleString();
+  return `${mmr} Elo · ${wins}-${Math.max(0, gamesPlayed - wins)} · ${winRate}% win rate`;
 }
 
 function renderBadges(badges = []) {
@@ -400,10 +401,21 @@ function getInitials(name) {
 }
 
 function trendSvg(agent) {
-  const wr = Number(agent.winRate || 0);
-  if (wr >= 55) return `<svg class="lb-trend-up" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>`;
-  if (wr <= 40) return `<svg class="lb-trend-down" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>`;
+  const delta = Number(agent.lastRatingDelta || 0);
+  if (delta > 0) return `<svg class="lb-trend-up" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>`;
+  if (delta < 0) return `<svg class="lb-trend-down" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>`;
   return `<svg class="lb-trend-neutral" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+}
+
+function renderProvisionalBadge(agent) {
+  if (!agent?.isProvisional) return '';
+  return '<span class="lb-provisional-badge">Provisional</span>';
+}
+
+function formatSignedDelta(delta) {
+  const value = Number(delta || 0);
+  if (!value) return '';
+  return `${value > 0 ? '+' : ''}${value} last match`;
 }
 
 function renderPodium(agents) {
@@ -420,16 +432,16 @@ function renderPodium(agents) {
     const rank = i + 1;
     const isFirst = rank === 1;
     const cls = isFirst ? 'lb-podium-card lb-podium-card--first' : 'lb-podium-card';
-    const wr = Number(a.winRate || 0).toFixed(1);
+    const elo = Number(a.mmr || 0).toLocaleString();
     const matches = Number(a.gamesPlayed || 0).toLocaleString();
     return `
       <div class="${cls}">
         <div class="lb-podium-rank">#${rank}</div>
         <div class="lb-podium-avatar">${escapeHtml(getInitials(a.name))}</div>
-        <div class="lb-podium-name">${escapeHtml(a.name)}</div>
+        <div class="lb-podium-name">${escapeHtml(a.name)}${renderProvisionalBadge(a)}</div>
         <div class="lb-podium-agent">${escapeHtml(a.id || 'Unknown Agent')}</div>
-        <div class="lb-podium-winrate">${wr}%</div>
-        <div class="lb-podium-winlabel">Win Rate</div>
+        <div class="lb-podium-winrate">${elo}</div>
+        <div class="lb-podium-winlabel">Elo</div>
         <div class="lb-podium-matches">${matches} matches</div>
       </div>
     `;
@@ -474,8 +486,10 @@ function renderRankingsTable(agents, page) {
 
     const rankIcon = isFirst ? trophySvg : isSecond ? medalSvg : '';
     const wins = Number(a.wins || 0);
-    const winStreak = wins >= 3 ? `${wins} win streak` : '';
-    const sub = `Rank #${rank}${winStreak ? ' · ' + winStreak : ''}`;
+    const winStreak = wins >= 3 ? `${wins} wins recent` : '';
+    const provisional = a.isProvisional ? 'Provisional' : '';
+    const lastDelta = formatSignedDelta(a.lastRatingDelta);
+    const sub = [ `Rank #${rank}`, provisional, winStreak, lastDelta ].filter(Boolean).join(' · ');
     const wr = Number(a.winRate || 0).toFixed(1);
     const matches = Number(a.gamesPlayed || 0).toLocaleString();
     const elo = Number(a.mmr || 0).toLocaleString();
@@ -489,7 +503,7 @@ function renderRankingsTable(agents, page) {
         <div class="lb-col-player">
           <div class="${avatarClass}">${escapeHtml(getInitials(a.name))}</div>
           <div class="lb-player-info">
-            <span class="lb-player-name">${escapeHtml(a.name)}</span>
+            <span class="lb-player-name">${escapeHtml(a.name)}${renderProvisionalBadge(a)}</span>
             <span class="lb-player-sub">${escapeHtml(sub)}</span>
           </div>
         </div>

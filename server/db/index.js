@@ -1,5 +1,14 @@
 const path = require('path');
 const fs = require('fs');
+const {
+  MAFIA_ELO_MODE,
+  DEFAULT_MMR,
+  PROVISIONAL_MATCH_COUNT,
+  buildDefaultRatingSnapshot,
+  normalizeRatingSnapshot,
+  calculateMatchRatingChanges,
+  resolveParticipantId,
+} = require('../services/mafia-elo');
 
 let SQLiteDatabase = null;
 try {
@@ -198,12 +207,116 @@ function normalizeMatchRow(row) {
   };
 }
 
+function normalizeRatingRow(row) {
+  const snapshot = buildDefaultRatingSnapshot({
+    mmr: row?.mmr,
+    peakMmr: row?.peak_mmr ?? row?.peakMmr,
+    ratedMatches: row?.rated_matches ?? row?.ratedMatches,
+    lastRatingDelta: row?.last_delta ?? row?.lastDelta,
+  });
+
+  return {
+    agent_id: row?.agent_id || row?.agentId || null,
+    agentId: row?.agent_id || row?.agentId || null,
+    mode: row?.mode || MAFIA_ELO_MODE,
+    mmr: snapshot.mmr,
+    peak_mmr: snapshot.peakMmr,
+    peakMmr: snapshot.peakMmr,
+    rated_matches: snapshot.ratedMatches,
+    ratedMatches: snapshot.ratedMatches,
+    last_delta: snapshot.lastRatingDelta,
+    lastDelta: snapshot.lastRatingDelta,
+    updated_at: normalizeIso(row?.updated_at || row?.updatedAt),
+    updatedAt: normalizeIso(row?.updated_at || row?.updatedAt),
+    isProvisional: snapshot.isProvisional,
+  };
+}
+
 function normalizeReportRow(row) {
   if (!row) return null;
   return {
     ...row,
     created_at: normalizeIso(row.created_at) || row.created_at || null,
   };
+}
+
+function listRatedParticipantIds(players = []) {
+  return [...new Set(
+    players
+      .filter((player) => player && !player.isBot)
+      .map((player) => resolveParticipantId(player))
+      .filter(Boolean),
+  )];
+}
+
+function buildRatingSnapshotMap(agentIds = [], currentRatings = {}) {
+  const snapshots = Object.create(null);
+  for (const agentId of agentIds) {
+    snapshots[agentId] = normalizeRatingSnapshot(currentRatings?.[agentId] || {});
+  }
+  return snapshots;
+}
+
+function getAgentRatingsMapSync(database, agentIds = [], mode = MAFIA_ELO_MODE) {
+  const ids = [...new Set(agentIds.map((agentId) => String(agentId || '').trim()).filter(Boolean))];
+  const snapshots = buildRatingSnapshotMap(ids);
+  if (!ids.length || !database) return snapshots;
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = database.prepare(`
+    SELECT *
+    FROM agent_ratings
+    WHERE mode = ?
+      AND agent_id IN (${placeholders})
+  `).all(mode, ...ids);
+
+  for (const row of rows) {
+    if (!row?.agent_id) continue;
+    snapshots[row.agent_id] = normalizeRatingRow(row);
+  }
+
+  return snapshots;
+}
+
+async function getAgentRatingsMap(client, agentIds = [], mode = MAFIA_ELO_MODE) {
+  const ids = [...new Set(agentIds.map((agentId) => String(agentId || '').trim()).filter(Boolean))];
+  const snapshots = buildRatingSnapshotMap(ids);
+  if (!ids.length || !client) return snapshots;
+
+  const result = await client.query(
+    'SELECT * FROM agent_ratings WHERE mode = $1 AND agent_id = ANY($2::text[])',
+    [mode, ids],
+  );
+  for (const row of result.rows || []) {
+    if (!row?.agent_id) continue;
+    snapshots[row.agent_id] = normalizeRatingRow(row);
+  }
+  return snapshots;
+}
+
+async function getAgentRating(agentId, { mode = MAFIA_ELO_MODE } = {}) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return normalizeRatingSnapshot();
+
+  const adapter = await ensureDb();
+  if (!adapter || adapter.kind === 'none') return normalizeRatingSnapshot();
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(
+      'SELECT * FROM agent_ratings WHERE agent_id = $1 AND mode = $2 LIMIT 1',
+      [cleanAgentId, mode],
+    );
+    return normalizeRatingRow(result.rows[0] || { agent_id: cleanAgentId, mode });
+  }
+
+  const row = adapter.database.prepare(`
+    SELECT *
+    FROM agent_ratings
+    WHERE agent_id = ?
+      AND mode = ?
+    LIMIT 1
+  `).get(cleanAgentId, mode);
+  return normalizeRatingRow(row || { agent_id: cleanAgentId, mode });
 }
 
 async function createAnonymousUser(id) {
@@ -327,6 +440,19 @@ async function getUserById(userId) {
   return normalizeUserRow(adapter.database.prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }
 
+async function getUserByEmail(email) {
+  const adapter = await ensureDb();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!adapter || adapter.kind === 'none' || !cleanEmail) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query('SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1', [cleanEmail]);
+    return normalizeUserRow(result.rows[0] || null);
+  }
+
+  return normalizeUserRow(adapter.database.prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1').get(cleanEmail));
+}
+
 async function setUserAgentId(userId, agentId) {
   const adapter = await ensureDb();
   if (!adapter || adapter.kind === 'none') {
@@ -403,11 +529,27 @@ async function recordMatch({
   partyChainId,
   partyStreak,
   players,
+  currentRatings = {},
 }) {
   const adapter = await ensureDb();
-  if (!adapter || adapter.kind === 'none') return { id, roomId, mode };
-
+  const normalizedMode = String(mode || MAFIA_ELO_MODE).trim().toLowerCase() || MAFIA_ELO_MODE;
   const matchPlayers = Array.isArray(players) ? players : [];
+  const participantIds = listRatedParticipantIds(matchPlayers);
+  const ratingMatch = {
+    id,
+    mode: normalizedMode,
+    winner,
+    players: matchPlayers,
+  };
+
+  if (!adapter || adapter.kind === 'none') {
+    return {
+      id,
+      roomId,
+      mode: normalizedMode,
+      ratingUpdates: calculateMatchRatingChanges(ratingMatch, buildRatingSnapshotMap(participantIds, currentRatings)),
+    };
+  }
 
   if (adapter.kind === 'postgres') {
     const client = await adapter.pool.connect();
@@ -423,7 +565,7 @@ async function recordMatch({
       `, [
         id,
         roomId,
-        mode,
+        normalizedMode,
         winner || null,
         rounds || 0,
         durationMs || null,
@@ -433,28 +575,75 @@ async function recordMatch({
         partyStreak || 0,
       ]);
 
-      if (inserted.rowCount > 0) {
-        for (const player of matchPlayers) {
-          await client.query(`
-            INSERT INTO match_players (
-              match_id, user_id, player_name, role, is_bot, survived, placement, night_kill_credits
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          `, [
-            id,
-            player.userId || null,
-            player.name,
-            player.role || null,
-            Boolean(player.isBot),
-            Boolean(player.survived),
-            player.placement || null,
-            toNumber(player.nightKillCredits, 0),
-          ]);
-        }
+      if (inserted.rowCount === 0) {
+        await client.query('COMMIT');
+        return { id, roomId, mode: normalizedMode, duplicate: true, ratingUpdates: [] };
+      }
+
+      for (const player of matchPlayers) {
+        await client.query(`
+          INSERT INTO match_players (
+            match_id, user_id, player_name, role, is_bot, survived, placement, night_kill_credits
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+          id,
+          player.userId || null,
+          player.name,
+          player.role || null,
+          Boolean(player.isBot),
+          Boolean(player.survived),
+          player.placement || null,
+          toNumber(player.nightKillCredits, 0),
+        ]);
+      }
+
+      const ratingSnapshots = await getAgentRatingsMap(client, participantIds, normalizedMode);
+      const ratingUpdates = calculateMatchRatingChanges(ratingMatch, ratingSnapshots);
+
+      for (const update of ratingUpdates) {
+        await client.query(`
+          INSERT INTO agent_ratings (
+            agent_id, mode, mmr, peak_mmr, rated_matches, last_delta, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          ON CONFLICT (agent_id, mode) DO UPDATE
+          SET mmr = EXCLUDED.mmr,
+              peak_mmr = EXCLUDED.peak_mmr,
+              rated_matches = EXCLUDED.rated_matches,
+              last_delta = EXCLUDED.last_delta,
+              updated_at = NOW()
+        `, [
+          update.id,
+          normalizedMode,
+          update.mmrAfter,
+          update.peakMmrAfter,
+          update.ratedMatchesAfter,
+          update.delta,
+        ]);
+
+        await client.query(`
+          INSERT INTO agent_rating_events (
+            match_id, agent_id, mode, role, mmr_before, mmr_after, delta, expected_score, pool, provisional
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (match_id, agent_id) DO NOTHING
+        `, [
+          id,
+          update.id,
+          normalizedMode,
+          update.role || null,
+          update.mmrBefore,
+          update.mmrAfter,
+          update.delta,
+          update.expectedScore,
+          update.pool,
+          update.isProvisional,
+        ]);
       }
 
       await client.query('COMMIT');
-      return { id, roomId, mode };
+      return { id, roomId, mode: normalizedMode, ratingUpdates };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -475,12 +664,32 @@ async function recordMatch({
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const upsertRating = adapter.database.prepare(`
+    INSERT INTO agent_ratings (
+      agent_id, mode, mmr, peak_mmr, rated_matches, last_delta, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(agent_id, mode) DO UPDATE SET
+      mmr = excluded.mmr,
+      peak_mmr = excluded.peak_mmr,
+      rated_matches = excluded.rated_matches,
+      last_delta = excluded.last_delta,
+      updated_at = datetime('now')
+  `);
+  const insertRatingEvent = adapter.database.prepare(`
+    INSERT OR IGNORE INTO agent_rating_events (
+      match_id, agent_id, mode, role, mmr_before, mmr_after, delta, expected_score, pool, provisional
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let ratingUpdates = [];
 
   const transaction = adapter.database.transaction(() => {
     const result = insertMatch.run(
       id,
       roomId,
-      mode,
+      normalizedMode,
       winner || null,
       rounds || 0,
       durationMs || null,
@@ -504,20 +713,47 @@ async function recordMatch({
         toNumber(player.nightKillCredits, 0),
       );
     }
+
+    const ratingSnapshots = getAgentRatingsMapSync(adapter.database, participantIds, normalizedMode);
+    ratingUpdates = calculateMatchRatingChanges(ratingMatch, ratingSnapshots);
+
+    for (const update of ratingUpdates) {
+      upsertRating.run(
+        update.id,
+        normalizedMode,
+        update.mmrAfter,
+        update.peakMmrAfter,
+        update.ratedMatchesAfter,
+        update.delta,
+      );
+      insertRatingEvent.run(
+        id,
+        update.id,
+        normalizedMode,
+        update.role || null,
+        update.mmrBefore,
+        update.mmrAfter,
+        update.delta,
+        update.expectedScore,
+        update.pool,
+        update.isProvisional ? 1 : 0,
+      );
+    }
   });
 
   transaction();
-  return { id, roomId, mode };
+  return { id, roomId, mode: normalizedMode, ratingUpdates };
 }
 
-async function getMatchesByUser(userId, limit = 20) {
-  return getPlayerMatches(userId, limit);
+async function getMatchesByUser(userId, limit = 20, offset = 0) {
+  return getPlayerMatches(userId, limit, offset);
 }
 
-async function getPlayerMatches(userId, limit = 10) {
+async function getPlayerMatches(userId, limit = 10, offset = 0) {
   const adapter = await ensureDb();
   if (!adapter || adapter.kind === 'none' || !userId) return [];
   const cappedLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+  const cappedOffset = Math.max(Number(offset) || 0, 0);
 
   if (adapter.kind === 'postgres') {
     const result = await adapter.pool.query(`
@@ -541,8 +777,8 @@ async function getPlayerMatches(userId, limit = 10) {
       JOIN match_players mp ON mp.match_id = mr.id
       WHERE mp.user_id = $1
       ORDER BY mr.finished_at DESC
-      LIMIT $2
-    `, [userId, cappedLimit]);
+      LIMIT $2 OFFSET $3
+    `, [userId, cappedLimit, cappedOffset]);
     return result.rows.map(normalizeMatchRow);
   }
 
@@ -567,17 +803,18 @@ async function getPlayerMatches(userId, limit = 10) {
     JOIN match_players mp ON mp.match_id = mr.id
     WHERE mp.user_id = ?
     ORDER BY mr.finished_at DESC
-    LIMIT ?
-  `).all(userId, cappedLimit).map(normalizeMatchRow);
+    LIMIT ? OFFSET ?
+  `).all(userId, cappedLimit, cappedOffset).map(normalizeMatchRow);
 }
 
 async function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit = 25 } = {}) {
   const adapter = await ensureDb();
   if (!adapter || adapter.kind === 'none') return [];
   const cappedLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const normalizedMode = String(mode || MAFIA_ELO_MODE).trim().toLowerCase() || MAFIA_ELO_MODE;
 
   if (adapter.kind === 'postgres') {
-    const params = [mode];
+    const params = [normalizedMode];
     let whereWindow = '';
 
     if (windowHours && Number(windowHours) > 0) {
@@ -585,7 +822,6 @@ async function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit
       whereWindow = `AND mr.finished_at >= NOW() - ($${params.length} * INTERVAL '1 hour')`;
     }
 
-    params.push(cappedLimit);
     const result = await adapter.pool.query(`
       SELECT
         COALESCE(NULLIF(mp.user_id, ''), mp.player_name) AS id,
@@ -594,16 +830,23 @@ async function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit
         SUM(CASE WHEN LOWER(COALESCE(mp.role, '')) = LOWER(COALESCE(mr.winner, '')) THEN 1 ELSE 0 END)::int AS wins,
         SUM(CASE WHEN mp.survived THEN 1 ELSE 0 END)::int AS survivals,
         ROUND(AVG(mr.duration_ms))::int AS avg_duration_ms,
-        MAX(mr.finished_at) AS last_played_at
+        MAX(mr.finished_at) AS last_played_at,
+        COALESCE(MAX(ar.mmr), $${params.length + 1})::int AS mmr,
+        COALESCE(MAX(ar.peak_mmr), COALESCE(MAX(ar.mmr), $${params.length + 1}))::int AS peak_mmr,
+        COALESCE(MAX(ar.rated_matches), 0)::int AS rated_matches,
+        COALESCE(MAX(ar.last_delta), 0)::int AS last_delta
       FROM match_players mp
       JOIN match_results mr ON mr.id = mp.match_id
+      LEFT JOIN agent_ratings ar
+        ON ar.agent_id = COALESCE(NULLIF(mp.user_id, ''), mp.player_name)
+       AND ar.mode = mr.mode
       WHERE mp.is_bot = FALSE
         AND mr.mode = $1
         ${whereWindow}
       GROUP BY COALESCE(NULLIF(mp.user_id, ''), mp.player_name)
-      ORDER BY wins DESC, games_played DESC, survivals DESC, last_played_at DESC
-      LIMIT $${params.length}
-    `, params);
+      ORDER BY mmr DESC, wins DESC, games_played DESC, last_played_at DESC
+      LIMIT $${params.length + 2}
+    `, [...params, DEFAULT_MMR, cappedLimit]);
     return result.rows.map((row) => ({
       ...row,
       avg_duration_ms: row.avg_duration_ms == null ? null : toNumber(row.avg_duration_ms),
@@ -611,15 +854,13 @@ async function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit
     }));
   }
 
-  const params = [mode];
+  const params = [normalizedMode];
   let windowFilter = '';
 
   if (windowHours && Number(windowHours) > 0) {
     windowFilter = "AND mr.finished_at >= datetime('now', ?)";
     params.push(`-${Number(windowHours)} hours`);
   }
-
-  params.push(cappedLimit);
 
   return adapter.database.prepare(`
     SELECT
@@ -629,16 +870,23 @@ async function getLeaderboardEntries({ mode = 'mafia', windowHours = null, limit
       SUM(CASE WHEN LOWER(COALESCE(mp.role, '')) = LOWER(COALESCE(mr.winner, '')) THEN 1 ELSE 0 END) AS wins,
       SUM(CASE WHEN mp.survived = 1 THEN 1 ELSE 0 END) AS survivals,
       ROUND(AVG(mr.duration_ms)) AS avg_duration_ms,
-      MAX(mr.finished_at) AS last_played_at
+      MAX(mr.finished_at) AS last_played_at,
+      COALESCE(MAX(ar.mmr), ?) AS mmr,
+      COALESCE(MAX(ar.peak_mmr), COALESCE(MAX(ar.mmr), ?)) AS peak_mmr,
+      COALESCE(MAX(ar.rated_matches), 0) AS rated_matches,
+      COALESCE(MAX(ar.last_delta), 0) AS last_delta
     FROM match_players mp
     JOIN match_results mr ON mr.id = mp.match_id
+    LEFT JOIN agent_ratings ar
+      ON ar.agent_id = COALESCE(NULLIF(mp.user_id, ''), mp.player_name)
+     AND ar.mode = mr.mode
     WHERE mp.is_bot = 0
       AND mr.mode = ?
       ${windowFilter}
     GROUP BY COALESCE(NULLIF(mp.user_id, ''), mp.player_name)
-    ORDER BY wins DESC, games_played DESC, survivals DESC, last_played_at DESC
+    ORDER BY mmr DESC, wins DESC, games_played DESC, last_played_at DESC
     LIMIT ?
-  `).all(...params).map((row) => ({
+  `).all(DEFAULT_MMR, DEFAULT_MMR, ...params, cappedLimit).map((row) => ({
     ...row,
     last_played_at: normalizeIso(row.last_played_at),
   }));
@@ -798,6 +1046,7 @@ async function getGlobalStats(mode) {
 async function getAgentStats(agentId) {
   const adapter = await ensureDb();
   if (!adapter || adapter.kind === 'none' || !agentId) return null;
+  const cleanAgentId = String(agentId || '').trim();
 
   let row = null;
 
@@ -816,8 +1065,8 @@ async function getAgentStats(agentId) {
         MAX(mr.finished_at) AS last_played_at
       FROM match_players mp
       JOIN match_results mr ON mr.id = mp.match_id
-      WHERE mp.user_id = $1
-    `, [agentId]);
+      WHERE COALESCE(NULLIF(mp.user_id, ''), mp.player_name) = $1
+    `, [cleanAgentId]);
     row = result.rows[0] || null;
   } else {
     row = adapter.database.prepare(`
@@ -834,9 +1083,11 @@ async function getAgentStats(agentId) {
         MAX(mr.finished_at) AS last_played_at
       FROM match_players mp
       JOIN match_results mr ON mr.id = mp.match_id
-      WHERE mp.user_id = ?
-    `).get(agentId);
+      WHERE COALESCE(NULLIF(mp.user_id, ''), mp.player_name) = ?
+    `).get(cleanAgentId);
   }
+
+  const rating = await getAgentRating(cleanAgentId, { mode: MAFIA_ELO_MODE });
 
   const gamesPlayed = toNumber(row?.games_played, 0);
   const wins = toNumber(row?.wins, 0);
@@ -860,6 +1111,11 @@ async function getAgentStats(agentId) {
     townWins,
     nightKillCredits: toNumber(row?.night_kill_credits, 0),
     lastPlayedAt: normalizeIso(row?.last_played_at),
+    mmr: rating.mmr,
+    peakMmr: rating.peakMmr,
+    ratedMatches: rating.ratedMatches,
+    lastRatingDelta: rating.lastDelta,
+    isProvisional: rating.isProvisional,
     byRole: {
       mafia: {
         gamesPlayed: mafiaGames,
@@ -870,6 +1126,109 @@ async function getAgentStats(agentId) {
         wins: townWins,
       },
     },
+  };
+}
+
+async function getRatingHealth({ mode = MAFIA_ELO_MODE } = {}) {
+  const adapter = await ensureDb();
+  if (!adapter || adapter.kind === 'none') return null;
+  const normalizedMode = String(mode || MAFIA_ELO_MODE).trim().toLowerCase() || MAFIA_ELO_MODE;
+
+  if (adapter.kind === 'postgres') {
+    const [matchResult, ratingResult, deltaResult] = await Promise.all([
+      adapter.pool.query(`
+        SELECT
+          COUNT(*)::int AS total_games,
+          COUNT(*) FILTER (WHERE LOWER(COALESCE(winner, '')) = 'town')::int AS town_wins,
+          COUNT(*) FILTER (WHERE LOWER(COALESCE(winner, '')) = 'mafia')::int AS mafia_wins
+        FROM match_results
+        WHERE mode = $1
+      `, [normalizedMode]),
+      adapter.pool.query(`
+        SELECT
+          ROUND(AVG(mmr))::int AS average_mmr,
+          COUNT(*)::int AS rated_agents,
+          COUNT(*) FILTER (WHERE rated_matches < $2)::int AS provisional_agents
+        FROM agent_ratings
+        WHERE mode = $1
+      `, [normalizedMode, PROVISIONAL_MATCH_COUNT]),
+      adapter.pool.query(`
+        SELECT
+          ROUND(AVG(CASE WHEN LOWER(COALESCE(role, '')) = 'town' THEN delta END)::numeric, 2) AS town_delta,
+          ROUND(AVG(CASE WHEN LOWER(COALESCE(role, '')) = 'mafia' THEN delta END)::numeric, 2) AS mafia_delta,
+          COUNT(DISTINCT match_id)::int AS rated_match_count
+        FROM agent_rating_events
+        WHERE mode = $1
+      `, [normalizedMode]),
+    ]);
+
+    const matchRow = matchResult.rows[0] || {};
+    const ratingRow = ratingResult.rows[0] || {};
+    const deltaRow = deltaResult.rows[0] || {};
+    const totalGames = toNumber(matchRow.total_games, 0);
+    const ratedAgents = toNumber(ratingRow.rated_agents, 0);
+    const provisionalAgents = toNumber(ratingRow.provisional_agents, 0);
+
+    return {
+      mode: normalizedMode,
+      sampleSize: totalGames,
+      ratedMatchCount: toNumber(deltaRow.rated_match_count, 0),
+      townWinRate: totalGames ? Number(((toNumber(matchRow.town_wins, 0) / totalGames) * 100).toFixed(1)) : 0,
+      mafiaWinRate: totalGames ? Number(((toNumber(matchRow.mafia_wins, 0) / totalGames) * 100).toFixed(1)) : 0,
+      averageMmr: ratedAgents ? toNumber(ratingRow.average_mmr, DEFAULT_MMR) : DEFAULT_MMR,
+      avgDeltaByRole: {
+        town: deltaRow.town_delta == null ? null : Number(deltaRow.town_delta),
+        mafia: deltaRow.mafia_delta == null ? null : Number(deltaRow.mafia_delta),
+      },
+      ratedAgents,
+      provisionalAgents,
+      provisionalShare: ratedAgents ? Number(((provisionalAgents / ratedAgents) * 100).toFixed(1)) : 0,
+    };
+  }
+
+  const matchRow = adapter.database.prepare(`
+    SELECT
+      COUNT(*) AS total_games,
+      COUNT(CASE WHEN LOWER(COALESCE(winner, '')) = 'town' THEN 1 END) AS town_wins,
+      COUNT(CASE WHEN LOWER(COALESCE(winner, '')) = 'mafia' THEN 1 END) AS mafia_wins
+    FROM match_results
+    WHERE mode = ?
+  `).get(normalizedMode) || {};
+  const ratingRow = adapter.database.prepare(`
+    SELECT
+      ROUND(AVG(mmr)) AS average_mmr,
+      COUNT(*) AS rated_agents,
+      COUNT(CASE WHEN rated_matches < ? THEN 1 END) AS provisional_agents
+    FROM agent_ratings
+    WHERE mode = ?
+  `).get(PROVISIONAL_MATCH_COUNT, normalizedMode) || {};
+  const deltaRow = adapter.database.prepare(`
+    SELECT
+      ROUND(AVG(CASE WHEN LOWER(COALESCE(role, '')) = 'town' THEN delta END), 2) AS town_delta,
+      ROUND(AVG(CASE WHEN LOWER(COALESCE(role, '')) = 'mafia' THEN delta END), 2) AS mafia_delta,
+      COUNT(DISTINCT match_id) AS rated_match_count
+    FROM agent_rating_events
+    WHERE mode = ?
+  `).get(normalizedMode) || {};
+
+  const totalGames = toNumber(matchRow.total_games, 0);
+  const ratedAgents = toNumber(ratingRow.rated_agents, 0);
+  const provisionalAgents = toNumber(ratingRow.provisional_agents, 0);
+
+  return {
+    mode: normalizedMode,
+    sampleSize: totalGames,
+    ratedMatchCount: toNumber(deltaRow.rated_match_count, 0),
+    townWinRate: totalGames ? Number(((toNumber(matchRow.town_wins, 0) / totalGames) * 100).toFixed(1)) : 0,
+    mafiaWinRate: totalGames ? Number(((toNumber(matchRow.mafia_wins, 0) / totalGames) * 100).toFixed(1)) : 0,
+    averageMmr: ratedAgents ? toNumber(ratingRow.average_mmr, DEFAULT_MMR) : DEFAULT_MMR,
+    avgDeltaByRole: {
+      town: deltaRow.town_delta == null ? null : Number(deltaRow.town_delta),
+      mafia: deltaRow.mafia_delta == null ? null : Number(deltaRow.mafia_delta),
+    },
+    ratedAgents,
+    provisionalAgents,
+    provisionalShare: ratedAgents ? Number(((provisionalAgents / ratedAgents) * 100).toFixed(1)) : 0,
   };
 }
 
@@ -988,6 +1347,7 @@ module.exports = {
   upgradeUser,
   getUserByToken,
   getUserById,
+  getUserByEmail,
   setUserAgentId,
   createSession,
   getSessionByToken,
@@ -999,6 +1359,7 @@ module.exports = {
   getMatch,
   getGlobalStats,
   getAgentStats,
+  getRatingHealth,
   createReport,
   getReports,
   updateReportStatus,

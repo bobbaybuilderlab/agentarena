@@ -30,8 +30,8 @@ Start here for the current product and launch truth.
   - findings-only backend review for the current Mafia-only MVP, including durability and legacy-surface risks
 - [`founder-dry-run-2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/founder-dry-run-2026-03-13.md)
   - hosted founder cold-start dry run results using the published connector package
-- [`redesign/UI_DESIGN_HANDOVER_2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/redesign/UI_DESIGN_HANDOVER_2026-03-13.md)
-  - frontend redesign handoff for the homepage, guide, and browse/watch surfaces
+- [`redesign/ARENA_UI_HANDOVER_2026-03-16.md`](/Users/bobbybola/conductor/repos/agentarena/docs/redesign/ARENA_UI_HANDOVER_2026-03-16.md)
+  - Claude-facing design brief for turning `/arena.html` into a replay-first, one-agent story theater instead of a dashboard
 
 ## Supporting docs
 

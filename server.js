@@ -35,8 +35,10 @@ const {
   getMatchBaselineSummary,
   getGlobalStats,
   getAgentStats,
+  getRatingHealth,
   getUserByToken,
   getUserById,
+  getUserByEmail,
   getSessionByToken,
   setUserAgentId,
   createAnonymousUser,
@@ -50,6 +52,13 @@ const {
   closeDb,
 } = require('./server/db');
 const { buildResolvedPersona } = require('./extensions/clawofdeceit-connect/style-presets.cjs');
+const {
+  DEFAULT_MMR,
+  buildDefaultRatingSnapshot,
+  normalizeRatingSnapshot,
+  calculateMatchRatingChanges,
+  resolveParticipantId,
+} = require('./server/services/mafia-elo');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { track: trackEvent } = require('./server/services/analytics');
@@ -70,6 +79,51 @@ function buildArenaPersona({ style, presetId, intensity } = {}) {
     presetId: resolved.presetId,
     intensity: clampIntensity(intensity, 6),
   };
+}
+
+function ensureAgentRatingMirror(agent) {
+  if (!agent || typeof agent !== 'object') return null;
+  const rating = buildDefaultRatingSnapshot({
+    mmr: agent.mmr,
+    peakMmr: agent.peakMmr,
+    ratedMatches: agent.ratedMatches,
+    lastRatingDelta: agent.lastRatingDelta,
+  });
+  agent.mmr = rating.mmr;
+  agent.peakMmr = rating.peakMmr;
+  agent.ratedMatches = rating.ratedMatches;
+  agent.lastRatingDelta = rating.lastRatingDelta;
+  return agent;
+}
+
+function getAgentRatingMirror(agentId) {
+  const agent = agentProfiles.get(String(agentId || '').trim());
+  return normalizeRatingSnapshot(agent ? ensureAgentRatingMirror(agent) : {});
+}
+
+function buildCurrentRatingsForMatch(matchRecord) {
+  const snapshots = Object.create(null);
+  for (const player of matchRecord?.players || []) {
+    const participantId = resolveParticipantId(player);
+    if (!participantId) continue;
+    snapshots[participantId] = getAgentRatingMirror(participantId);
+  }
+  return snapshots;
+}
+
+function syncAgentRatingMirrors(ratingUpdates = []) {
+  let changed = false;
+  for (const update of ratingUpdates) {
+    const agent = agentProfiles.get(String(update?.id || '').trim());
+    if (!agent) continue;
+    ensureAgentRatingMirror(agent);
+    agent.mmr = Number(update.mmrAfter || DEFAULT_MMR);
+    agent.peakMmr = Number(update.peakMmrAfter || agent.mmr);
+    agent.ratedMatches = Number(update.ratedMatchesAfter || 0);
+    agent.lastRatingDelta = Number(update.delta || 0);
+    changed = true;
+  }
+  if (changed) persistState();
 }
 
 const app = express();
@@ -237,7 +291,52 @@ function logRoomEvent(mode, room, type, payload = {}) {
   }
 }
 
+const MAFIA_REPLAY_EVENT_TYPES = new Set([
+  'PHASE',
+  'NIGHT_ELIMINATION',
+  'DAY_EXECUTION',
+  'VOTE_TIED',
+  'GAME_FINISHED',
+  'PLAYER_FORFEITED',
+  'REMATCH_READY',
+]);
+
+function syncMafiaReplayEvents(room) {
+  if (!room?.id || !Array.isArray(room.events)) return;
+  const cursor = Math.max(0, Math.min(Number(room._syncedReplayEventIndex) || 0, room.events.length));
+  for (let index = cursor; index < room.events.length; index += 1) {
+    const event = room.events[index];
+    if (!event?.type || !MAFIA_REPLAY_EVENT_TYPES.has(event.type)) continue;
+    const target = event.targetId
+      ? (room.players || []).find((player) => player.id === event.targetId)
+      : null;
+    const player = event.playerId
+      ? (room.players || []).find((entry) => entry.id === event.playerId)
+      : null;
+    const actor = event.actorId
+      ? (room.players || []).find((player) => player.id === event.actorId)
+      : null;
+    logRoomEvent('mafia', room, event.type, {
+      actorId: event.actorId || null,
+      actorName: event.actorName || actor?.name || null,
+      targetId: event.targetId || null,
+      targetName: target?.name || null,
+      playerId: event.playerId || null,
+      playerName: player?.name || null,
+      actorIds: Array.isArray(event.actorIds) ? event.actorIds : undefined,
+      reason: event.reason || null,
+      text: event.text || null,
+      winner: event.winner || room.winner || null,
+      status: room.status,
+      phase: event.phase || room.phase || null,
+      day: Number(event.day || room.day || 0) || 0,
+    });
+  }
+  room._syncedReplayEventIndex = room.events.length;
+}
+
 function emitMafiaRoom(room) {
+  syncMafiaReplayEvents(room);
   io.to(`mafia:${room.id}`).emit('mafia:state', mafiaGame.toPublic(room));
 }
 
@@ -924,9 +1023,17 @@ function recordFirstMatchCompletion(mode, roomId) {
     if (!matchRecord) return;
     completedMatchRecords.unshift(matchRecord);
     if (completedMatchRecords.length > COMPLETED_MATCH_RECORD_CAP) completedMatchRecords.length = COMPLETED_MATCH_RECORD_CAP;
-    void recordMatch(matchRecord).catch((err) => {
-      logStructured('error.recordMatch', { error: err.message, mode, roomId, matchId: matchRecord.id });
-    });
+    void recordMatch({
+      ...matchRecord,
+      currentRatings: buildCurrentRatingsForMatch(matchRecord),
+    })
+      .then((recorded) => {
+        matchRecord.ratingUpdates = Array.isArray(recorded?.ratingUpdates) ? recorded.ratingUpdates : [];
+        syncAgentRatingMirrors(matchRecord.ratingUpdates);
+      })
+      .catch((err) => {
+        logStructured('error.recordMatch', { error: err.message, mode, roomId, matchId: matchRecord.id });
+      });
   } catch (err) {
     logStructured('error.recordMatch', { error: err.message });
   }
@@ -965,6 +1072,12 @@ function summarizeLeaderboardEntry(entry) {
   const wins = Number(entry.wins || 0);
   const survivals = Number(entry.survivals || entry.survivalCount || 0);
   const avgDurationMs = Number(entry.avg_duration_ms || entry.avgDurationMs || 0) || null;
+  const rating = normalizeRatingSnapshot({
+    mmr: entry.mmr,
+    peakMmr: entry.peak_mmr || entry.peakMmr,
+    ratedMatches: entry.rated_matches || entry.ratedMatches,
+    lastRatingDelta: entry.last_delta || entry.lastDelta || entry.lastRatingDelta,
+  });
   const winRate = gamesPlayed ? Math.round((wins / gamesPlayed) * 100) : 0;
   const survivalRate = gamesPlayed ? Math.round((survivals / gamesPlayed) * 100) : 0;
 
@@ -978,6 +1091,11 @@ function summarizeLeaderboardEntry(entry) {
     winRate,
     avgDurationMs,
     lastPlayedAt: entry.last_played_at || entry.lastPlayedAt || null,
+    mmr: rating.mmr,
+    peakMmr: rating.peakMmr,
+    ratedMatches: rating.ratedMatches,
+    lastRatingDelta: rating.lastRatingDelta,
+    isProvisional: rating.isProvisional,
   };
   summary.badges = badgesForEntry(summary);
   return summary;
@@ -1044,9 +1162,10 @@ function buildLeaderboardFromMemory({ mode = 'mafia', windowHours = null, limit 
   return [...grouped.values()]
     .map((entry) => summarizeLeaderboardEntry({
       ...entry,
+      ...getAgentRatingMirror(entry.id),
       avgDurationMs: entry.durationSamples ? Math.round(entry.totalDurationMs / entry.durationSamples) : null,
     }))
-    .sort((a, b) => b.wins - a.wins || b.gamesPlayed - a.gamesPlayed || b.survivalRate - a.survivalRate || String(b.lastPlayedAt || '').localeCompare(String(a.lastPlayedAt || '')))
+    .sort((a, b) => b.mmr - a.mmr || b.wins - a.wins || b.gamesPlayed - a.gamesPlayed || String(b.lastPlayedAt || '').localeCompare(String(a.lastPlayedAt || '')))
     .slice(0, limit);
 }
 
@@ -1177,6 +1296,11 @@ function emptyAgentStats() {
     townWins: 0,
     nightKillCredits: 0,
     lastPlayedAt: null,
+    mmr: DEFAULT_MMR,
+    peakMmr: DEFAULT_MMR,
+    ratedMatches: 0,
+    lastRatingDelta: 0,
+    isProvisional: true,
     byRole: {
       mafia: { gamesPlayed: 0, wins: 0 },
       town: { gamesPlayed: 0, wins: 0 },
@@ -1189,6 +1313,12 @@ function getAgentStatsFallback(agentId) {
   if (!normalizedAgentId) return null;
 
   const summary = emptyAgentStats();
+  const rating = getAgentRatingMirror(normalizedAgentId);
+  summary.mmr = rating.mmr;
+  summary.peakMmr = rating.peakMmr;
+  summary.ratedMatches = rating.ratedMatches;
+  summary.lastRatingDelta = rating.lastRatingDelta;
+  summary.isProvisional = rating.isProvisional;
 
   for (const match of completedMatchRecords) {
     if (!match) continue;
@@ -1324,6 +1454,52 @@ async function buildMatchBaseline(mode = 'mafia') {
   };
 }
 
+function averageNumber(values = []) {
+  if (!values.length) return null;
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
+}
+
+function buildRatingHealthFallback(mode = 'mafia') {
+  const matches = completedMatchRecords.filter((match) => match?.mode === mode);
+  const totalGames = matches.length;
+  const townWins = matches.filter((match) => String(match?.winner || '').toLowerCase() === 'town').length;
+  const mafiaWins = matches.filter((match) => String(match?.winner || '').toLowerCase() === 'mafia').length;
+  const townDeltas = [];
+  const mafiaDeltas = [];
+
+  for (const match of matches) {
+    for (const update of match?.ratingUpdates || []) {
+      const role = String(update?.role || '').toLowerCase();
+      if (role === 'town') townDeltas.push(Number(update.delta || 0));
+      if (role === 'mafia') mafiaDeltas.push(Number(update.delta || 0));
+    }
+  }
+
+  const ratedAgents = [...agentProfiles.values()]
+    .map((agent) => ensureAgentRatingMirror(agent))
+    .filter((agent) => Number(agent?.ratedMatches || 0) > 0);
+  const provisionalAgents = ratedAgents.filter((agent) => Number(agent.ratedMatches || 0) < 10).length;
+  const averageMmr = ratedAgents.length
+    ? Math.round(ratedAgents.reduce((sum, agent) => sum + Number(agent.mmr || DEFAULT_MMR), 0) / ratedAgents.length)
+    : DEFAULT_MMR;
+
+  return {
+    mode,
+    sampleSize: totalGames,
+    ratedMatchCount: matches.filter((match) => Array.isArray(match?.ratingUpdates) && match.ratingUpdates.length > 0).length,
+    townWinRate: totalGames ? Number(((townWins / totalGames) * 100).toFixed(1)) : 0,
+    mafiaWinRate: totalGames ? Number(((mafiaWins / totalGames) * 100).toFixed(1)) : 0,
+    averageMmr,
+    avgDeltaByRole: {
+      town: averageNumber(townDeltas),
+      mafia: averageNumber(mafiaDeltas),
+    },
+    ratedAgents: ratedAgents.length,
+    provisionalAgents,
+    provisionalShare: ratedAgents.length ? Number(((provisionalAgents / ratedAgents.length) * 100).toFixed(1)) : 0,
+  };
+}
+
 let _persistDirty = false;
 let _persistTimer = null;
 
@@ -1355,7 +1531,10 @@ function loadState() {
   try {
     if (!fs.existsSync(DATA_FILE)) return;
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    (parsed.agents || []).forEach((a) => agentProfiles.set(a.id, a));
+    (parsed.agents || []).forEach((a) => {
+      ensureAgentRatingMirror(a);
+      agentProfiles.set(a.id, a);
+    });
   } catch (err) {
     logStructured('error.loadState', { error: err.message });
   }
@@ -1540,17 +1719,31 @@ function getAgentLastConnectedAt(agent) {
   return Number(runtime?.connectedAt || agent?.openclaw?.connectedAt || 0);
 }
 
-function compareConnectedOwnedAgents(a, b) {
-  const aArena = summarizeAgentArenaState(a.id);
-  const bArena = summarizeAgentArenaState(b.id);
-  const aLive = Boolean(aArena.activeRoomId);
-  const bLive = Boolean(bArena.activeRoomId);
+function toActivityTimestamp(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toActivityIso(value) {
+  const timestamp = toActivityTimestamp(value);
+  return timestamp > 0 ? new Date(timestamp).toISOString() : null;
+}
+
+function compareOwnedAgentSummaries(a, b) {
+  const aLive = Boolean(a?.arena?.activeRoomId);
+  const bLive = Boolean(b?.arena?.activeRoomId);
   if (aLive !== bLive) return aLive ? -1 : 1;
 
-  const connectedAtDelta = getAgentLastConnectedAt(b) - getAgentLastConnectedAt(a);
-  if (connectedAtDelta !== 0) return connectedAtDelta;
+  const aRuntimeConnected = Boolean(a?.arena?.runtimeConnected);
+  const bRuntimeConnected = Boolean(b?.arena?.runtimeConnected);
+  if (aRuntimeConnected !== bRuntimeConnected) return aRuntimeConnected ? -1 : 1;
 
-  return String(a.name || a.id).localeCompare(String(b.name || b.id));
+  const activityDelta = toActivityTimestamp(b?.activityAt) - toActivityTimestamp(a?.activityAt);
+  if (activityDelta !== 0) return activityDelta;
+
+  return String(a?.name || a?.id || '').localeCompare(String(b?.name || b?.id || ''));
 }
 
 function listOwnedAgentsForUser(ownerUserId) {
@@ -1560,17 +1753,18 @@ function listOwnedAgentsForUser(ownerUserId) {
     .filter((agent) => String(agent?.ownerUserId || '').trim() === cleanUserId);
 }
 
-function listConnectedOwnedAgentsForUser(ownerUserId) {
-  return listOwnedAgentsForUser(ownerUserId)
-    .filter((agent) => summarizeAgentArenaState(agent.id).runtimeConnected)
-    .sort(compareConnectedOwnedAgents);
-}
-
-function summarizeOwnedAgentProfile(agentOrId) {
+function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
   const agent = typeof agentOrId === 'string'
     ? agentProfiles.get(String(agentOrId || '').trim())
     : agentOrId;
   if (!agent?.id) return null;
+  ensureAgentRatingMirror(agent);
+  const lastConnectedAt = toActivityIso(getAgentLastConnectedAt(agent));
+  const lastPlayedAt = stats?.lastPlayedAt || null;
+  const activityAt = toActivityIso(Math.max(
+    toActivityTimestamp(lastConnectedAt),
+    toActivityTimestamp(lastPlayedAt),
+  ));
   const arena = {
     ...summarizeAgentArenaState(agent.id),
     ...buildArenaAvailability(),
@@ -1582,7 +1776,36 @@ function summarizeOwnedAgentProfile(agentOrId) {
     persona: agent.persona || null,
     watchUrl: buildAgentArenaUrl(agent.id, arena),
     arena,
+    gamesPlayed: Number(stats?.gamesPlayed || 0),
+    mmr: Number(stats?.mmr ?? agent.mmr ?? DEFAULT_MMR),
+    peakMmr: Number(stats?.peakMmr ?? agent.peakMmr ?? DEFAULT_MMR),
+    ratedMatches: Number(stats?.ratedMatches ?? agent.ratedMatches ?? 0),
+    lastRatingDelta: Number(stats?.lastRatingDelta ?? agent.lastRatingDelta ?? 0),
+    isProvisional: Boolean(stats?.isProvisional ?? normalizeRatingSnapshot(agent).isProvisional),
+    lastPlayedAt,
+    lastConnectedAt,
+    activityAt,
   };
+}
+
+async function listRenderableOwnedAgentsForUser(ownerUserId) {
+  const ownedAgents = listOwnedAgentsForUser(ownerUserId);
+  if (!ownedAgents.length) return [];
+
+  const summaries = await Promise.all(ownedAgents.map(async (agent) => {
+    const statsBundle = await buildOwnedAgentStats(agent.id);
+    const summary = summarizeOwnedAgentProfile(agent, {
+      stats: statsBundle?.stats || null,
+    });
+    if (!summary) return null;
+
+    if (summary.arena?.runtimeConnected) return summary;
+    if (summary.lastPlayedAt) return summary;
+    if (summary.lastConnectedAt) return summary;
+    return null;
+  }));
+
+  return summaries.filter(Boolean).sort(compareOwnedAgentSummaries);
 }
 
 async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', includeStats = false } = {}) {
@@ -1601,19 +1824,19 @@ async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', incl
   if (primaryAgentId) rescueLegacyOwnedAgentOwnership(siteSession.userId, primaryAgentId);
 
   const requestedId = String(requestedAgentId || '').trim();
-  const connectedOwnedAgents = listConnectedOwnedAgentsForUser(siteSession.userId);
-  const connectedById = new Map(connectedOwnedAgents.map((agent) => [agent.id, agent]));
+  const ownedAgents = await listRenderableOwnedAgentsForUser(siteSession.userId);
+  const ownedById = new Map(ownedAgents.map((agent) => [agent.id, agent]));
 
-  let selectedAgent = requestedId ? connectedById.get(requestedId) || null : null;
+  let selectedAgent = requestedId ? ownedById.get(requestedId) || null : null;
   let selectionSource = selectedAgent ? 'query' : 'none';
 
   if (!selectedAgent && primaryAgentId) {
-    selectedAgent = connectedById.get(primaryAgentId) || null;
+    selectedAgent = ownedById.get(primaryAgentId) || null;
     if (selectedAgent) selectionSource = 'primary';
   }
 
-  if (!selectedAgent && connectedOwnedAgents.length > 0) {
-    selectedAgent = connectedOwnedAgents[0];
+  if (!selectedAgent && ownedAgents.length > 0) {
+    selectedAgent = ownedAgents[0];
     selectionSource = 'auto';
   }
 
@@ -1622,12 +1845,12 @@ async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', incl
     primaryAgentId = selectedAgent.id;
   }
 
-  const agent = summarizeOwnedAgentProfile(selectedAgent);
+  const agent = selectedAgent || null;
   return {
     primaryAgentId,
     selectedAgentId: agent?.id || null,
     selectionSource,
-    agents: connectedOwnedAgents.map((entry) => summarizeOwnedAgentProfile(entry)).filter(Boolean),
+    agents: ownedAgents,
     agent,
     statsBundle: includeStats && agent?.id ? await buildOwnedAgentStats(agent.id) : null,
   };
@@ -1663,6 +1886,21 @@ async function resolveMatchAgentId(rawId) {
 
 function summarizeOwnedAgent(agentId) {
   return summarizeOwnedAgentProfile(agentId);
+}
+
+function decorateMatchForClient(match) {
+  const normalizedMode = String(match?.mode || 'mafia').trim().toLowerCase() || 'mafia';
+  const roomId = String(match?.roomId || match?.room_id || '').trim().toUpperCase();
+  return {
+    ...match,
+    replayUrl: roomId
+      ? `/api/rooms/${encodeURIComponent(roomId)}/replay?mode=${encodeURIComponent(normalizedMode)}`
+      : null,
+  };
+}
+
+function decorateMatchesForClient(matches = []) {
+  return Array.isArray(matches) ? matches.map((match) => decorateMatchForClient(match)) : [];
 }
 
 function getAgentRuntime(agentId) {
@@ -2108,6 +2346,132 @@ app.post('/api/auth/upgrade', async (req, res) => {
   }
 });
 
+// ── Magic link login ──
+const magicLinkTokens = new Map();
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const MAGIC_LINK_FROM = process.env.MAGIC_LINK_FROM || 'Claw of Deceit <noreply@clawofdeceit.com>';
+
+async function sendMagicLinkEmail(toEmail, magicUrl) {
+  if (!RESEND_API_KEY) {
+    console.log(`[magic-link] (no RESEND_API_KEY, logging to console)\n  → ${magicUrl}`);
+    return { sent: false, reason: 'no_api_key' };
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+      body: JSON.stringify({
+        from: MAGIC_LINK_FROM,
+        to: [toEmail],
+        subject: 'Your Claw of Deceit Login Link',
+        html: `<p>Click the link below to log in to your Claw of Deceit dashboard:</p>
+<p><a href="${magicUrl}" style="display:inline-block;padding:12px 24px;background:#DC2626;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">Log In to Claw of Deceit</a></p>
+<p style="color:#888;">This link expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`,
+      }),
+    });
+    const data = await res.json();
+    if (data.id) return { sent: true };
+    logStructured('error.magicLink.send', { error: data.message || 'Unknown Resend error' });
+    return { sent: false, reason: data.message || 'send_failed' };
+  } catch (err) {
+    logStructured('error.magicLink.send', { error: err.message });
+    return { sent: false, reason: 'network_error' };
+  }
+}
+
+app.post('/api/auth/magic-link', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+
+  // Look up existing user, or register a new one
+  let user = await getUserByEmail(email);
+  let isNewUser = false;
+
+  if (!user) {
+    // Auto-create account for new emails
+    try {
+      const userId = shortId(12);
+      await createAnonymousUser(userId);
+      await upgradeUser(userId, { email });
+      user = await getUserById(userId);
+      isNewUser = true;
+    } catch (err) {
+      if (/unique|duplicate key/i.test(String(err.message || ''))) {
+        // Race condition — user was created between check and insert
+        user = await getUserByEmail(email);
+      } else {
+        return res.status(500).json({ ok: false, error: 'Failed to create account' });
+      }
+    }
+  }
+
+  if (!user) {
+    return res.status(500).json({ ok: false, error: 'Failed to resolve account' });
+  }
+
+  // Generate magic link token
+  const magicToken = shortId(32);
+  magicLinkTokens.set(magicToken, {
+    userId: user.id,
+    email,
+    expiresAt: Date.now() + MAGIC_LINK_TTL_MS,
+  });
+
+  // Clean up expired tokens periodically
+  if (magicLinkTokens.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of magicLinkTokens) {
+      if (v.expiresAt < now) magicLinkTokens.delete(k);
+    }
+  }
+
+  const publicBaseUrl = resolvePublicBaseUrl(req);
+  const magicUrl = `${publicBaseUrl}/api/auth/verify?token=${encodeURIComponent(magicToken)}`;
+
+  const sendResult = await sendMagicLinkEmail(email, magicUrl);
+
+  res.json({
+    ok: true,
+    isNewUser,
+    emailSent: sendResult.sent,
+    // In dev mode (no Resend key), return the magic URL so the user can click it directly
+    ...(sendResult.sent ? {} : { magicUrl }),
+  });
+});
+
+app.get('/api/auth/verify', async (req, res) => {
+  const magicToken = String(req.query.token || '').trim();
+  if (!magicToken) return res.status(400).send('Missing token');
+
+  const entry = magicLinkTokens.get(magicToken);
+  if (!entry) return res.status(400).send('Invalid or expired login link. <a href="/arena.html">Try again</a>');
+  if (Date.now() > entry.expiresAt) {
+    magicLinkTokens.delete(magicToken);
+    return res.status(400).send('This login link has expired. <a href="/arena.html">Request a new one</a>');
+  }
+
+  // Consume the token (one-time use)
+  magicLinkTokens.delete(magicToken);
+
+  // Create a session for this user
+  const sessionToken = shortId(24);
+  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+
+  try {
+    await createSession(shortId(8), entry.userId, sessionToken, expiresAt);
+    setCachedSession({ token: sessionToken, userId: entry.userId, email: entry.email, createdAt: Date.now(), expiresAt });
+  } catch (err) {
+    logStructured('error.magicLink.verify', { error: err.message });
+    return res.status(500).send('Failed to create session. <a href="/arena.html">Try again</a>');
+  }
+
+  // Redirect to dashboard with the session token embedded so the client can store it
+  res.redirect(`/arena.html?authToken=${encodeURIComponent(sessionToken)}`);
+});
+
 // ── Match history for authenticated user ──
 app.get('/api/matches/mine', async (req, res) => {
   const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
@@ -2117,6 +2481,7 @@ app.get('/api/matches/mine', async (req, res) => {
     const siteSession = await resolveSiteSession(req);
     if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
     const ownedContext = await buildOwnedArenaContext(siteSession, {
       requestedAgentId: req.query.agentId,
     });
@@ -2125,11 +2490,11 @@ app.get('/api/matches/mine', async (req, res) => {
     let source = 'none';
     let durability = 'none';
     if (agentId) {
-      matches = await getPlayerMatches(agentId, limit);
+      matches = await getPlayerMatches(agentId, limit, offset);
       if (matches.length) {
         source = 'database';
         durability = 'database';
-      } else {
+      } else if (offset === 0) {
         matches = getPlayerMatchesFallback(agentId, limit);
         source = 'memory';
         durability = 'ephemeral_memory';
@@ -2140,7 +2505,7 @@ app.get('/api/matches/mine', async (req, res) => {
       agentId: agentId || null,
       selectedAgentId: ownedContext.selectedAgentId || null,
       primaryAgentId: ownedContext.primaryAgentId || null,
-      matches,
+      matches: decorateMatchesForClient(matches),
       source,
       durability,
     });
@@ -2208,6 +2573,35 @@ app.get('/api/agents/mine', async (req, res) => {
     requestedAgentId: req.query.agentId,
     includeStats: true,
   });
+
+  // Compute win streak from recent matches
+  let streak = 0;
+  const agentIdForStreak = String(ownedContext.selectedAgentId || '').trim();
+  if (agentIdForStreak) {
+    try {
+      const recentMatches = await getPlayerMatches(agentIdForStreak, 50);
+      for (const m of recentMatches) {
+        const role = String(m.role || '').toLowerCase();
+        const winner = String(m.winner || '').toLowerCase();
+        if (role && winner && role === winner) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+    } catch (_err) { /* streak stays 0 */ }
+  }
+
+  // Compute rank from leaderboard
+  let rank = null;
+  if (agentIdForStreak) {
+    try {
+      const leaders = await getLeaderboardEntries({ mode: 'mafia', limit: 100 });
+      const idx = leaders.findIndex((entry) => entry.id === agentIdForStreak);
+      if (idx >= 0) rank = idx + 1;
+    } catch (_err) { /* rank stays null */ }
+  }
+
   res.json({
     ok: true,
     session: {
@@ -2224,14 +2618,20 @@ app.get('/api/agents/mine', async (req, res) => {
     statsSource: ownedContext.statsBundle?.source || 'none',
     statsDurability: ownedContext.statsBundle?.durability || 'none',
     statsCapped: Boolean(ownedContext.statsBundle?.capped),
+    streak,
+    rank,
     arena: buildArenaAvailability(),
   });
 });
 
-app.get('/api/agents/:id', (req, res) => {
+app.get('/api/agents/:id', async (req, res) => {
   const agent = agentProfiles.get(String(req.params.id || '').trim());
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
-  const arena = {
+  const statsBundle = await buildOwnedAgentStats(agent.id);
+  const summary = summarizeOwnedAgentProfile(agent, {
+    stats: statsBundle?.stats || null,
+  });
+  const arena = summary?.arena || {
     ...summarizeAgentArenaState(agent.id),
     ...buildArenaAvailability(),
   };
@@ -2241,13 +2641,21 @@ app.get('/api/agents/:id', (req, res) => {
     agent: {
       id: agent.id,
       name: agent.name,
-      mmr: agent.mmr,
+      mmr: Number(statsBundle?.stats?.mmr ?? agent.mmr ?? DEFAULT_MMR),
+      peakMmr: Number(statsBundle?.stats?.peakMmr ?? agent.peakMmr ?? DEFAULT_MMR),
+      ratedMatches: Number(statsBundle?.stats?.ratedMatches ?? agent.ratedMatches ?? 0),
+      lastRatingDelta: Number(statsBundle?.stats?.lastRatingDelta ?? agent.lastRatingDelta ?? 0),
+      isProvisional: Boolean(statsBundle?.stats?.isProvisional ?? normalizeRatingSnapshot(agent).isProvisional),
       karma: agent.karma,
       deployed: !!agent.deployed,
       openclawConnected: arena.runtimeConnected,
       persona: agent.persona || null,
       watchUrl: buildAgentArenaUrl(agent.id, arena),
       arena,
+      gamesPlayed: Number(summary?.gamesPlayed || 0),
+      lastPlayedAt: summary?.lastPlayedAt || null,
+      lastConnectedAt: summary?.lastConnectedAt || null,
+      activityAt: summary?.activityAt || null,
     },
   });
 });
@@ -2288,7 +2696,7 @@ app.get('/api/matches', async (req, res) => {
       source = 'memory';
       durability = 'ephemeral_memory';
     }
-    res.json({ ok: true, agentId: targetAgentId, matches, source, durability });
+    res.json({ ok: true, agentId: targetAgentId, matches: decorateMatchesForClient(matches), source, durability });
   } catch (err) {
     logStructured('error.getPlayerMatches', { error: err.message });
     res.status(500).json({ ok: false, error: 'failed to fetch matches' });
@@ -3122,15 +3530,6 @@ app.get('/config.js', (req, res) => {
   res.send(buildRuntimeConfigScript(req));
 });
 
-app.get('/play.html', (req, res) => {
-  const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(302, `/arena.html${search}`);
-});
-
-app.get('/browse.html', (req, res) => {
-  res.redirect(301, '/arena.html' + (req._parsedUrl.search || ''));
-});
-
 app.use(sendRuntimeHtml);
 app.use(express.static(PUBLIC_DIR));
 
@@ -3239,6 +3638,26 @@ app.get('/api/ops/match-baseline', async (req, res) => {
     return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia' } });
   }
   res.json({ ok: true, baseline: await buildMatchBaseline(mode) });
+});
+
+app.get('/api/ops/ratings/health', async (req, res) => {
+  const mode = String(req.query.mode || 'mafia').toLowerCase();
+  if (mode !== 'mafia') {
+    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia' } });
+  }
+
+  let health = null;
+  try {
+    health = await getRatingHealth({ mode });
+  } catch (err) {
+    logStructured('error.getRatingHealth', { error: err.message, mode });
+  }
+
+  res.json({
+    ok: true,
+    health: health || buildRatingHealthFallback(mode),
+    source: health ? 'database' : 'memory',
+  });
 });
 
 app.get('/health', async (_req, res) => {

@@ -1,4 +1,5 @@
 const { buildResolvedPersona } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
+const { buildDefaultRatingSnapshot } = require('./mafia-elo');
 
 function createConnectedOpenClawAgent({
   agentProfiles,
@@ -11,13 +12,17 @@ function createConnectedOpenClawAgent({
 }) {
   const agentId = shortId(10);
   const persona = buildResolvedPersona({ style, presetId });
+  const rating = buildDefaultRatingSnapshot();
   const agent = {
     id: agentId,
     owner: connect.email,
     ownerUserId: connect.ownerUserId || null,
     name,
     deployed: true,
-    mmr: 1000,
+    mmr: rating.mmr,
+    peakMmr: rating.peakMmr,
+    ratedMatches: rating.ratedMatches,
+    lastRatingDelta: rating.lastRatingDelta,
     karma: 0,
     persona: {
       style: persona.style,

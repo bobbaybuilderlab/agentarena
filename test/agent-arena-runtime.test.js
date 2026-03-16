@@ -193,6 +193,10 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(agentStatusData.ok, true);
       assert.equal(agentStatusData.agent.arena.runtimeConnected, true);
       assert.ok(['idle', 'in_match'].includes(agentStatusData.agent.arena.queueStatus));
+      assert.equal(Number(agentStatusData.agent.mmr || 0) >= 0, true);
+      assert.equal(Number(agentStatusData.agent.ratedMatches || 0) >= 1, true);
+      assert.equal('peakMmr' in agentStatusData.agent, true);
+      assert.equal('isProvisional' in agentStatusData.agent, true);
 
       assert.equal(baselineData.baseline.mode, 'mafia');
       assert.equal(baselineData.baseline.sampleSize >= 1, true);
@@ -211,9 +215,20 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(leaderboardData.topAgents), true);
       assert.equal(leaderboardData.topAgents.length >= 1, true);
       assert.equal(Number(leaderboardData.topAgents[0].gamesPlayed || 0) >= 1, true);
+      assert.equal(Number(leaderboardData.topAgents[0].mmr || 0) >= 0, true);
+      assert.equal(Number(leaderboardData.topAgents[0].ratedMatches || 0) >= 1, true);
+      assert.equal('peakMmr' in leaderboardData.topAgents[0], true);
+      assert.equal('lastRatingDelta' in leaderboardData.topAgents[0], true);
+      assert.equal('isProvisional' in leaderboardData.topAgents[0], true);
       assert.equal('queueStatus' in leaderboardData.topAgents[0], true);
       assert.equal('isLive' in leaderboardData.topAgents[0], true);
       assert.equal('watchUrl' in leaderboardData.topAgents[0], true);
+
+      const ratingsHealthRes = await fetch(`${url}/api/ops/ratings/health?mode=mafia`);
+      const ratingsHealthData = await ratingsHealthRes.json();
+      assert.equal(ratingsHealthData.ok, true);
+      assert.equal(ratingsHealthData.health.mode, 'mafia');
+      assert.equal(Number(ratingsHealthData.health.sampleSize || 0) >= 1, true);
 
       const matchesRes = await fetch(`${url}/api/matches?userId=${encodeURIComponent(agents[0].agentId)}&limit=5`);
       const matchesData = await matchesRes.json();
@@ -221,6 +236,19 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(matchesData.matches), true);
       assert.equal(matchesData.matches.length >= 1, true);
       assert.ok(['mafia', 'town'].includes(matchesData.matches[0].winner));
+      assert.match(matchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
+
+      const replayRes = await fetch(`${url}/api/rooms/${encodeURIComponent(seatedRoomId)}/replay?mode=mafia`);
+      const replayData = await replayRes.json();
+      assert.equal(replayData.ok, true);
+      assert.equal(replayData.room.id, seatedRoomId);
+      assert.equal(replayData.summary.roomId, seatedRoomId);
+      assert.equal(Array.isArray(replayData.highlights), true);
+      assert.equal(Array.isArray(replayData.turns), true);
+      assert.equal(Array.isArray(replayData.timeline), true);
+      assert.equal(replayData.timeline.length >= 1, true);
+      assert.equal(typeof replayData.summary.headline, 'string');
+      assert.equal(typeof replayData.summary.durationLabel, 'string');
 
       const statsRes = await fetch(`${url}/api/stats`);
       const statsData = await statsRes.json();
@@ -240,7 +268,11 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(mineData.agents.length, 6);
       assert.equal(mineData.selectedAgentId, agents[5].agentId);
       assert.equal(mineData.agent.id, agents[5].agentId);
+      assert.equal(Number(mineData.agent.mmr || 0) >= 0, true);
       assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
+      assert.equal(Number(mineData.stats.ratedMatches || 0) >= 1, true);
+      assert.equal('peakMmr' in mineData.stats, true);
+      assert.equal('isProvisional' in mineData.stats, true);
       assert.equal(typeof mineData.stats.nightKillCredits, 'number');
 
       const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
@@ -253,6 +285,7 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(mineMatchesData.matches), true);
       assert.equal(mineMatchesData.matches.length >= 1, true);
       assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
+      assert.match(mineMatchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

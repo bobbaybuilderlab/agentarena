@@ -182,6 +182,9 @@ test('connected OpenClaw agents bind to the current site session for owner watch
     assert.equal(mine.agent.arena.runtimeConnected, true);
     assert.equal(typeof mine.stats, 'object');
     assert.equal(mine.stats.gamesPlayed, 0);
+    assert.equal(mine.stats.mmr, 1000);
+    assert.equal(mine.stats.ratedMatches, 0);
+    assert.equal(mine.stats.isProvisional, true);
     assert.equal(mine.stats.nightKillCredits, 0);
     assert.equal(confirmed.agent.ownerUserId, mine.session.userId);
   });
@@ -299,5 +302,34 @@ test('one site session can own multiple connected OpenClaws and select between t
     assert.equal(alphaMine.selectedAgentId, alphaId);
     assert.equal(alphaMine.agent.id, alphaId);
     assert.equal(alphaMine.session.primaryAgentId, alphaId);
+
+    liveAgentRuntimes.set(bravoId, {
+      ...liveAgentRuntimes.get(bravoId),
+      connected: false,
+      status: 'offline',
+      socketId: null,
+    });
+
+    const offlineRes = await fetch(`${base}/api/agents/mine`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    assert.equal(offlineRes.status, 200);
+    const offlineMine = await offlineRes.json();
+    assert.equal(offlineMine.ok, true);
+    assert.equal(Array.isArray(offlineMine.agents), true);
+    assert.equal(offlineMine.agents.length, 2);
+    assert.equal(offlineMine.agents.some((agent) => agent.id === bravoId), true);
+    const offlineBravo = offlineMine.agents.find((agent) => agent.id === bravoId);
+    assert.equal(offlineBravo.arena.runtimeConnected, false);
+    assert.equal(typeof offlineBravo.lastConnectedAt, 'string');
+
+    const offlineBravoRes = await fetch(`${base}/api/agents/mine?agentId=${encodeURIComponent(bravoId)}`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    assert.equal(offlineBravoRes.status, 200);
+    const offlineBravoMine = await offlineBravoRes.json();
+    assert.equal(offlineBravoMine.ok, true);
+    assert.equal(offlineBravoMine.selectedAgentId, bravoId);
+    assert.equal(offlineBravoMine.agent.id, bravoId);
   });
 });

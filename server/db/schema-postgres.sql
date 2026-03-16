@@ -51,6 +51,33 @@ CREATE TABLE IF NOT EXISTS match_players (
 ALTER TABLE match_players
   ADD COLUMN IF NOT EXISTS night_kill_credits INTEGER NOT NULL DEFAULT 0;
 
+CREATE TABLE IF NOT EXISTS agent_ratings (
+  agent_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  mmr INTEGER NOT NULL DEFAULT 1000,
+  peak_mmr INTEGER NOT NULL DEFAULT 1000,
+  rated_matches INTEGER NOT NULL DEFAULT 0,
+  last_delta INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (agent_id, mode)
+);
+
+CREATE TABLE IF NOT EXISTS agent_rating_events (
+  id BIGSERIAL PRIMARY KEY,
+  match_id TEXT NOT NULL REFERENCES match_results(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  role TEXT,
+  mmr_before INTEGER NOT NULL,
+  mmr_after INTEGER NOT NULL,
+  delta INTEGER NOT NULL,
+  expected_score DOUBLE PRECISION NOT NULL,
+  pool INTEGER NOT NULL,
+  provisional BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (match_id, agent_id)
+);
+
 CREATE TABLE IF NOT EXISTS reports (
   id BIGSERIAL PRIMARY KEY,
   reporter_id TEXT,
@@ -69,4 +96,7 @@ CREATE INDEX IF NOT EXISTS idx_match_results_mode ON match_results(mode);
 CREATE INDEX IF NOT EXISTS idx_match_results_party_chain ON match_results(party_chain_id);
 CREATE INDEX IF NOT EXISTS idx_match_players_match ON match_players(match_id);
 CREATE INDEX IF NOT EXISTS idx_match_players_user ON match_players(user_id);
+CREATE INDEX IF NOT EXISTS idx_agent_ratings_mode ON agent_ratings(mode);
+CREATE INDEX IF NOT EXISTS idx_agent_rating_events_mode ON agent_rating_events(mode);
+CREATE INDEX IF NOT EXISTS idx_agent_rating_events_agent ON agent_rating_events(agent_id);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
