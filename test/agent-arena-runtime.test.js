@@ -62,6 +62,7 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
 }
 
 async function createRuntimeAgent(url, name, { sessionToken } = {}) {
+  assert.ok(sessionToken, 'sessionToken is required for connect-session creation');
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: {
@@ -164,9 +165,9 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.ok(sessionToken);
 
       const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
-      for (const [index, name] of names.entries()) {
+      for (const name of names) {
         agents.push(await createRuntimeAgent(url, name, {
-          sessionToken: index === 0 ? sessionToken : undefined,
+          sessionToken,
         }));
       }
 
@@ -233,7 +234,12 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       });
       const mineData = await mineRes.json();
       assert.equal(mineData.ok, true);
-      assert.equal(mineData.session.agentId, agents[0].agentId);
+      assert.equal(mineData.session.agentId, agents[5].agentId);
+      assert.equal(mineData.session.primaryAgentId, agents[5].agentId);
+      assert.equal(Array.isArray(mineData.agents), true);
+      assert.equal(mineData.agents.length, 6);
+      assert.equal(mineData.selectedAgentId, agents[5].agentId);
+      assert.equal(mineData.agent.id, agents[5].agentId);
       assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
       assert.equal(typeof mineData.stats.nightKillCredits, 'number');
 
@@ -242,7 +248,8 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       });
       const mineMatchesData = await mineMatchesRes.json();
       assert.equal(mineMatchesData.ok, true);
-      assert.equal(mineMatchesData.agentId, agents[0].agentId);
+      assert.equal(mineMatchesData.agentId, agents[5].agentId);
+      assert.equal(mineMatchesData.primaryAgentId, agents[5].agentId);
       assert.equal(Array.isArray(mineMatchesData.matches), true);
       assert.equal(mineMatchesData.matches.length >= 1, true);
       assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);

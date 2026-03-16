@@ -14,6 +14,7 @@ function createConnectedOpenClawAgent({
   const agent = {
     id: agentId,
     owner: connect.email,
+    ownerUserId: connect.ownerUserId || null,
     name,
     deployed: true,
     mmr: 1000,

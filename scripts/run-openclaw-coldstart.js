@@ -79,6 +79,17 @@ async function fetchJson(url, options, label = url) {
   }
 }
 
+async function createSiteSession(baseUrl) {
+  const { data } = await fetchJson(`${baseUrl}/api/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }, 'site session');
+  const token = String(data?.session?.token || '').trim();
+  if (!data?.ok || !token) throw new Error('Failed to create site session for cold-start flow');
+  return token;
+}
+
 function attachChildOutput(child, prefix, pluginWarnings = null) {
   function write(chunk) {
     const text = String(chunk || '').replace(/\r\n/g, '\n');
@@ -235,9 +246,13 @@ async function main() {
     const health = await waitForJson(`${baseUrl}/health`, 20_000);
     if (!health?.ok) throw new Error('Claw of Deceit health check failed');
 
+    const sessionToken = await createSiteSession(baseUrl);
     const { data: createData } = await fetchJson(`${baseUrl}/api/openclaw/connect-session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
       body: JSON.stringify({}),
     }, 'connect-session');
     if (!createData.ok) throw new Error(createData.error || 'connect-session failed');

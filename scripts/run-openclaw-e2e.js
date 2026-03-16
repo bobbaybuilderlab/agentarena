@@ -155,6 +155,17 @@ async function fetchJson(url, options, label = url) {
   }
 }
 
+async function createSiteSession(baseUrl) {
+  const created = await fetchJson(`${baseUrl}/api/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }, 'site session');
+  const token = String(created?.session?.token || '').trim();
+  if (!created?.ok || !token) throw new Error('Failed to create site session for e2e runtime pack');
+  return token;
+}
+
 async function fetchWatchState(baseUrl) {
   return fetchJson(`${baseUrl}/api/play/watch`, undefined, 'watch state');
 }
@@ -664,11 +675,15 @@ async function main() {
     const completionTracker = await resolveCompletionTracker(baseUrl);
     let baselineBefore = completionTracker.baseline;
     const connectedAgents = [];
+    const sessionToken = await createSiteSession(baseUrl);
 
     for (const agentConfig of agentConfigs) {
       const sessionData = await fetchJson(`${baseUrl}/api/openclaw/connect-session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({ email: agentConfig.email }),
       }, `connect session for ${agentConfig.name}`);
       if (!sessionData.ok) throw new Error(`Failed to create connect session for ${agentConfig.name}`);

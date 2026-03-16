@@ -107,9 +107,23 @@ function resolvePublicBaseUrl(req) {
 }
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const STALE_PUBLIC_BASE_URLS = [
+  'https://agent-arena-vert.vercel.app',
+  'https://agent-arena-xi0b.onrender.com',
+];
 
 function injectPublicBaseUrl(html, publicBaseUrl) {
-  return String(html || '');
+  let next = String(html || '');
+  const normalizedPublicBaseUrl = normalizeBaseUrl(publicBaseUrl);
+  if (!normalizedPublicBaseUrl) return next;
+
+  for (const staleBaseUrl of STALE_PUBLIC_BASE_URLS) {
+    const normalizedStaleBaseUrl = normalizeBaseUrl(staleBaseUrl);
+    if (!normalizedStaleBaseUrl || normalizedStaleBaseUrl === normalizedPublicBaseUrl) continue;
+    next = next.split(normalizedStaleBaseUrl).join(normalizedPublicBaseUrl);
+  }
+
+  return next;
 }
 
 function resolvePublicHtmlPath(requestPath) {
@@ -1446,6 +1460,8 @@ async function resolveSiteSession(req) {
         email: user?.email || null,
         displayName: user?.display_name || null,
         agentId: user?.agent_id || null,
+        primaryAgentId: user?.agent_id || null,
+        isAnonymous: !!user?.is_anonymous,
         expiresAt: session?.expires_at || null,
         durable: true,
       };
@@ -1464,8 +1480,156 @@ async function resolveSiteSession(req) {
     email: fallback.email || null,
     displayName: fallback.displayName || null,
     agentId: fallback.agentId || null,
+    primaryAgentId: fallback.agentId || null,
+    isAnonymous: !fallback.email,
     expiresAt: fallback.expiresAt || null,
     durable: false,
+  };
+}
+
+function updateCachedUserPrimaryAgent(userId, agentId) {
+  for (const session of sessions.values()) {
+    if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
+    if (session?.userId === userId) session.agentId = agentId;
+  }
+}
+
+async function rememberUserPrimaryAgent(userId, agentId) {
+  const cleanUserId = String(userId || '').trim();
+  const cleanAgentId = String(agentId || '').trim() || null;
+  if (!cleanUserId) return;
+  try {
+    await setUserAgentId(cleanUserId, cleanAgentId);
+  } catch (err) {
+    logStructured('warn.userPrimaryAgent.persistence_unavailable', {
+      userId: cleanUserId,
+      agentId: cleanAgentId,
+      error: err.message,
+    });
+    if (IS_PRODUCTION) throw err;
+  }
+  updateCachedUserPrimaryAgent(cleanUserId, cleanAgentId);
+}
+
+function assignAgentOwnerUserId(agentId, ownerUserId, { ifMissing = false } = {}) {
+  const cleanAgentId = String(agentId || '').trim();
+  const cleanUserId = String(ownerUserId || '').trim();
+  if (!cleanAgentId || !cleanUserId) return null;
+
+  const agent = agentProfiles.get(cleanAgentId);
+  if (!agent) return null;
+
+  const existingOwnerUserId = String(agent.ownerUserId || '').trim();
+  if (ifMissing && existingOwnerUserId && existingOwnerUserId !== cleanUserId) return null;
+  if (existingOwnerUserId === cleanUserId) return agent;
+
+  agent.ownerUserId = cleanUserId;
+  persistState();
+  return agent;
+}
+
+function rescueLegacyOwnedAgentOwnership(ownerUserId, primaryAgentId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  const cleanAgentId = String(primaryAgentId || '').trim();
+  if (!cleanUserId || !cleanAgentId) return null;
+  return assignAgentOwnerUserId(cleanAgentId, cleanUserId, { ifMissing: true });
+}
+
+function getAgentLastConnectedAt(agent) {
+  const runtime = getAgentRuntime(agent?.id);
+  return Number(runtime?.connectedAt || agent?.openclaw?.connectedAt || 0);
+}
+
+function compareConnectedOwnedAgents(a, b) {
+  const aArena = summarizeAgentArenaState(a.id);
+  const bArena = summarizeAgentArenaState(b.id);
+  const aLive = Boolean(aArena.activeRoomId);
+  const bLive = Boolean(bArena.activeRoomId);
+  if (aLive !== bLive) return aLive ? -1 : 1;
+
+  const connectedAtDelta = getAgentLastConnectedAt(b) - getAgentLastConnectedAt(a);
+  if (connectedAtDelta !== 0) return connectedAtDelta;
+
+  return String(a.name || a.id).localeCompare(String(b.name || b.id));
+}
+
+function listOwnedAgentsForUser(ownerUserId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  if (!cleanUserId) return [];
+  return [...agentProfiles.values()]
+    .filter((agent) => String(agent?.ownerUserId || '').trim() === cleanUserId);
+}
+
+function listConnectedOwnedAgentsForUser(ownerUserId) {
+  return listOwnedAgentsForUser(ownerUserId)
+    .filter((agent) => summarizeAgentArenaState(agent.id).runtimeConnected)
+    .sort(compareConnectedOwnedAgents);
+}
+
+function summarizeOwnedAgentProfile(agentOrId) {
+  const agent = typeof agentOrId === 'string'
+    ? agentProfiles.get(String(agentOrId || '').trim())
+    : agentOrId;
+  if (!agent?.id) return null;
+  const arena = {
+    ...summarizeAgentArenaState(agent.id),
+    ...buildArenaAvailability(),
+  };
+  return {
+    id: agent.id,
+    name: agent.name,
+    deployed: !!agent.deployed,
+    persona: agent.persona || null,
+    watchUrl: buildAgentArenaUrl(agent.id, arena),
+    arena,
+  };
+}
+
+async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', includeStats = false } = {}) {
+  if (!siteSession?.userId) {
+    return {
+      primaryAgentId: null,
+      selectedAgentId: null,
+      selectionSource: 'none',
+      agents: [],
+      agent: null,
+      statsBundle: null,
+    };
+  }
+
+  let primaryAgentId = String(siteSession.primaryAgentId || siteSession.agentId || '').trim() || null;
+  if (primaryAgentId) rescueLegacyOwnedAgentOwnership(siteSession.userId, primaryAgentId);
+
+  const requestedId = String(requestedAgentId || '').trim();
+  const connectedOwnedAgents = listConnectedOwnedAgentsForUser(siteSession.userId);
+  const connectedById = new Map(connectedOwnedAgents.map((agent) => [agent.id, agent]));
+
+  let selectedAgent = requestedId ? connectedById.get(requestedId) || null : null;
+  let selectionSource = selectedAgent ? 'query' : 'none';
+
+  if (!selectedAgent && primaryAgentId) {
+    selectedAgent = connectedById.get(primaryAgentId) || null;
+    if (selectedAgent) selectionSource = 'primary';
+  }
+
+  if (!selectedAgent && connectedOwnedAgents.length > 0) {
+    selectedAgent = connectedOwnedAgents[0];
+    selectionSource = 'auto';
+  }
+
+  if (selectedAgent?.id && selectedAgent.id !== primaryAgentId) {
+    await rememberUserPrimaryAgent(siteSession.userId, selectedAgent.id);
+    primaryAgentId = selectedAgent.id;
+  }
+
+  const agent = summarizeOwnedAgentProfile(selectedAgent);
+  return {
+    primaryAgentId,
+    selectedAgentId: agent?.id || null,
+    selectionSource,
+    agents: connectedOwnedAgents.map((entry) => summarizeOwnedAgentProfile(entry)).filter(Boolean),
+    agent,
+    statsBundle: includeStats && agent?.id ? await buildOwnedAgentStats(agent.id) : null,
   };
 }
 
@@ -1474,22 +1638,8 @@ async function bindOwnedAgent(ownerUserId, agentId) {
   const cleanAgentId = String(agentId || '').trim();
   if (!cleanUserId || !cleanAgentId) return;
 
-  try {
-    await setUserAgentId(cleanUserId, cleanAgentId);
-  } catch (err) {
-    logStructured('warn.bindOwnedAgent.persistence_unavailable', {
-      userId: cleanUserId,
-      agentId: cleanAgentId,
-      error: err.message,
-    });
-    if (IS_PRODUCTION) throw err;
-  }
-
-  // Non-production fallback: also update in-memory session cache
-  for (const session of sessions.values()) {
-    if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
-    if (session?.userId === cleanUserId) session.agentId = cleanAgentId;
-  }
+  assignAgentOwnerUserId(cleanAgentId, cleanUserId);
+  await rememberUserPrimaryAgent(cleanUserId, cleanAgentId);
 }
 
 async function resolveMatchAgentId(rawId) {
@@ -1512,22 +1662,7 @@ async function resolveMatchAgentId(rawId) {
 }
 
 function summarizeOwnedAgent(agentId) {
-  const cleanAgentId = String(agentId || '').trim();
-  if (!cleanAgentId) return null;
-  const agent = agentProfiles.get(cleanAgentId);
-  if (!agent) return null;
-  const arena = {
-    ...summarizeAgentArenaState(agent.id),
-    ...buildArenaAvailability(),
-  };
-  return {
-    id: agent.id,
-    name: agent.name,
-    deployed: !!agent.deployed,
-    persona: agent.persona || null,
-    watchUrl: buildAgentArenaUrl(agent.id, arena),
-    arena,
-  };
+  return summarizeOwnedAgentProfile(agentId);
 }
 
 function getAgentRuntime(agentId) {
@@ -1825,16 +1960,21 @@ app.post('/api/auth/session', async (req, res) => {
       getSessionByToken(existingToken),
     ]);
     if (siteSession?.userId) {
+      const ownedContext = await buildOwnedArenaContext(siteSession);
       return res.json({
         ok: true,
         session: {
           token: existingToken,
           userId: siteSession.userId || existing?.user_id || null,
-          agentId: siteSession?.agentId || null,
+          agentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
+          primaryAgentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
+          isAnonymous: siteSession?.isAnonymous !== false,
           expiresAt: siteSession?.expiresAt || existing?.expires_at || null,
           durable: siteSession?.durable !== false,
         },
-        ownedAgent: summarizeOwnedAgent(siteSession?.agentId),
+        ownedAgent: ownedContext.agent,
+        ownedAgents: ownedContext.agents,
+        selectedAgentId: ownedContext.selectedAgentId,
         renewed: true,
       });
     }
@@ -1854,8 +1994,10 @@ app.post('/api/auth/session', async (req, res) => {
 
     res.json({
       ok: true,
-      session: { token, userId, agentId: null, expiresAt, durable: true },
+      session: { token, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt, durable: true },
       ownedAgent: null,
+      ownedAgents: [],
+      selectedAgentId: null,
     });
   } catch (err) {
     logStructured('error.auth.session.create', { error: err.message });
@@ -1868,8 +2010,10 @@ app.post('/api/auth/session', async (req, res) => {
     setCachedSession({ token: token2, userId, createdAt: Date.now(), expiresAt: fallbackExpiresAt });
     res.json({
       ok: true,
-      session: { token: token2, userId, agentId: null, expiresAt: fallbackExpiresAt, durable: false },
+      session: { token: token2, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt: fallbackExpiresAt, durable: false },
       ownedAgent: null,
+      ownedAgents: [],
+      selectedAgentId: null,
     });
   }
 });
@@ -1973,7 +2117,10 @@ app.get('/api/matches/mine', async (req, res) => {
     const siteSession = await resolveSiteSession(req);
     if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
-    const agentId = String(siteSession.agentId || '').trim();
+    const ownedContext = await buildOwnedArenaContext(siteSession, {
+      requestedAgentId: req.query.agentId,
+    });
+    const agentId = String(ownedContext.selectedAgentId || '').trim();
     let matches = [];
     let source = 'none';
     let durability = 'none';
@@ -1988,7 +2135,15 @@ app.get('/api/matches/mine', async (req, res) => {
         durability = 'ephemeral_memory';
       }
     }
-    res.json({ ok: true, agentId: agentId || null, matches, source, durability });
+    res.json({
+      ok: true,
+      agentId: agentId || null,
+      selectedAgentId: ownedContext.selectedAgentId || null,
+      primaryAgentId: ownedContext.primaryAgentId || null,
+      matches,
+      source,
+      durability,
+    });
   } catch (err) {
     logStructured('error.getPlayerMatches.mine', { error: err.message });
     res.status(500).json({ ok: false, error: 'Failed to fetch matches' });
@@ -2049,19 +2204,26 @@ app.get('/api/agents/mine', async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
   }
 
-  const agent = summarizeOwnedAgent(siteSession.agentId);
-  const statsBundle = siteSession.agentId ? await buildOwnedAgentStats(siteSession.agentId) : null;
+  const ownedContext = await buildOwnedArenaContext(siteSession, {
+    requestedAgentId: req.query.agentId,
+    includeStats: true,
+  });
   res.json({
     ok: true,
     session: {
       userId: siteSession.userId,
-      agentId: siteSession.agentId || null,
+      isAnonymous: siteSession.isAnonymous !== false,
+      agentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
+      primaryAgentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
     },
-    agent,
-    stats: statsBundle?.stats || null,
-    statsSource: statsBundle?.source || 'none',
-    statsDurability: statsBundle?.durability || 'none',
-    statsCapped: Boolean(statsBundle?.capped),
+    agents: ownedContext.agents,
+    selectedAgentId: ownedContext.selectedAgentId || null,
+    selectionSource: ownedContext.selectionSource || 'none',
+    agent: ownedContext.agent,
+    stats: ownedContext.statsBundle?.stats || null,
+    statsSource: ownedContext.statsBundle?.source || 'none',
+    statsDurability: ownedContext.statsBundle?.durability || 'none',
+    statsCapped: Boolean(ownedContext.statsBundle?.capped),
     arena: buildArenaAvailability(),
   });
 });

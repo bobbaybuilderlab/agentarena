@@ -3156,7 +3156,33 @@ body.page-docs .game-detail-article .text-sm {
 
 .owner-watch-shell {
   display: grid;
-  gap: 0;
+  gap: 16px;
+}
+
+body.page-watch-owner #ownerWatchCard {
+  border-color: rgba(39, 213, 173, 0.16);
+  background: linear-gradient(145deg, rgba(5, 12, 20, 0.96), rgba(9, 18, 29, 0.94));
+}
+
+.owner-watch-header {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.owner-watch-kicker {
+  margin: 0 0 4px;
+  color: #4a6a5a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: 'Space Mono', monospace;
+}
+
+.owner-watch-status {
+  margin: 8px 0 0;
+  color: #c5ddd3;
+  max-width: 62ch;
 }
 
 .owner-watch-grid {
@@ -3165,8 +3191,116 @@ body.page-docs .game-detail-article .text-sm {
   gap: 10px;
 }
 
+.owner-switcher-shell {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(39, 213, 173, 0.14);
+  border-radius: 18px;
+  background: rgba(8, 16, 26, 0.92);
+}
+
+.owner-switcher-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.owner-switcher-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.owner-switcher-pill {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(197, 221, 211, 0.12);
+  background: rgba(11, 19, 30, 0.96);
+  color: #f5fbf8;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.owner-switcher-pill:hover {
+  border-color: rgba(39, 213, 173, 0.34);
+  transform: translateY(-1px);
+}
+
+.owner-switcher-pill.is-selected {
+  border-color: rgba(39, 213, 173, 0.56);
+  background: linear-gradient(145deg, rgba(13, 31, 33, 0.98), rgba(10, 24, 32, 0.94));
+  box-shadow: 0 10px 30px rgba(12, 24, 20, 0.24);
+}
+
+.owner-switcher-pill-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.owner-switcher-pill-meta {
+  color: #8db5a7;
+  font-size: 0.76rem;
+}
+
+.owner-upgrade-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  background: linear-gradient(150deg, rgba(24, 11, 16, 0.95), rgba(14, 17, 28, 0.94));
+}
+
+.owner-upgrade-card h3 {
+  margin: 6px 0 4px;
+  font-size: 1rem;
+}
+
+.owner-upgrade-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+}
+
+.owner-upgrade-field {
+  display: grid;
+  gap: 6px;
+}
+
+.owner-upgrade-field input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(197, 221, 211, 0.14);
+  background: rgba(7, 12, 21, 0.94);
+  color: #f5fbf8;
+  padding: 11px 12px;
+}
+
+.owner-upgrade-field input::placeholder {
+  color: rgba(197, 221, 211, 0.32);
+}
+
 .owner-quote-chip {
   grid-column: 1 / -1;
+}
+
+body.page-watch-owner #ownerWatchCard .match-chip {
+  border-color: rgba(39, 213, 173, 0.14);
+  background: rgba(7, 15, 24, 0.94);
+}
+
+.owner-watch-quote {
+  margin: 8px 0 0;
+  color: #e3f3ea;
+  line-height: 1.5;
 }
 
 .mvp-card {
@@ -5198,6 +5332,40 @@ body.page-watch-owner #spectatorReadSection .text-muted {
   color: var(--claw-text-muted);
   font-size: 13px;
   font-family: 'Geist', sans-serif;
+}
+
+.arena-empty-state {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+  padding: 80px 16px;
+}
+
+.arena-placeholder-kicker {
+  margin: 0;
+  color: rgba(224, 229, 240, 0.52);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.arena-placeholder-title {
+  margin: 0;
+  color: #f6f7fb;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.arena-empty-state a {
+  color: var(--primary);
+}
+
+.arena-empty-state a:hover {
+  color: var(--primary-hover);
 }
 
 .arena-msg {

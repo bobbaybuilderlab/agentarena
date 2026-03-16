@@ -3,6 +3,7 @@ const BACKEND_URL = runtimeConfig.SOCKET_URL || runtimeConfig.API_URL || window.
 const socket = io(BACKEND_URL);
 
 const STORAGE_KEYS = {
+  agentId: ['clawofdeceit_agent_id', 'agentarena_agent_id'],
   userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
   muted: ['clawofdeceit_muted', 'agentarena_muted'],
   authToken: ['clawofdeceit_session_token', 'clawofdeceit_auth_token', 'agentarena_session_token', 'agentarena_auth_token'],
@@ -87,6 +88,15 @@ const ownerWatchAgentName = document.getElementById('ownerWatchAgentName');
 const ownerWatchQueue = document.getElementById('ownerWatchQueue');
 const ownerWatchRoom = document.getElementById('ownerWatchRoom');
 const ownerWatchQuote = document.getElementById('ownerWatchQuote');
+const ownerSwitcherShell = document.getElementById('ownerSwitcherShell');
+const ownerSwitcherStatus = document.getElementById('ownerSwitcherStatus');
+const ownerSwitcherList = document.getElementById('ownerSwitcherList');
+const ownerBackToMineBtn = document.getElementById('ownerBackToMineBtn');
+const ownerUpgradeCard = document.getElementById('ownerUpgradeCard');
+const ownerUpgradeForm = document.getElementById('ownerUpgradeForm');
+const ownerUpgradeName = document.getElementById('ownerUpgradeName');
+const ownerUpgradeEmail = document.getElementById('ownerUpgradeEmail');
+const ownerUpgradeStatus = document.getElementById('ownerUpgradeStatus');
 const PUBLIC_DEBUG = new URLSearchParams(window.location.search || '').get('debug') === '1';
 const PUBLIC_MODE = 'mafia';
 const pageIsOwnerWatch = document.body.classList.contains('page-watch-owner');
@@ -94,8 +104,14 @@ const pageIsOwnerWatch = document.body.classList.contains('page-watch-owner');
 let me = { roomId: '', playerId: '', game: PUBLIC_MODE };
 let currentState = null;
 let ownedAgent = null;
+let ownedAgents = [];
 let ownedAgentStats = null;
 let ownedRecentMatches = [];
+let ownerSession = null;
+let selectedOwnedAgentId = '';
+let ownedAgentSource = 'none';
+let publicSpectateAgent = null;
+let publicSpectateRecentMatches = [];
 let attemptedAutoJoin = false;
 let suggestedReclaim = null;
 let attemptedSuggestedReclaim = false;
@@ -117,19 +133,95 @@ function queueStatusLabel(status) {
   return clean.replaceAll('_', ' ') || 'offline';
 }
 
+function getCurrentFocusAgent() {
+  return ownedAgent || publicSpectateAgent || null;
+}
+
+function getCurrentFocusMatches() {
+  return ownedAgent ? ownedRecentMatches : publicSpectateRecentMatches;
+}
+
+function getCurrentTrackedPlayerId() {
+  return getCurrentFocusAgent()?.arena?.activePlayerId || me.playerId || '';
+}
+
+function isPublicSpectateMode() {
+  return Boolean(publicSpectateAgent && !ownedAgent);
+}
+
+function currentAgentBadgeLabel() {
+  return isPublicSpectateMode() ? 'TRACKED' : 'YOU';
+}
+
+function currentAgentReferenceLabel() {
+  return isPublicSpectateMode() ? 'tracked agent' : 'your agent';
+}
+
 function latestOwnedDiscussion(state) {
-  if (!state || !me.playerId) return null;
+  const trackedPlayerId = getCurrentTrackedPlayerId();
+  if (!state || !trackedPlayerId) return null;
   return (state.events || [])
     .slice()
     .reverse()
-    .find((event) => event?.type === 'DISCUSSION_MESSAGE' && event.actorId === me.playerId) || null;
+    .find((event) => event?.type === 'DISCUSSION_MESSAGE' && event.actorId === trackedPlayerId) || null;
 }
 
 function formatPercent(value) {
   return `${Math.max(0, Number(value) || 0)}%`;
 }
 
+function getStoredAgentId() {
+  return getStoredValue(STORAGE_KEYS.agentId);
+}
+
+function ownerArenaQueueLabel(agent) {
+  if (!agent) return 'Waiting';
+  if (agent.arena?.activeRoomId) return 'Live now';
+  if (agent.arena?.queueStatus) return queueStatusLabel(agent.arena.queueStatus);
+  if (agent.arena?.runtimeConnected) return 'Waiting for 6 agents';
+  return 'Waiting for runtime';
+}
+
+function buildArenaEmptyStateMarkup() {
+  const focusAgent = getCurrentFocusAgent();
+  if (!focusAgent) {
+    return `<div class="arena-empty-state">
+      <p class="arena-placeholder-kicker">Arena view</p>
+      <p class="arena-placeholder-title">No connected agent yet.</p>
+      <p class="arena-placeholder-msg">Connect your OpenClaw and this arena will lock onto your table automatically. <a href="/connect.html">Connect your agent</a>.</p>
+    </div>`;
+  }
+
+  const safeName = escapeHtml(focusAgent.name || 'Your agent');
+  const safeQueue = escapeHtml(ownerArenaQueueLabel(focusAgent));
+  const safeRoom = escapeHtml(focusAgent.arena?.activeRoomId || '');
+  const prefix = isPublicSpectateMode() ? 'Watching' : '';
+
+  if (focusAgent.arena?.activeRoomId) {
+    return `<div class="arena-empty-state">
+      <p class="arena-placeholder-kicker">Arena view</p>
+      <p class="arena-placeholder-title">${prefix ? `${prefix} ${safeName} in room ${safeRoom}.` : `${safeName} is live in room ${safeRoom}.`}</p>
+      <p class="arena-placeholder-msg">Loading the full table view and transcript now.</p>
+    </div>`;
+  }
+
+  if (focusAgent.arena?.runtimeConnected) {
+    return `<div class="arena-empty-state">
+      <p class="arena-placeholder-kicker">Arena view</p>
+      <p class="arena-placeholder-title">${safeName} is online and waiting for the table to fill.</p>
+      <p class="arena-placeholder-msg">Status: ${safeQueue}. Leave this page open and it will switch to your match automatically.</p>
+    </div>`;
+  }
+
+  return `<div class="arena-empty-state">
+    <p class="arena-placeholder-kicker">Arena view</p>
+    <p class="arena-placeholder-title">${safeName} is registered, but its runtime is not online yet.</p>
+    <p class="arena-placeholder-msg">${isPublicSpectateMode() ? 'That public agent is offline right now.' : 'OpenClaw still needs to bring the runtime online before the arena can follow the match.'}</p>
+  </div>`;
+}
+
 function buildOwnerRecentMatchesMarkup(matches) {
+  const focusAgent = getCurrentFocusAgent();
   if (!Array.isArray(matches) || matches.length === 0) {
     return '<p class="text-sm text-muted">Recent matches will appear here after your first tracked game.</p>';
   }
@@ -149,7 +241,7 @@ function buildOwnerRecentMatchesMarkup(matches) {
     return `<div class="recent-game-row">
       <span class="recent-game-result ${resultClass}">${resultText}</span>
       <span class="recent-game-mode">${escapeHtml(modeLabel(match.mode || 'mafia'))}</span>
-      <span class="text-sm">${escapeHtml(match.playerName || match.player_name || ownedAgent?.name || '')}${role}</span>
+      <span class="text-sm">${escapeHtml(match.playerName || match.player_name || focusAgent?.name || '')}${role}</span>
       <span class="recent-game-meta">${meta}</span>
     </div>`;
   }).join('');
@@ -221,7 +313,8 @@ function renderPersonaViewer() {
   const guidance = document.getElementById('strategyGuidance');
   if (!viewer || !content) return;
 
-  if (!ownedAgent || !ownedAgent.persona) {
+  const focusAgent = getCurrentFocusAgent();
+  if (!focusAgent || !focusAgent.persona) {
     viewer.style.display = 'none';
     if (guidance) guidance.style.display = 'none';
     return;
@@ -229,10 +322,10 @@ function renderPersonaViewer() {
 
   viewer.style.display = '';
   if (guidance) guidance.style.display = '';
-  const p = ownedAgent.persona;
+  const p = focusAgent.persona;
 
   const fields = [];
-  if (p.preset) fields.push({ label: 'Preset', value: p.preset });
+  if (p.presetId || p.preset) fields.push({ label: 'Preset', value: p.presetId || p.preset });
   if (p.style) fields.push({ label: 'Style', value: p.style });
   if (p.intensity) fields.push({ label: 'Intensity', value: p.intensity });
   if (p.phrases && p.phrases.length) fields.push({ label: 'Phrases', value: p.phrases.join(', ') });
@@ -244,64 +337,133 @@ function renderPersonaViewer() {
     </div>`).join('') || '<p class="text-xs text-muted">Default persona active.</p>';
 }
 
+function renderOwnedAgentSwitcher() {
+  if (!ownerSwitcherShell || !ownerSwitcherList) return;
+
+  const hasOwnedAgents = ownedAgents.length > 0;
+  ownerSwitcherShell.style.display = hasOwnedAgents ? '' : 'none';
+  if (!hasOwnedAgents) {
+    ownerSwitcherList.innerHTML = '';
+    if (ownerSwitcherStatus) ownerSwitcherStatus.textContent = 'Connected agents owned by this session.';
+    return;
+  }
+
+  if (ownerSwitcherStatus) {
+    ownerSwitcherStatus.textContent = ownedAgents.length === 1
+      ? 'One connected OpenClaw is linked to this session.'
+      : `${ownedAgents.length} connected OpenClaws are linked to this session.`;
+  }
+
+  ownerSwitcherList.innerHTML = ownedAgents.map((agent) => {
+    const isSelected = agent.id === selectedOwnedAgentId;
+    const isLive = Boolean(agent.arena?.activeRoomId);
+    const statusLabel = isLive
+      ? `Live in ${agent.arena.activeRoomId}`
+      : ownerArenaQueueLabel(agent);
+    return `
+      <button
+        class="owner-switcher-pill${isSelected ? ' is-selected' : ''}"
+        type="button"
+        data-agent-id="${escapeHtml(agent.id)}"
+        aria-pressed="${isSelected ? 'true' : 'false'}"
+      >
+        <span class="owner-switcher-pill-name">${escapeHtml(agent.name || agent.id)}</span>
+        <span class="owner-switcher-pill-meta">${escapeHtml(statusLabel)}</span>
+      </button>`;
+  }).join('');
+
+  if (ownerBackToMineBtn) ownerBackToMineBtn.style.display = isPublicSpectateMode() ? '' : 'none';
+}
+
+function renderOwnerUpgradeCard() {
+  if (!ownerUpgradeCard) return;
+  const showUpgrade = Boolean(ownerSession?.isAnonymous && ownedAgents.length > 0);
+  ownerUpgradeCard.style.display = showUpgrade ? '' : 'none';
+  if (!showUpgrade && ownerUpgradeStatus) ownerUpgradeStatus.textContent = '';
+}
+
 function renderOwnerWatchCard() {
   if (!ownerWatchCard) return;
+  ownerWatchCard.style.display = '';
 
-  const activeRoomId = ownedAgent?.arena?.activeRoomId || null;
+  const focusAgent = getCurrentFocusAgent();
+  const activeRoomId = focusAgent?.arena?.activeRoomId || null;
   const currentRoomId = activeRoomId || (currentState?.status === 'finished' ? currentState.id : null);
   const quoteEvent = latestOwnedDiscussion(currentState);
 
+  renderOwnedAgentSwitcher();
+  renderOwnerUpgradeCard();
   renderPersonaViewer();
 
   if (ownerWatchAgentName) {
-    if (!ownedAgent) ownerWatchAgentName.textContent = 'No connected agent';
-    else ownerWatchAgentName.textContent = ownedAgent.persona?.style
-      ? `${ownedAgent.name} · ${ownedAgent.persona.style}`
-      : ownedAgent.name;
+    if (!focusAgent) ownerWatchAgentName.textContent = 'No connected agent yet';
+    else ownerWatchAgentName.textContent = focusAgent.persona?.style
+      ? `${focusAgent.name} · ${focusAgent.persona.style}`
+      : focusAgent.name;
   }
 
   if (ownerWatchQueue) {
-    ownerWatchQueue.textContent = ownedAgent ? queueStatusLabel(ownedAgent.arena?.queueStatus) : 'Waiting';
+    ownerWatchQueue.textContent = isPublicSpectateMode()
+      ? `Watching · ${ownerArenaQueueLabel(focusAgent)}`
+      : ownerArenaQueueLabel(focusAgent);
   }
 
   if (ownerWatchRoom) {
-    ownerWatchRoom.textContent = currentRoomId ? currentRoomId : (ownedAgent ? 'No room yet' : 'Connect first');
+    ownerWatchRoom.textContent = currentRoomId ? currentRoomId : (focusAgent ? 'Waiting to seat' : 'Connect first');
   }
 
   if (ownerWatchQuote) {
     ownerWatchQuote.textContent = quoteEvent?.text
       ? String(quoteEvent.text).trim()
-      : 'Your agent\'s public discussion line will appear here once it speaks.';
+      : `${isPublicSpectateMode() ? 'That agent' : 'Your agent'}'s public discussion line will appear here once it speaks.`;
   }
 
   if (!ownerWatchStatus) return;
-  if (!ownedAgent) {
+  const sourceSuffix = ownedAgentSource === 'remembered'
+    ? ' Showing your last connected agent from this browser.'
+    : ownedAgentSource === 'query'
+      ? ' Showing the agent from this Arena link.'
+      : ownedAgentSource === 'public'
+        ? ' This Arena link is spectating a public agent.'
+        : ownedAgentSource === 'auto'
+          ? ' Restored your most relevant connected OpenClaw automatically.'
+      : '';
+  if (!focusAgent) {
     if (currentState?.id) {
       ownerWatchStatus.textContent = `Watching room ${currentState.id}. Connect your agent to make this feed yours.`;
       return;
     }
-    ownerWatchStatus.textContent = 'No agent connected yet. Once yours is in, this becomes your live feed.';
+    ownerWatchStatus.textContent = ownedAgents.length > 0
+      ? 'Your connected OpenClaws are offline right now. Bring one runtime back online and this page will recover automatically.'
+      : 'No agent connected yet. Once yours is in, this becomes your live feed.';
     return;
   }
-  if (ownedAgent.arena?.activeRoomId) {
-    ownerWatchStatus.textContent = `${ownedAgent.name} is live in room ${ownedAgent.arena.activeRoomId}. Transcript locked to this table.`;
+  if (focusAgent.arena?.activeRoomId) {
+    ownerWatchStatus.textContent = isPublicSpectateMode()
+      ? `Watching ${focusAgent.name} live in room ${focusAgent.arena.activeRoomId}.${sourceSuffix}`
+      : `${focusAgent.name} is live in room ${focusAgent.arena.activeRoomId}. Transcript locked to this table.${sourceSuffix}`;
     return;
   }
-  if (ownedAgent.arena?.runtimeConnected) {
-    ownerWatchStatus.textContent = `${ownedAgent.name} is online. Waiting for the table to fill.`;
+  if (focusAgent.arena?.runtimeConnected) {
+    ownerWatchStatus.textContent = isPublicSpectateMode()
+      ? `Watching ${focusAgent.name}. That agent is online and waiting for the table to fill.${sourceSuffix}`
+      : `${focusAgent.name} is online. Waiting for the table to fill.${sourceSuffix}`;
     return;
   }
-  ownerWatchStatus.textContent = `${ownedAgent.name} is registered. Waiting for runtime.`;
+  ownerWatchStatus.textContent = isPublicSpectateMode()
+    ? `${focusAgent.name} is registered, but that runtime is offline right now.${sourceSuffix}`
+    : `${focusAgent.name} is registered. Waiting for runtime.${sourceSuffix}`;
 }
 
 function syncOwnerWatchUrl() {
   if (!pageIsOwnerWatch) return;
+  const focusAgent = getCurrentFocusAgent();
   const params = new URLSearchParams(window.location.search || '');
-  if (ownedAgent?.id) params.set('agentId', ownedAgent.id);
+  if (focusAgent?.id) params.set('agentId', focusAgent.id);
   else params.delete('agentId');
-  if (ownedAgent?.arena?.activeRoomId) {
+  if (focusAgent?.arena?.activeRoomId) {
     params.set('mode', 'mafia');
-    params.set('room', ownedAgent.arena.activeRoomId);
+    params.set('room', focusAgent.arena.activeRoomId);
     params.set('spectate', '1');
   } else if (!currentState || currentState.status !== 'finished') {
     params.delete('mode');
@@ -345,17 +507,20 @@ async function ensureSiteSession() {
     if (!data?.ok || !data?.session?.token) return null;
     setAuthToken(data.session.token);
     if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
+    if (data.selectedAgentId) setStoredValue(STORAGE_KEYS.agentId, data.selectedAgentId);
     return data.session;
   } catch (_err) {
     return null;
   }
 }
 
-async function fetchOwnedAgent() {
+async function fetchOwnedAgent(requestedAgentId = '') {
   const token = getAuthToken();
   if (!token) return null;
   try {
-    const res = await fetch('/api/agents/mine', {
+    const cleanAgentId = String(requestedAgentId || '').trim();
+    const qs = cleanAgentId ? `?agentId=${encodeURIComponent(cleanAgentId)}` : '';
+    const res = await fetch(`/api/agents/mine${qs}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.status === 401) return null;
@@ -366,14 +531,43 @@ async function fetchOwnedAgent() {
   }
 }
 
-async function fetchOwnedMatches(limit = 6) {
+async function fetchOwnedMatches(limit = 6, requestedAgentId = '') {
   const token = getAuthToken();
   if (!token) return null;
   try {
-    const res = await fetch(`/api/matches/mine?limit=${encodeURIComponent(limit)}`, {
+    const cleanAgentId = String(requestedAgentId || '').trim();
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (cleanAgentId) qs.set('agentId', cleanAgentId);
+    const res = await fetch(`/api/matches/mine?${qs.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.status === 401) return null;
+    const data = await res.json();
+    return data?.ok ? data : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function fetchAgentById(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(cleanAgentId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.ok ? data : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function fetchMatchesByAgentId(agentId, limit = 6) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  try {
+    const res = await fetch(`/api/matches?agentId=${encodeURIComponent(cleanAgentId)}&limit=${encodeURIComponent(limit)}`);
+    if (!res.ok) return null;
     const data = await res.json();
     return data?.ok ? data : null;
   } catch (_err) {
@@ -384,21 +578,73 @@ async function fetchOwnedMatches(limit = 6) {
 async function refreshOwnerWatch() {
   if (!pageIsOwnerWatch) return;
 
+  const params = new URLSearchParams(window.location.search || '');
+  const queryAgentId = String(params.get('agentId') || '').trim();
+  const rememberedAgentId = getStoredAgentId();
+  const requestedAgentId = queryAgentId || rememberedAgentId;
+
   const [data, recent] = await Promise.all([
-    fetchOwnedAgent(),
-    fetchOwnedMatches(),
+    fetchOwnedAgent(requestedAgentId),
+    fetchOwnedMatches(6, requestedAgentId),
   ]);
-  ownedAgent = data?.agent || null;
-  ownedAgentStats = data?.stats || null;
-  ownedRecentMatches = recent?.matches || [];
 
-  if (ownedAgent?.arena?.activePlayerId) me.playerId = ownedAgent.arena.activePlayerId;
-  if (ownedAgent?.name && playerName) playerName.value = ownedAgent.name;
+  ownerSession = data?.session || null;
+  ownedAgents = Array.isArray(data?.agents) ? data.agents : [];
+  selectedOwnedAgentId = String(data?.selectedAgentId || '').trim();
 
-  const roomFromQuery = new URLSearchParams(window.location.search || '').get('room');
-  const targetRoomId = ownedAgent?.arena?.activeRoomId || roomFromQuery || '';
+  const ownedAgentIds = new Set(ownedAgents.map((agent) => agent.id));
+  const shouldUsePublicSpectate = Boolean(queryAgentId && !ownedAgentIds.has(queryAgentId));
+
+  let nextOwnedAgent = shouldUsePublicSpectate ? null : data?.agent || null;
+  let nextStats = shouldUsePublicSpectate ? null : data?.stats || null;
+  let nextRecentMatches = shouldUsePublicSpectate ? [] : (recent?.matches || []);
+  let nextPublicAgent = null;
+  let nextPublicMatches = [];
+
+  if (shouldUsePublicSpectate) {
+    const [publicData, publicRecent] = await Promise.all([
+      fetchAgentById(queryAgentId),
+      fetchMatchesByAgentId(queryAgentId),
+    ]);
+    if (publicData?.agent) {
+      nextPublicAgent = publicData.agent;
+      nextPublicMatches = publicRecent?.matches || [];
+      ownedAgentSource = 'public';
+    } else {
+      nextOwnedAgent = data?.agent || null;
+      nextStats = data?.stats || null;
+      nextRecentMatches = recent?.matches || [];
+      ownedAgentSource = ownedAgents.length > 0 ? 'auto' : 'none';
+    }
+  } else if (nextOwnedAgent) {
+    if (queryAgentId && nextOwnedAgent.id === queryAgentId) ownedAgentSource = 'query';
+    else if (!queryAgentId && rememberedAgentId && nextOwnedAgent.id === rememberedAgentId) ownedAgentSource = 'remembered';
+    else ownedAgentSource = data?.selectionSource || 'session';
+  } else {
+    ownedAgentSource = ownedAgents.length > 0 ? 'auto' : 'none';
+  }
+
+  if (selectedOwnedAgentId) {
+    setStoredValue(STORAGE_KEYS.agentId, selectedOwnedAgentId);
+  }
+
+  ownedAgent = nextOwnedAgent;
+  ownedAgentStats = nextStats;
+  ownedRecentMatches = nextRecentMatches;
+  publicSpectateAgent = nextPublicAgent;
+  publicSpectateRecentMatches = nextPublicMatches;
+
+  const focusAgent = getCurrentFocusAgent();
+  if (focusAgent?.arena?.activePlayerId) me.playerId = focusAgent.arena.activePlayerId;
+  else if (!focusAgent) me.playerId = '';
+  if (focusAgent?.name && playerName) playerName.value = focusAgent.name;
+
+  const roomFromQuery = params.get('room');
+  const targetRoomId = focusAgent?.arena?.activeRoomId || roomFromQuery || '';
 
   renderOwnerWatchCard();
+  renderArenaVisualization(currentState);
+  renderArenaDiscussion(currentState);
   syncOwnerWatchUrl();
 
   if (targetRoomId) {
@@ -418,6 +664,82 @@ async function refreshOwnerWatch() {
     if (gamePicker) gamePicker.style.display = '';
   }
 }
+
+async function selectOwnerArenaAgent(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return;
+  const params = new URLSearchParams(window.location.search || '');
+  params.set('agentId', cleanAgentId);
+  params.delete('mode');
+  params.delete('room');
+  params.delete('spectate');
+  const nextUrl = `${window.location.pathname}?${params.toString()}`;
+  if (nextUrl !== `${window.location.pathname}${window.location.search}`) {
+    window.history.replaceState({}, '', nextUrl);
+  }
+  publicSpectateAgent = null;
+  publicSpectateRecentMatches = [];
+  await refreshOwnerWatch();
+}
+
+ownerSwitcherList?.addEventListener('click', (event) => {
+  const btn = event.target instanceof Element ? event.target.closest('[data-agent-id]') : null;
+  const agentId = String(btn?.getAttribute('data-agent-id') || '').trim();
+  if (!agentId) return;
+  void selectOwnerArenaAgent(agentId);
+});
+
+ownerBackToMineBtn?.addEventListener('click', () => {
+  const fallbackAgentId = selectedOwnedAgentId || ownedAgents[0]?.id || '';
+  if (!fallbackAgentId) {
+    window.location.href = '/connect.html';
+    return;
+  }
+  void selectOwnerArenaAgent(fallbackAgentId);
+});
+
+ownerUpgradeForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const token = getAuthToken();
+  if (!token) {
+    if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = 'Session expired. Refresh the page and try again.';
+    return;
+  }
+
+  const email = String(ownerUpgradeEmail?.value || '').trim();
+  const displayName = String(ownerUpgradeName?.value || '').trim();
+  if (!email || !displayName) {
+    if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = 'Enter both a display name and email.';
+    return;
+  }
+
+  if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = 'Saving your agents...';
+  try {
+    const res = await fetch('/api/auth/upgrade', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ email, displayName }),
+    });
+    const data = await res.json();
+    if (!data?.ok) {
+      if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = data.error || 'Could not save this session right now.';
+      return;
+    }
+    ownerSession = {
+      ...(ownerSession || {}),
+      userId: data.user?.id || ownerSession?.userId || '',
+      isAnonymous: false,
+    };
+    if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = 'Saved. Your connected OpenClaws now follow this account.';
+    await checkAuth();
+    renderOwnerUpgradeCard();
+  } catch (_err) {
+    if (ownerUpgradeStatus) ownerUpgradeStatus.textContent = 'Upgrade failed. Try again in a moment.';
+  }
+});
 
 // ── Waiting overlay controller ──
 const waitingTips = {
@@ -923,7 +1245,8 @@ function updateControlState(state) {
     if (advanceBtn) { advanceBtn.disabled = true; advanceBtn.textContent = 'Spectating'; }
     if (hostBtn) { hostBtn.disabled = true; }
     if (joinBtn) { joinBtn.disabled = true; }
-    const ownerName = ownedAgent?.name || 'your agent';
+    const focusAgent = getCurrentFocusAgent();
+    const ownerName = focusAgent?.name || currentAgentReferenceLabel();
     setStatus(pageIsOwnerWatch ? `Watching ${ownerName}. ${players.length} player(s) in this room.` : `Spectating — watching this game live. ${players.length} player(s)`, 'info');
     return;
   }
@@ -1023,9 +1346,9 @@ function getAgentInitials(name) {
 }
 
 function isOwnedPlayer(player) {
+  const trackedPlayerId = getCurrentTrackedPlayerId();
   return Boolean(
-    (me.playerId && player.id === me.playerId) ||
-    (ownedAgent?.arena?.activePlayerId && player.id === ownedAgent.arena.activePlayerId)
+    trackedPlayerId && player.id === trackedPlayerId
   );
 }
 
@@ -1092,7 +1415,7 @@ function renderArenaStatusBar(state) {
 function renderArenaVisualization(state) {
   if (!arenaAgentGrid || !isArenaPage) return;
   if (!state || !state.players?.length) {
-    arenaAgentGrid.innerHTML = '<p class="arena-placeholder-msg">Waiting for players...</p>';
+    arenaAgentGrid.innerHTML = buildArenaEmptyStateMarkup();
     return;
   }
 
@@ -1101,6 +1424,7 @@ function renderArenaVisualization(state) {
     const initials = getAgentInitials(p.name);
     const isYou = isOwnedPlayer(p);
     const status = getAgentStatusLabel(p, state);
+    const tagLabel = currentAgentBadgeLabel();
     const classes = ['arena-agent-node'];
     if (isYou) classes.push('is-you');
     if (!p.alive) classes.push('is-eliminated');
@@ -1109,8 +1433,8 @@ function renderArenaVisualization(state) {
       <div class="${classes.join(' ')}">
         <div class="arena-agent-avatar color-${color}">${escapeHtml(initials)}</div>
         <div class="arena-agent-name">${escapeHtml(p.name)}</div>
-        <div class="arena-agent-status ${status.cls}">${isYou && p.alive ? 'ALIVE · ' + (p.role ? roleLabel(p.role).toUpperCase() : 'YOU') : status.text}</div>
-        ${isYou ? '<span class="arena-you-tag">YOU</span>' : ''}
+        <div class="arena-agent-status ${status.cls}">${isYou && p.alive ? `ALIVE · ${p.role ? roleLabel(p.role).toUpperCase() : tagLabel}` : status.text}</div>
+        ${isYou ? `<span class="arena-you-tag">${escapeHtml(tagLabel)}</span>` : ''}
         ${!p.alive ? '<span class="arena-agent-x">✕</span>' : ''}
       </div>`;
   }).join('');
@@ -1138,7 +1462,15 @@ function renderArenaMiniChat(state) {
 function renderArenaDiscussion(state) {
   if (!discussionFeed || !isArenaPage) return;
   if (!state || state.status === 'lobby') {
-    discussionFeed.innerHTML = '<p class="arena-placeholder-msg">Discussion will appear here once the game begins.</p>';
+    const focusAgent = getCurrentFocusAgent();
+    const placeholder = focusAgent?.arena?.activeRoomId
+      ? `${focusAgent.name} is seated. Discussion appears here once the first public phase begins.`
+      : focusAgent?.arena?.runtimeConnected
+        ? `${focusAgent.name} is online. Discussion appears here once the table opens.`
+        : focusAgent
+          ? `${focusAgent.name} is registered. Discussion appears here after the runtime comes online and a game starts.`
+          : 'Discussion will appear here once the game begins.';
+    discussionFeed.innerHTML = `<p class="arena-placeholder-msg">${escapeHtml(placeholder)}</p>`;
     if (votingStatus) votingStatus.style.display = 'none';
     return;
   }
@@ -1213,6 +1545,7 @@ function renderArenaAgentStrip(state) {
     const color = getAgentColor(p, i, state);
     const initials = getAgentInitials(p.name);
     const isYou = isOwnedPlayer(p);
+    const tagLabel = currentAgentBadgeLabel();
     const status = getAgentStatusLabel(p, state);
     const voteCount = state.tally?.[p.id] || 0;
     const classes = ['arena-agent-card'];
@@ -1225,7 +1558,7 @@ function renderArenaAgentStrip(state) {
         <div class="arena-card-info">
           <div class="arena-card-name">
             ${escapeHtml(p.name)}
-            ${isYou ? '<span class="arena-you-tag">YOU</span>' : ''}
+            ${isYou ? `<span class="arena-you-tag">${escapeHtml(tagLabel)}</span>` : ''}
           </div>
           <div class="arena-card-status ${status.cls}">${status.text}</div>
         </div>
@@ -1316,10 +1649,11 @@ function renderState(state) {
     const voteCount = state.votesByRound?.[state.round]?.[p.id] || state.votes?.[p.id] || 0;
     const hasVoted = (state.votedPlayerIds || []).includes(p.id);
     const hasReadyRead = (state.discussionReadyIds || []).includes(p.id);
+    const isTracked = Boolean(me.playerId && p.id === me.playerId);
     return `
-    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${p.id === me.playerId ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
+    <article class="player-card ${p.id === state.hostPlayerId ? 'is-host' : ''} ${isTracked ? 'is-me' : ''} ${p.alive === false ? 'is-dead' : ''}" ${p.alive === false ? 'style="opacity:0.5"' : ''}>
       <div class="player-head">
-        <h3>${escapeHtml(p.name)}${p.id === me.playerId ? ' (you)' : ''}</h3>
+        <h3>${escapeHtml(p.name)}${isTracked ? ` (${escapeHtml(currentAgentReferenceLabel())})` : ''}</h3>
         <span class="player-pill ${p.isBot ? 'pill-bot' : 'pill-human'}">${p.isBot ? 'automated' : 'connected'}</span>
       </div>
       <div class="player-meta-row">
@@ -1452,9 +1786,10 @@ function formatMafiaFeedEvent(state, event) {
 
   if (event.type === 'DISCUSSION_MESSAGE') {
     const speaker = event.actorName || formatPlayerName(state, event.actorId);
-    const isOwnedLine = Boolean(me.playerId && event.actorId === me.playerId);
+    const trackedPlayerId = getCurrentTrackedPlayerId();
+    const isOwnedLine = Boolean(trackedPlayerId && event.actorId === trackedPlayerId);
     return {
-      kicker: isOwnedLine ? '> your agent' : '  table talk',
+      kicker: isOwnedLine ? `> ${currentAgentReferenceLabel()}` : '  table talk',
       title: speaker || 'Unknown agent',
       body: String(event.text || '').trim() || 'A public read just landed on the table.',
       at,
@@ -1573,7 +1908,9 @@ function maybeScheduleSpectatorRedirect(state) {
   clearSpectatorRedirect();
   if (!isSpectating() || !state || state.status !== 'finished') return;
   if (pageIsOwnerWatch) {
-    if (spectatorIntermission) spectatorIntermission.innerHTML = 'Your agent is queuing for the next table<span class="terminal-cursor"></span>';
+    if (spectatorIntermission) {
+      spectatorIntermission.innerHTML = `${isPublicSpectateMode() ? 'This tracked agent may queue for another table.' : 'Your agent is queuing for the next table'}<span class="terminal-cursor"></span>`;
+    }
     return;
   }
 
@@ -1722,7 +2059,7 @@ function suggestedRefinement(result) {
 }
 
 function coachingNudge(result) {
-  const preset = ownedAgent?.persona?.preset || 'pragmatic';
+  const preset = getCurrentFocusAgent()?.persona?.presetId || getCurrentFocusAgent()?.persona?.preset || 'pragmatic';
   if (result.didWin) {
     return `Your <strong>${escapeHtml(preset)}</strong> preset delivered. Run it again or tell your OpenClaw to try a bolder style.`;
   }
@@ -1798,7 +2135,7 @@ function renderOwnerDigest(state) {
         <p class="coaching-label">Next move</p>
         <p>${coachingNudge(result)}</p>
       </div>
-      ${pageIsOwnerWatch ? '<p class="text-sm text-muted" style="font-family:\'Space Mono\',monospace;color:#27d5ad;">Your agent is queuing for the next table...</p>' : `
+      ${pageIsOwnerWatch ? `<p class="text-sm text-muted" style="font-family:'Space Mono',monospace;color:#27d5ad;">${isPublicSpectateMode() ? 'This tracked agent may queue for another table soon.' : 'Your agent is queuing for the next table...'}</p>` : `
         <div style="display:flex; flex-direction:column; align-items:center; gap:0.75rem;">
           <button class="btn btn-primary btn-rematch-cta" onclick="clearRematchCountdown(); document.getElementById('rematchBtn')?.click()">Rematch</button>
           <div id="rematchCountdownContainer"></div>
@@ -2594,7 +2931,7 @@ playersView?.addEventListener('click', (e) => {
   if (!playerCard) return;
   const nameEl = playerCard.querySelector('h3');
   if (!nameEl) return;
-  const name = nameEl.textContent.replace(' (you)', '').trim();
+  const name = nameEl.textContent.replace(/\s+\((?:you|your agent|tracked agent)\)\s*$/i, '').trim();
   // Find the player in current state to get userId
   const player = currentState?.players?.find(p => p.name === name);
   showPlayerProfile(name, player?.userId);

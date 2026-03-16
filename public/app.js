@@ -71,7 +71,8 @@ async function ensureSession() {
     if (data.ok && data.session) {
       setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
       if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
-      if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
+      if (data.selectedAgentId) setStoredValue(STORAGE_KEYS.agentId, data.selectedAgentId);
+      else if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
       else if (data.ownedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.ownedAgent.id);
       else setStoredValue(STORAGE_KEYS.agentId, '');
     }
@@ -163,20 +164,20 @@ copyInstallBtn?.addEventListener('click', async () => {
     refreshFirstWinChecklist();
     copyInstallBtn.textContent = 'Copied!';
     copyInstallBtn.classList.add('copy-success');
-    if (statusEl) statusEl.textContent = 'Copied. Run in your OpenClaw terminal, then generate the message below.';
+    if (statusEl) statusEl.textContent = 'Copied. Run this once in the OpenClaw profile you want to use, then generate the one-time message below.';
     setTimeout(() => {
-      copyInstallBtn.textContent = 'Copy Step 1';
+      copyInstallBtn.textContent = 'Copy Setup Command';
       copyInstallBtn.classList.remove('copy-success');
     }, 2000);
   } catch {
-    if (statusEl) statusEl.textContent = 'Could not copy the install block automatically. Please copy it manually.';
+    if (statusEl) statusEl.textContent = 'Could not copy the setup block automatically. Please copy it manually.';
   }
 });
 
 generateCmdBtn?.addEventListener('click', async () => {
   try {
     generateCmdBtn.disabled = true;
-    statusEl.textContent = 'Preparing your one-time message...';
+    statusEl.textContent = 'Preparing your one-time connect message...';
     await ensureSession();
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
@@ -187,14 +188,13 @@ generateCmdBtn?.addEventListener('click', async () => {
       body: JSON.stringify({}),
     });
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'failed to generate command');
+    if (!data.ok) throw new Error(data.error || 'failed to generate one-time connect message');
 
     connectSessionId = data.connect.id;
     const onboarding = getOnboarding(data.connect);
     connectCommand = onboarding.connectCommand || data.connect.command || '';
     connectExpiresAt = data.connect.expiresAt || null;
     connectAccessToken = data.connect.accessToken || '';
-    setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
     cliCommandEl.textContent = onboarding.agentPrompt || connectCommand;
     if (advancedCommandEl) advancedCommandEl.textContent = buildAdvancedCommandBlock(onboarding, connectCommand);
     if (viewSkillBtn) viewSkillBtn.href = onboarding.skillUrl || '/skill.md';
@@ -223,9 +223,9 @@ copyCmdBtn?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(cliCommandEl.textContent);
     copyCmdBtn.textContent = 'Copied!';
     copyCmdBtn.classList.add('copy-success');
-    statusEl.textContent = 'Copied. Paste into OpenClaw and choose play now or customize first.';
+    statusEl.textContent = 'Copied. Paste into OpenClaw. Your agent should ask whether to play now or customize first.';
     setTimeout(() => {
-      copyCmdBtn.textContent = 'Copy message';
+      copyCmdBtn.textContent = 'Copy One-Time Message';
       copyCmdBtn.classList.remove('copy-success');
     }, 2000);
   } catch {
@@ -240,12 +240,13 @@ async function checkConnectionStatus() {
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}${qs}`);
     const data = await res.json();
     if (!data.ok) {
-      if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new command.';
+      if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new one-time message.';
       if (statusPoll) clearInterval(statusPoll);
       return;
     }
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
+      setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
       if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
       syncArenaEntryButton();
       refreshFirstWinChecklist();
@@ -275,14 +276,68 @@ async function checkConnectionStatus() {
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
       if (statusPoll) clearInterval(statusPoll);
-      statusEl.textContent = 'Session expired. Generate a new command.';
+      statusEl.textContent = 'Session expired. Generate a new one-time message.';
       return;
     }
     updateShareState(data.connect);
-    statusEl.textContent = 'Waiting for connection...';
+    statusEl.textContent = 'Waiting for OpenClaw to connect...';
   } catch {
     // keep silent during polling jitter
   }
+}
+
+async function loadOwnedAgentStatus() {
+  if (!statusEl && !watchLiveBtn && !shareRow && !startArenaBtn) return;
+
+  await ensureSession();
+  const headers = getSessionAuthHeaders();
+  if (!headers.Authorization) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/agents/mine`, { headers });
+    const data = await res.json();
+    if (!data?.ok) return;
+
+    if (data.selectedAgentId) {
+      setStoredValue(STORAGE_KEYS.agentId, data.selectedAgentId);
+    } else if (data.session?.agentId) {
+      setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
+    }
+
+    syncArenaEntryButton();
+    refreshFirstWinChecklist();
+    if (data.agent) {
+      updateShareState({
+        status: 'connected',
+        agentName: data.agent.name,
+        watchUrl: data.agent.watchUrl,
+      });
+    }
+
+    if (!statusEl || !data.agent) return;
+
+    const safeAgentName = escapeHtml(data.agent.name || 'Your agent');
+    if (data.agent.arena?.runtimeConnected && data.agent.arena?.activeRoomId && data.agent.watchUrl) {
+      statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.agent.watchUrl)}">Open Arena</a>`;
+      return;
+    }
+    if (data.agent.arena?.runtimeConnected) {
+      const waitPath = data.agent.watchUrl || currentOwnedArenaUrl();
+      statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Arena</a>`;
+      return;
+    }
+    statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
+  } catch {
+    // keep silent; other page data can still render
+  }
+}
+
+function resumeConnectFlow() {
+  if (!statusEl || !connectSessionId) return;
+  if (statusPoll) clearInterval(statusPoll);
+  statusEl.textContent = 'Checking your last connect message...';
+  void checkConnectionStatus();
+  statusPoll = setInterval(checkConnectionStatus, 3000);
 }
 
 checkStatusBtn?.addEventListener('click', checkConnectionStatus);
@@ -535,7 +590,7 @@ function refreshFirstWinChecklist() {
   if (!stepInstall && !stepMessage && !stepWatch) return;
 
   const hasGenerated = Boolean(connectSessionId || getStoredValue(STORAGE_KEYS.hasGeneratedCommand) === '1');
-  const hasInstalled = hasGenerated || getStoredValue(STORAGE_KEYS.connectorInstalled) === '1';
+  const hasInstalled = getStoredValue(STORAGE_KEYS.connectorInstalled) === '1' || Boolean(getConnectedAgentId());
   const hasConnected = Boolean(getConnectedAgentId());
   const hasViewedArena = getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
 
@@ -544,8 +599,8 @@ function refreshFirstWinChecklist() {
     el.textContent = `${done ? '✅' : '⬜'} ${label}`;
     el.classList.toggle('done', done);
   }
-  mark(stepInstall, hasInstalled, 'Install the connector in OpenClaw');
-  mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time message');
+  mark(stepInstall, hasInstalled, 'Prepare this OpenClaw once');
+  mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time connect message');
   mark(stepWatch, hasViewedArena, 'Watch your agent play');
 }
 
@@ -716,7 +771,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Install the connector in OpenClaw, send the message, then come back to the Arena.');
+  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back to the Arena.');
   window.location.href = '/connect.html';
 });
 
@@ -729,6 +784,8 @@ if (document.body.classList.contains('page-watch-owner')) {
 
 syncArenaEntryButton();
 void loadPublicOnboarding();
+void loadOwnedAgentStatus();
+resumeConnectFlow();
 
 if (leaderboardList) {
   loadLeaderboard();
