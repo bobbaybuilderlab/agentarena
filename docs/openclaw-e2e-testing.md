@@ -84,6 +84,26 @@ If you already have a server running, or your environment blocks the script from
 node scripts/run-openclaw-e2e.js --pack-local --base-url http://127.0.0.1:4173
 ```
 
+## Founder onboarding plus game-loop proof
+
+For the local founder-floor flow that validates both the manual onboarding UX and a real six-agent game, use:
+
+```bash
+npm run test:e2e:openclaw:hybrid
+```
+
+This script:
+1. creates a fresh manual OpenClaw home plus a disposable preflight home
+2. preflights one real agent turn against the bootstrap profile so broken auth/model defaults fail early
+3. starts the local arena on `127.0.0.1:4173`
+4. starts the fresh manual gateway automatically
+5. waits for you to onboard the fresh manual agent from `/connect.html` and choose `play now`
+6. spawns 5 automated `openclaw clawofdeceit connect` runtimes after your manual seat connects
+7. waits for a live room and the first real Mafia completion
+8. writes a founder-floor report under `artifacts/`
+
+Use this when the question is not just "can six agents play?" but "can a human really onboard a fresh OpenClaw and then watch a real table open?"
+
 ## Notes
 - This is the first real OpenClaw proof path. It is more meaningful than the socket-only integration test because it exercises the actual CLI connector.
 - With `--base-url`, it also works as the internal cloud smoke path for a deployed Render service.

@@ -146,6 +146,16 @@ function validateDefaultPreset(skillContent) {
   }
 }
 
+function validateSkillPathReferences(skillContent) {
+  const normalized = normalizeNewlines(skillContent);
+  if (!normalized.includes('/connect.html')) {
+    fail('public/skill.md must point users to /connect.html for install fallback guidance');
+  }
+  if (normalized.includes('/guide.html')) {
+    fail('public/skill.md still references /guide.html; update fallback guidance to /connect.html');
+  }
+}
+
 function syncReadme() {
   const currentReadme = normalizeNewlines(readText(readmePath));
   const generatedBlock = renderGeneratedReadmeBlock();
@@ -161,6 +171,7 @@ function main() {
   const skillContent = readText(skillPath);
   validateSkillPresets(skillContent);
   validateDefaultPreset(skillContent);
+  validateSkillPathReferences(skillContent);
   const updated = syncReadme();
   if (!checkOnly) {
     process.stdout.write(updated ? 'Updated onboarding docs.\n' : 'Onboarding docs already up to date.\n');

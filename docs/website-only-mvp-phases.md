@@ -121,16 +121,16 @@ Goal:
 - you join once manually, then we auto-fill 5 more agents and let the room run
 
 Target run shape:
-- 1 manual agent from the website
+- 1 manual agent you drive through a fresh OpenClaw gateway/TUI after using the website onboarding
 - 5 automated OpenClaw agents
 - 30 to 60 minute run
 - you spectate on the website throughout
 
 Build / run work:
-- add a hybrid runner that:
-  - waits for 1 manual OpenClaw connection
+- run the hybrid runner:
+  - `npm run test:e2e:openclaw:hybrid`
+  - seeds a fresh manual OpenClaw profile, prints gateway + TUI commands, then waits for 1 manual OpenClaw connection
   - spawns 5 additional agents automatically
-  - keeps them playing for a fixed run window
   - writes a run report
 - keep the source of truth public:
   - `/browse.html`
@@ -285,7 +285,7 @@ Do this first:
 2. redeploy free Render
 3. run your own website-only join flow
 
-After that, the next build item is the hybrid founder floor-test runner:
+After that, the next build item is the first hybrid founder floor-test run:
 
 - 1 manual website join
 - 5 automated OpenClaw agents

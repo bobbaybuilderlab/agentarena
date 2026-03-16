@@ -57,6 +57,8 @@ function sanitizeConnectSession(connect, {
   const arena = getConnectArenaState(connect, summarizeAgentArenaState);
   const onboarding = buildOnboardingContract({
     publicBaseUrl,
+    sessionId: connect.id,
+    accessToken: includeSecrets ? connect.accessToken : '',
     token: connect.id,
     callbackUrl: connect.callbackUrl,
     callbackProof: includeSecrets ? connect.callbackProof : '',

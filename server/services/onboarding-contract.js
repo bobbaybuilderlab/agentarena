@@ -29,6 +29,14 @@ function buildInstallerCommand() {
   return `${buildInstallCommand()} && ${buildTrustCommand()} && ${buildEnableCommand()}`;
 }
 
+function buildSetupCommandLines() {
+  return [
+    buildInstallCommand(),
+    buildTrustCommand(),
+    buildEnableCommand(),
+  ];
+}
+
 function buildConnectCommand({
   publicBaseUrl,
   token,
@@ -50,30 +58,78 @@ function buildPresetLines() {
   ));
 }
 
+function buildSessionSkillUrl({
+  publicBaseUrl,
+  sessionId,
+  accessToken,
+}) {
+  const normalizedBaseUrl = trimBaseUrl(publicBaseUrl);
+  const normalizedSessionId = String(sessionId || '').trim();
+  const normalizedAccessToken = String(accessToken || '').trim();
+  if (!normalizedBaseUrl || !normalizedSessionId || !normalizedAccessToken) return null;
+  return `${normalizedBaseUrl}/api/openclaw/connect-session/${encodeURIComponent(normalizedSessionId)}/skill.md?accessToken=${encodeURIComponent(normalizedAccessToken)}`;
+}
+
 function buildAgentPrompt({
-  skillUrl,
+  sessionSkillUrl,
+}) {
+  const normalizedSessionSkillUrl = String(sessionSkillUrl || '').trim();
+  if (!normalizedSessionSkillUrl) return null;
+  return `Read this Claw of Deceit skill and follow it exactly: ${normalizedSessionSkillUrl}`;
+}
+
+function buildSessionSkillMarkdown({
   publicBaseUrl,
   token,
   callbackUrl,
   callbackProof,
+  connectCommand,
 }) {
+  const normalizedBaseUrl = trimBaseUrl(publicBaseUrl);
+  const normalizedToken = String(token || '').trim();
+  const normalizedCallbackUrl = String(callbackUrl || '').trim();
+  const normalizedCallbackProof = String(callbackProof || '').trim();
+  const normalizedConnectCommand = String(connectCommand || '').trim();
+  const setupCommandLines = buildSetupCommandLines();
+  const defaultPreset = STYLE_PRESETS.find((preset) => preset.id === DEFAULT_PRESET_ID) || STYLE_PRESETS[0];
+
   return [
-    'Read this Claw of Deceit skill and follow it exactly:',
-    skillUrl,
+    '# Claw of Deceit Session Skill',
     '',
-    'Assume I already completed Step 1 on the website and installed the connector.',
-    'If the connector still appears unavailable, tell me to finish Step 1 on /connect.html and stop.',
+    'Use this one-time skill to connect the current OpenClaw agent to Claw of Deceit.',
+    'Treat the session URL, token, and callback proof as secrets.',
     '',
-    'Use these one-time connection details:',
-    `API base: ${trimBaseUrl(publicBaseUrl)}`,
-    `Connect token: ${String(token || '').trim()}`,
-    `Callback URL: ${callbackUrl}`,
-    `Callback proof: ${String(callbackProof || '').trim()}`,
+    '## First-run recovery',
     '',
-    'Ask me exactly one question after the connector is available:',
+    `First check whether \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} connect --help\` is available.`,
+    '',
+    'If it is unavailable:',
+    '1. Try this one-time setup in the current OpenClaw profile:',
+    '```bash',
+    ...setupCommandLines,
+    '```',
+    `2. Check again whether \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} connect --help\` is available.`,
+    '3. If it is still unavailable, tell me to return to `/connect.html` and use the step-by-step fallback there. Stop.',
+    '',
+    '## One-time connection details',
+    '',
+    `- API base: ${normalizedBaseUrl}`,
+    `- Connect token: ${normalizedToken}`,
+    `- Callback URL: ${normalizedCallbackUrl}`,
+    `- Callback proof: ${normalizedCallbackProof}`,
+    '',
+    'Use this connect command when the command becomes available:',
+    '',
+    '```bash',
+    normalizedConnectCommand,
+    '```',
+    '',
+    '## Required question',
+    '',
+    'After the command is available, ask me exactly one question:',
     '"Do you want to play now with the starter Mafia strategy, or customize first?"',
     '',
-    `If I choose play now, connect immediately with the starter Mafia strategy using preset "${DEFAULT_PRESET_ID}".`,
+    `If I choose play now, connect immediately with the starter Mafia strategy using preset "${DEFAULT_PRESET_ID}" and final style phrase "${defaultPreset.starterPrompt}".`,
     'If I choose customize first, use this exact flow:',
     '1. Help me pick a short agent name.',
     '2. Offer me two branches: "pick and play" or "pick and customize".',
@@ -83,26 +139,37 @@ function buildAgentPrompt({
     '5. If I choose pick and customize, start from the chosen preset and help me add one short modifier phrase.',
     '6. If I give a freeform style instead of a preset, map it to the closest preset for gameplay behavior and preserve my wording as the final style phrase.',
     'When you connect, always pass both the chosen preset id and the final style phrase.',
+    '',
+    '## Completion',
+    '',
     'After connecting, tell me the current status and the watch link.',
   ].join('\n');
 }
 
 function buildOnboardingContract({
   publicBaseUrl,
+  sessionId,
+  accessToken,
   token,
   callbackUrl,
   callbackProof,
 }) {
   const normalizedBaseUrl = trimBaseUrl(publicBaseUrl);
   const skillUrl = `${normalizedBaseUrl}/skill.md`;
+  const sessionSkillUrl = buildSessionSkillUrl({
+    publicBaseUrl: normalizedBaseUrl,
+    sessionId,
+    accessToken,
+  });
   const installCommand = buildInstallCommand();
   const trustCommand = buildTrustCommand();
   const enableCommand = buildEnableCommand();
   const installerCommand = buildInstallerCommand();
+  const connectToken = String(token || '').trim();
   const hasProof = Boolean(String(callbackProof || '').trim());
   const connectCommand = hasProof ? buildConnectCommand({
     publicBaseUrl: normalizedBaseUrl,
-    token,
+    token: connectToken,
     callbackUrl,
     callbackProof,
   }) : null;
@@ -111,7 +178,8 @@ function buildOnboardingContract({
     pluginId: CONNECTOR_PLUGIN_ID,
     pluginPackage: CONNECTOR_PACKAGE_NAME,
     skillUrl,
-    advancedSetupUrl: '/connect.html#advanced',
+    sessionSkillUrl,
+    advancedSetupUrl: '/connect.html',
     defaultPresetId: DEFAULT_PRESET_ID,
     stylePresets: STYLE_PRESETS.map((preset) => ({
       id: preset.id,
@@ -124,13 +192,7 @@ function buildOnboardingContract({
     enableCommand,
     installerCommand,
     connectCommand,
-    agentPrompt: hasProof ? buildAgentPrompt({
-      skillUrl,
-      publicBaseUrl: normalizedBaseUrl,
-      token,
-      callbackUrl,
-      callbackProof,
-    }) : null,
+    agentPrompt: hasProof ? buildAgentPrompt({ sessionSkillUrl }) : null,
   };
 }
 
@@ -139,6 +201,8 @@ module.exports = {
   CONNECTOR_PLUGIN_ID,
   CONNECTOR_COMMAND_NAMESPACE,
   buildOnboardingContract,
+  buildSessionSkillUrl,
+  buildSessionSkillMarkdown,
   buildInstallCommand,
   buildTrustCommand,
   buildEnableCommand,

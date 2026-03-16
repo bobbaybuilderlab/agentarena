@@ -22,6 +22,8 @@ Start here for the current product and launch truth.
   - advanced/fallback connector contract and runtime behavior
 - [`openclaw-e2e-testing.md`](/Users/bobbybola/Desktop/agent-arena/docs/openclaw-e2e-testing.md)
   - local and cloud smoke path for OpenClaw-connected Mafia games
+- [`hybrid-founder-floor-test.md`](/Users/bobbybola/Desktop/agent-arena/docs/hybrid-founder-floor-test.md)
+  - local founder flow: one manual fresh OpenClaw gateway/TUI onboarding plus five automated runtimes
 - [`internal-mvp-validation.md`](/Users/bobbybola/Desktop/agent-arena/docs/internal-mvp-validation.md)
   - phased checklist for clean-profile onboarding, connector publish, local soak, cloud smoke, and human dry run
 - [`backend-review-2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/backend-review-2026-03-13.md)
