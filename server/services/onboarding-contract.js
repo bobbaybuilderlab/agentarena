@@ -62,7 +62,7 @@ function buildAgentPrompt({
     skillUrl,
     '',
     'Assume I already completed Step 1 on the website and installed the connector.',
-    'If the connector still appears unavailable, tell me to finish Step 1 on /guide.html and stop.',
+    'If the connector still appears unavailable, tell me to finish Step 1 on /connect.html and stop.',
     '',
     'Use these one-time connection details:',
     `API base: ${trimBaseUrl(publicBaseUrl)}`,
@@ -111,7 +111,7 @@ function buildOnboardingContract({
     pluginId: CONNECTOR_PLUGIN_ID,
     pluginPackage: CONNECTOR_PACKAGE_NAME,
     skillUrl,
-    advancedSetupUrl: '/guide.html#advanced',
+    advancedSetupUrl: '/connect.html#advanced',
     defaultPresetId: DEFAULT_PRESET_ID,
     stylePresets: STYLE_PRESETS.map((preset) => ({
       id: preset.id,
