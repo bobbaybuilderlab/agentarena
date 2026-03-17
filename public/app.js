@@ -178,13 +178,7 @@ const claimStatus = document.getElementById('claimStatus');
 const loginEmailInput = document.getElementById('loginEmailInput');
 const loginSendBtn = document.getElementById('loginSendBtn');
 const loginStatus = document.getElementById('loginStatus');
-const signInBtn = document.getElementById('signInBtn');
 const profileBadge = document.getElementById('profileBadge');
-const signInModal = document.getElementById('signInModal');
-const signInForm = document.getElementById('signInForm');
-const authEmailInput = document.getElementById('authEmail');
-const authError = document.getElementById('authError');
-const signInCancelBtn = document.getElementById('signInCancelBtn');
 const ownerTokenCard = document.getElementById('ownerTokenCard');
 const ownerTokenStatus = document.getElementById('ownerTokenStatus');
 const ownerTokenCommand = document.getElementById('ownerTokenCommand');
@@ -200,7 +194,7 @@ let statusPoll = null;
 let publicOnboarding = null;
 
 async function syncOwnerNav() {
-  if (!signInBtn && !profileBadge) return;
+  if (!profileBadge) return;
   const currentUser = await fetchCurrentUserProfile();
   if (profileBadge) {
     if (currentUser?.email) {
@@ -210,9 +204,6 @@ async function syncOwnerNav() {
       profileBadge.textContent = '';
       profileBadge.style.display = 'none';
     }
-  }
-  if (signInBtn) {
-    signInBtn.style.display = currentUser?.email ? 'none' : 'inline-flex';
   }
 }
 
@@ -344,36 +335,6 @@ async function sendLoginLink() {
     loginStatus.textContent = err.message || 'Could not send login link';
   } finally {
     loginSendBtn.disabled = false;
-  }
-}
-
-async function sendModalLoginLink() {
-  if (!authEmailInput || !authError) return;
-  const email = authEmailInput.value.trim();
-  if (!email) {
-    authError.style.display = 'block';
-    authError.style.color = '#fca5a5';
-    authError.textContent = 'Enter your email to receive a login link.';
-    return;
-  }
-
-  try {
-    authError.style.display = 'block';
-    authError.style.color = '#9ca3af';
-    authError.textContent = 'Sending login link...';
-    const data = await requestMagicLink({
-      email,
-      mode: 'login',
-      redirectTo: '/arena.html',
-    });
-    if (!data?.ok) throw new Error(data?.error || 'Could not send login link');
-    authError.style.color = '#86efac';
-    authError.textContent = data?.debug?.magicLinkUrl
-      ? `Dev shortcut ready: ${data.debug.magicLinkUrl}`
-      : 'Check your email for a one-time dashboard login link.';
-  } catch (err) {
-    authError.style.color = '#fca5a5';
-    authError.textContent = err.message || 'Could not send login link';
   }
 }
 
@@ -599,20 +560,6 @@ loginEmailInput?.addEventListener('keydown', (event) => {
     event.preventDefault();
     void sendLoginLink();
   }
-});
-signInBtn?.addEventListener('click', () => {
-  signInModal?.showModal();
-  authEmailInput?.focus();
-});
-signInCancelBtn?.addEventListener('click', () => {
-  signInModal?.close();
-});
-signInForm?.addEventListener('submit', (event) => {
-  event.preventDefault();
-  void sendModalLoginLink();
-});
-signInModal?.addEventListener('click', (event) => {
-  if (event.target === signInModal) signInModal.close();
 });
 
 // Leaderboard + live rooms
