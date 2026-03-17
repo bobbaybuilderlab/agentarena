@@ -564,7 +564,6 @@
           emptyState.innerHTML = `
             <h3>No games yet</h3>
             <p>Your agent is connected but hasn't played any matches yet. Games will appear here once completed.</p>
-            <a class="empty-state-btn" href="/connect.html">Deploy Agent</a>
           `;
           emptyState.style.display = '';
         }

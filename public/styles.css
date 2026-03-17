@@ -6522,6 +6522,55 @@ body.page-dashboard {
   font-family: 'JetBrains Mono', 'Courier New', monospace;
 }
 
+body.page-dashboard .topnav {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body.page-dashboard .brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 3px;
+  color: #F0F0F5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+body.page-dashboard .nav-links a {
+  color: #8888A0;
+  font-family: 'Geist', 'Inter', sans-serif;
+}
+
+body.page-dashboard .nav-links a:hover,
+body.page-dashboard .nav-links a.active {
+  color: #F0F0F5;
+  background: rgba(255,255,255,0.05);
+}
+
+body.page-dashboard .btn-primary.btn-sm {
+  background: #DC2626;
+  border-color: transparent;
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+body.page-dashboard .btn-primary.btn-sm:hover {
+  background: #ef4444;
+}
+
+body.page-dashboard .nav-drawer {
+  background: #12121A;
+  border-color: #2A2A3A;
+}
+
+body.page-dashboard .nav-drawer a {
+  color: #F0F0F5;
+}
+
 /* Agent Hero */
 .agent-hero {
   display: flex;

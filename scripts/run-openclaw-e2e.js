@@ -99,9 +99,9 @@ function slugify(value) {
     .replace(/^-+|-+$/g, '');
 }
 
-function buildAgentConfigs(agentCount) {
-  if (!Number.isInteger(agentCount) || agentCount < 6) {
-    throw new Error(`--agent-count must be an integer >= 6 (received ${agentCount})`);
+function buildAgentConfigs(agentCount, { minCount = 6 } = {}) {
+  if (!Number.isInteger(agentCount) || agentCount < minCount) {
+    throw new Error(`--agent-count must be an integer >= ${minCount} (received ${agentCount})`);
   }
 
   const configs = [];
@@ -602,6 +602,7 @@ async function main() {
     console.log('  --disconnect-grace-sec 120');
     console.log('  --stall-threshold-sec 600');
     console.log('  --fail-on-plugin-warnings');
+    console.log('Note: with --base-url, smaller agent counts are allowed so you can add autos to an already-connected manual seat.');
     process.exit(0);
   }
 
@@ -614,7 +615,9 @@ async function main() {
   const port = readNumberArg('--port', DEFAULT_PORT);
   const connectDelayMs = readNumberArg('--connect-delay-ms', DEFAULT_CONNECT_DELAY_MS);
   const agentCount = readNumberArg('--agent-count', 6);
-  const agentConfigs = buildAgentConfigs(agentCount);
+  const agentConfigs = buildAgentConfigs(agentCount, {
+    minCount: suppliedBaseUrl ? 1 : 6,
+  });
   const durationMs = parseDurationMs();
   const soakEnabled = hasFlag('--keep-running') || durationMs > 0;
   const heartbeatMs = Math.max(1_000, readNumberArg('--heartbeat-sec', DEFAULT_HEARTBEAT_MS / 1000) * 1000);
