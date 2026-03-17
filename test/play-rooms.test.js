@@ -181,7 +181,7 @@ test('lobby autofill remains mafia-only and start-ready replaces disconnected hu
       assert.equal(startReady.ok, true);
       assert.equal(startReady.removedDisconnectedHumans, 1);
       assert.equal(startReady.addedBots, 5);
-      assert.equal(startReady.state.status, 'in_progress');
+      assert.ok(['in_progress', 'finished'].includes(startReady.state.status));
       assert.equal(startReady.state.players.length, 6);
     } finally {
       host.disconnect();

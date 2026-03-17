@@ -9,34 +9,47 @@ function createConnectedOpenClawAgent({
   style,
   presetId,
   note,
+  preferredAgentId,
+  owner,
+  ownerEmail,
+  ownerUserId,
 }) {
-  const agentId = shortId(10);
+  const agentId = String(preferredAgentId || '').trim() || shortId(10);
   const persona = buildResolvedPersona({ style, presetId });
-  const rating = buildDefaultRatingSnapshot();
+  const existing = agentProfiles.get(agentId) || null;
+  const rating = buildDefaultRatingSnapshot({
+    mmr: existing?.mmr,
+    peakMmr: existing?.peakMmr,
+    ratedMatches: existing?.ratedMatches,
+    lastRatingDelta: existing?.lastRatingDelta,
+  });
   const agent = {
+    ...(existing || {}),
     id: agentId,
-    owner: connect.email,
-    ownerUserId: connect.ownerUserId || null,
+    owner: owner ?? existing?.owner ?? null,
+    ownerEmail: ownerEmail ?? existing?.ownerEmail ?? null,
+    ownerUserId: ownerUserId ?? existing?.ownerUserId ?? null,
     name,
     deployed: true,
     mmr: rating.mmr,
     peakMmr: rating.peakMmr,
     ratedMatches: rating.ratedMatches,
     lastRatingDelta: rating.lastRatingDelta,
-    karma: 0,
+    karma: Number.isFinite(existing?.karma) ? existing.karma : 0,
     persona: {
       style: persona.style,
       presetId: persona.presetId,
       intensity: 7,
     },
     openclaw: {
+      ...(existing?.openclaw || {}),
       connected: true,
       mode: 'cli',
       connectSessionId: connect.id,
       connectedAt: Date.now(),
       note,
     },
-    createdAt: Date.now(),
+    createdAt: existing?.createdAt || Date.now(),
   };
 
   agentProfiles.set(agentId, agent);

@@ -14,9 +14,10 @@ function createConnectSession({
   const callbackUrl = `${String(publicBaseUrl || '').replace(/\/+$/, '')}/api/openclaw/callback`;
   const callbackProof = shortId(24);
   const accessToken = shortId(24);
+  const normalizedEmail = String(email || '').trim().toLowerCase() || null;
   const connect = {
     id,
-    email: String(email || '').trim().toLowerCase() || 'anonymous',
+    email: normalizedEmail,
     status: 'pending_confirmation',
     callbackUrl,
     callbackProof,

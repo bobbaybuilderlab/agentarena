@@ -75,12 +75,86 @@ async function ensureSession() {
       else if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
       else if (data.ownedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.ownedAgent.id);
       else setStoredValue(STORAGE_KEYS.agentId, '');
+      return data.session;
     }
   } catch (_err) { /* silent fail -- don't block page load */ }
+  return null;
+}
+
+async function fetchCurrentUserProfile() {
+  const token = getSessionToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.ok ? data.user : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function requestMagicLink({ email, mode, agentId, redirectTo }) {
+  const res = await fetch(`${API_BASE}/api/auth/magic-link/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getSessionAuthHeaders(),
+    },
+    body: JSON.stringify({
+      email,
+      mode,
+      agentId: agentId || undefined,
+      redirectTo: redirectTo || undefined,
+    }),
+  });
+  return res.json();
+}
+
+async function consumeMagicLinkFromUrl() {
+  const params = new URLSearchParams(window.location.search || '');
+  const token = params.get('magicLinkToken');
+  if (!token) return null;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/magic-link/consume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getSessionAuthHeaders(),
+      },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    if (!data?.ok || !data?.session?.token) {
+      return { ok: false, error: data?.error || 'Magic link invalid or expired' };
+    }
+
+    setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
+    if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
+    if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
+    else if (data.claimedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.claimedAgent.id);
+
+    const redirectTo = data.redirectTo || '/arena.html?claimed=1';
+    const target = `${window.location.origin}${redirectTo}`;
+    if (window.location.href !== target) {
+      window.location.replace(target);
+      return { ok: true, redirected: true };
+    }
+
+    params.delete('magicLinkToken');
+    window.history.replaceState({}, '', `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    return { ok: true, data };
+  } catch (_err) {
+    return { ok: false, error: 'Could not complete magic link sign-in' };
+  }
 }
 
 // Auto-initialize session on page load
 ensureSession();
+consumeMagicLinkFromUrl();
 
 // Agent-native onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
@@ -97,6 +171,26 @@ const viewSkillBtn = document.getElementById('viewSkillBtn');
 const watchLiveBtn = document.getElementById('watchLiveBtn');
 const shareOnXBtn = document.getElementById('shareOnXBtn');
 const shareRow = document.getElementById('shareRow');
+const claimCard = document.getElementById('claimCard');
+const claimEmailInput = document.getElementById('claimEmailInput');
+const claimSendBtn = document.getElementById('claimSendBtn');
+const claimStatus = document.getElementById('claimStatus');
+const loginEmailInput = document.getElementById('loginEmailInput');
+const loginSendBtn = document.getElementById('loginSendBtn');
+const loginStatus = document.getElementById('loginStatus');
+const signInBtn = document.getElementById('signInBtn');
+const profileBadge = document.getElementById('profileBadge');
+const signInModal = document.getElementById('signInModal');
+const signInForm = document.getElementById('signInForm');
+const authEmailInput = document.getElementById('authEmail');
+const authError = document.getElementById('authError');
+const signInCancelBtn = document.getElementById('signInCancelBtn');
+const ownerTokenCard = document.getElementById('ownerTokenCard');
+const ownerTokenStatus = document.getElementById('ownerTokenStatus');
+const ownerTokenCommand = document.getElementById('ownerTokenCommand');
+const generateOwnerTokenBtn = document.getElementById('generateOwnerTokenBtn');
+const copyOwnerTokenBtn = document.getElementById('copyOwnerTokenBtn');
+const ownerShareClaimBtn = document.getElementById('ownerShareClaimBtn');
 
 let connectSessionId = getStoredValue(STORAGE_KEYS.connectSessionId) || null;
 let connectCommand = '';
@@ -104,6 +198,64 @@ let connectExpiresAt = null;
 let connectAccessToken = getStoredValue(STORAGE_KEYS.connectAccessToken) || '';
 let statusPoll = null;
 let publicOnboarding = null;
+
+async function syncOwnerNav() {
+  if (!signInBtn && !profileBadge) return;
+  const currentUser = await fetchCurrentUserProfile();
+  if (profileBadge) {
+    if (currentUser?.email) {
+      profileBadge.textContent = currentUser.email;
+      profileBadge.style.display = 'inline-flex';
+    } else {
+      profileBadge.textContent = '';
+      profileBadge.style.display = 'none';
+    }
+  }
+  if (signInBtn) {
+    signInBtn.style.display = currentUser?.email ? 'none' : 'inline-flex';
+  }
+}
+
+async function updateClaimCardVisibility() {
+  if (!claimCard) return;
+  const currentUser = await fetchCurrentUserProfile();
+  const agentId = getConnectedAgentId();
+  claimCard.style.display = agentId ? 'block' : 'none';
+
+  if (!claimStatus) return;
+  if (!agentId) {
+    claimStatus.textContent = 'Connect an agent first, then you can claim ownership with email.';
+    return;
+  }
+  if (currentUser?.email && currentUser?.agentId && currentUser.agentId === agentId) {
+    claimStatus.textContent = `${currentUser.email} now owns this website dashboard.`;
+    return;
+  }
+  claimStatus.textContent = 'Optional but recommended: use email to claim dashboard access and future recovery.';
+}
+
+async function refreshOwnerTokenPanel() {
+  if (!ownerTokenCard) return;
+  const currentUser = await fetchCurrentUserProfile();
+  const token = getSessionToken();
+  if (!token || !currentUser?.email || !currentUser?.agentId) {
+    ownerTokenCard.style.display = 'none';
+    return;
+  }
+
+  ownerTokenCard.style.display = 'block';
+  if (ownerTokenStatus) {
+    ownerTokenStatus.textContent = `Signed in as ${currentUser.email}. Generate an owner token to reconnect the same claimed agent from OpenClaw and keep its dashboard history stable.`;
+  }
+  if (ownerTokenCommand && !ownerTokenCommand.textContent.trim()) {
+    ownerTokenCommand.textContent = 'openclaw clawofdeceit auth --owner-token <token>';
+  }
+
+  if (ownerShareClaimBtn) {
+    const agentName = currentUser.agentId;
+    ownerShareClaimBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(`I claimed my Claw of Deceit agent and can manage it from the dashboard now: ${window.location.origin}/arena.html?agentId=${encodeURIComponent(agentName)}`)}`;
+  }
+}
 
 function getOnboarding(connect) {
   return connect?.onboarding || {};
@@ -137,6 +289,92 @@ function updateShareState(connect) {
   const text = `I just connected ${agentName} to Claw of Deceit. Watch my agent play: ${watchUrl}`;
   shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
   shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
+}
+
+async function sendClaimLink() {
+  if (!claimEmailInput || !claimStatus || !claimSendBtn) return;
+  const email = claimEmailInput.value.trim();
+  const agentId = getConnectedAgentId();
+  if (!email || !agentId) {
+    claimStatus.textContent = 'Enter your email after the agent is connected.';
+    return;
+  }
+
+  try {
+    claimSendBtn.disabled = true;
+    claimStatus.textContent = 'Sending claim link...';
+    const data = await requestMagicLink({
+      email,
+      mode: 'claim',
+      agentId,
+      redirectTo: '/arena.html?claimed=1',
+    });
+    if (!data?.ok) throw new Error(data?.error || 'Could not send claim link');
+    claimStatus.textContent = data?.debug?.magicLinkUrl
+      ? `Claim link ready. Dev shortcut: ${data.debug.magicLinkUrl}`
+      : 'Check your email. The claim link is optional, but it unlocks dashboard access and recovery.';
+  } catch (err) {
+    claimStatus.textContent = err.message || 'Could not send claim link';
+  } finally {
+    claimSendBtn.disabled = false;
+  }
+}
+
+async function sendLoginLink() {
+  if (!loginEmailInput || !loginStatus || !loginSendBtn) return;
+  const email = loginEmailInput.value.trim();
+  if (!email) {
+    loginStatus.textContent = 'Enter your email to receive a login link.';
+    return;
+  }
+
+  try {
+    loginSendBtn.disabled = true;
+    loginStatus.textContent = 'Sending login link...';
+    const data = await requestMagicLink({
+      email,
+      mode: 'login',
+      redirectTo: '/arena.html',
+    });
+    if (!data?.ok) throw new Error(data?.error || 'Could not send login link');
+    loginStatus.textContent = data?.debug?.magicLinkUrl
+      ? `Login link ready. Dev shortcut: ${data.debug.magicLinkUrl}`
+      : 'Check your email for a one-time dashboard login link.';
+  } catch (err) {
+    loginStatus.textContent = err.message || 'Could not send login link';
+  } finally {
+    loginSendBtn.disabled = false;
+  }
+}
+
+async function sendModalLoginLink() {
+  if (!authEmailInput || !authError) return;
+  const email = authEmailInput.value.trim();
+  if (!email) {
+    authError.style.display = 'block';
+    authError.style.color = '#fca5a5';
+    authError.textContent = 'Enter your email to receive a login link.';
+    return;
+  }
+
+  try {
+    authError.style.display = 'block';
+    authError.style.color = '#9ca3af';
+    authError.textContent = 'Sending login link...';
+    const data = await requestMagicLink({
+      email,
+      mode: 'login',
+      redirectTo: '/arena.html',
+    });
+    if (!data?.ok) throw new Error(data?.error || 'Could not send login link');
+    authError.style.color = '#86efac';
+    authError.textContent = data?.debug?.magicLinkUrl
+      ? `Dev shortcut ready: ${data.debug.magicLinkUrl}`
+      : 'Check your email for a one-time dashboard login link.';
+  } catch (err) {
+    authError.style.color = '#fca5a5';
+    authError.textContent = err.message || 'Could not send login link';
+  }
 }
 
 async function loadPublicOnboarding() {
@@ -209,6 +447,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
     statusEl.textContent = 'Ready. Paste this into OpenClaw.';
+    updateClaimCardVisibility();
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -250,6 +489,8 @@ async function checkConnectionStatus() {
       if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
       syncArenaEntryButton();
       refreshFirstWinChecklist();
+      updateClaimCardVisibility();
+      refreshOwnerTokenPanel();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
 
@@ -341,6 +582,38 @@ function resumeConnectFlow() {
 }
 
 checkStatusBtn?.addEventListener('click', checkConnectionStatus);
+claimSendBtn?.addEventListener('click', () => {
+  void sendClaimLink();
+});
+loginSendBtn?.addEventListener('click', () => {
+  void sendLoginLink();
+});
+claimEmailInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void sendClaimLink();
+  }
+});
+loginEmailInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void sendLoginLink();
+  }
+});
+signInBtn?.addEventListener('click', () => {
+  signInModal?.showModal();
+  authEmailInput?.focus();
+});
+signInCancelBtn?.addEventListener('click', () => {
+  signInModal?.close();
+});
+signInForm?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void sendModalLoginLink();
+});
+signInModal?.addEventListener('click', (event) => {
+  if (event.target === signInModal) signInModal.close();
+});
 
 // Leaderboard + live rooms
 const leaderboardList = document.getElementById('leaderboardList');
@@ -789,7 +1062,47 @@ startArenaBtn?.addEventListener('click', () => {
   window.location.href = '/connect.html';
 });
 
+generateOwnerTokenBtn?.addEventListener('click', async () => {
+  if (!ownerTokenStatus || !ownerTokenCommand) return;
+  try {
+    generateOwnerTokenBtn.disabled = true;
+    ownerTokenStatus.textContent = 'Generating owner token...';
+    const res = await fetch(`${API_BASE}/api/owner/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getSessionAuthHeaders(),
+      },
+    });
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'Could not generate owner token');
+    ownerTokenCommand.textContent = data.command || `openclaw clawofdeceit auth --owner-token ${data.ownerToken}`;
+    ownerTokenStatus.textContent = 'Owner token generated. Save it into OpenClaw to reconnect the same claimed agent.';
+    if (copyOwnerTokenBtn) copyOwnerTokenBtn.style.display = 'inline-flex';
+  } catch (err) {
+    ownerTokenStatus.textContent = err.message || 'Could not generate owner token';
+  } finally {
+    generateOwnerTokenBtn.disabled = false;
+  }
+});
+
+copyOwnerTokenBtn?.addEventListener('click', async () => {
+  if (!ownerTokenCommand?.textContent) return;
+  try {
+    await navigator.clipboard.writeText(ownerTokenCommand.textContent);
+    copyOwnerTokenBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyOwnerTokenBtn.textContent = 'Copy Command';
+    }, 2000);
+  } catch (_err) {
+    if (ownerTokenStatus) ownerTokenStatus.textContent = 'Could not copy automatically. Copy the command manually.';
+  }
+});
+
 refreshFirstWinChecklist();
+void updateClaimCardVisibility();
+void refreshOwnerTokenPanel();
+void syncOwnerNav();
 
 if (document.body.classList.contains('page-watch-owner')) {
   setStoredValue(STORAGE_KEYS.viewedWatch, '1');

@@ -190,7 +190,7 @@ test('connected OpenClaw agents bind to the current site session for owner watch
   });
 });
 
-test('style sync preserves the human style phrase while resolving a gameplay preset', async () => {
+test('magic-link claim verifies ownership and owner-token style sync updates the claimed agent', async () => {
   await withServer(async (base) => {
     const sessionToken = await createSiteSession(base);
     const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
@@ -221,12 +221,57 @@ test('style sync preserves the human style phrase while resolving a gameplay pre
     assert.equal(connected.agent.persona.presetId, 'charming');
     assert.equal(connected.agent.persona.style, 'friendly manipulator');
 
-    const syncRes = await fetch(`${base}/api/openclaw/style-sync`, {
+    const claimStartRes = await fetch(`${base}/api/auth/magic-link/start`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${sessionToken}`,
+      },
       body: JSON.stringify({
         email: 'preset-owner@example.com',
-        agentName: 'preset_owner',
+        mode: 'claim',
+        agentId: connected.agent.id,
+      }),
+    });
+    assert.equal(claimStartRes.status, 200);
+    const claimStart = await claimStartRes.json();
+    assert.equal(claimStart.ok, true);
+    assert.ok(claimStart.debug?.magicLinkToken);
+
+    const claimConsumeRes = await fetch(`${base}/api/auth/magic-link/consume`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ token: claimStart.debug.magicLinkToken }),
+    });
+    assert.equal(claimConsumeRes.status, 200);
+    const claimConsume = await claimConsumeRes.json();
+    assert.equal(claimConsume.ok, true);
+    assert.equal(claimConsume.user.email, 'preset-owner@example.com');
+    assert.equal(claimConsume.user.agentId, connected.agent.id);
+
+    const ownerTokenRes = await fetch(`${base}/api/owner/token`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${claimConsume.session.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(ownerTokenRes.status, 200);
+    const ownerTokenData = await ownerTokenRes.json();
+    assert.equal(ownerTokenData.ok, true);
+    assert.ok(ownerTokenData.ownerToken);
+
+    const syncRes = await fetch(`${base}/api/openclaw/style-sync`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ownerTokenData.ownerToken}`,
+      },
+      body: JSON.stringify({
         profile: {
           preset: 'chaotic',
           tone: 'chaotic preacher',

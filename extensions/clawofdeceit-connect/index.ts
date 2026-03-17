@@ -66,6 +66,8 @@ const DEFAULT_API_BASE = process.env.CLAWOFDECEIT_API_BASE?.trim()
   || "http://127.0.0.1:3000";
 const DEFAULT_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "CLAWOFDECEIT.md");
 const LEGACY_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA.md");
+const DEFAULT_OWNER_TOKEN_PATH = path.join(os.homedir(), ".openclaw", "CLAWOFDECEIT_OWNER_TOKEN");
+const LEGACY_OWNER_TOKEN_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA_OWNER_TOKEN");
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
 const FALLBACK_DISCUSSION_MESSAGE = "I'm locking a public read before the vote.";
@@ -130,6 +132,34 @@ function resolveArenaPersona(args: {
     ...resolved,
     intensity: Math.max(1, Math.min(10, Number.isFinite(intensitySource) ? intensitySource : 7)),
   };
+}
+
+function resolveOwnerTokenPath() {
+  if (fs.existsSync(DEFAULT_OWNER_TOKEN_PATH)) return DEFAULT_OWNER_TOKEN_PATH;
+  if (fs.existsSync(LEGACY_OWNER_TOKEN_PATH)) return LEGACY_OWNER_TOKEN_PATH;
+  return DEFAULT_OWNER_TOKEN_PATH;
+}
+
+function readStoredOwnerToken() {
+  try {
+    const target = resolveOwnerTokenPath();
+    if (!fs.existsSync(target)) return "";
+    return fs.readFileSync(target, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredOwnerToken(token: string) {
+  const target = DEFAULT_OWNER_TOKEN_PATH;
+  if (!fs.existsSync(path.dirname(target))) fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${token.trim()}\n`, "utf8");
+  try {
+    fs.chmodSync(target, 0o600);
+  } catch {
+    // best effort only
+  }
+  return target;
 }
 
 function normalizeDecisionResponse(kind: DecisionRequestPayload["kind"], raw: unknown): DecisionResponsePayload {
@@ -243,9 +273,26 @@ const plugin = {
         const root = program.command("clawofdeceit").description("Claw of Deceit commands");
 
         root
+          .command("auth")
+          .description("Store a website owner token for stable claimed-agent reconnects")
+          .requiredOption("--owner-token <token>", "Owner token from the Claw of Deceit dashboard")
+          .action((opts: { ownerToken: string }) => {
+            const token = String(opts.ownerToken || "").trim();
+            if (!token) {
+              console.error("❌ Owner token is required");
+              process.exitCode = 1;
+              return;
+            }
+            const target = writeStoredOwnerToken(token);
+            console.log(`✅ Saved owner token to ${target}`);
+            console.log("Future `connect` and `sync-style` commands will reuse your claimed dashboard agent.");
+          });
+
+        root
           .command("connect")
           .description("Connect this OpenClaw setup to Claw of Deceit and keep the agent live in the Mafia arena")
           .option("--email <email>", "Owner email")
+          .option("--owner-token <token>", "Owner token from the Claw of Deceit dashboard")
           .option("--agent <name>", "Agent name", "deceit_agent")
           .option("--preset <presetId>", "Starter preset id")
           .option("--style <style>", "Agent style phrase")
@@ -257,6 +304,7 @@ const plugin = {
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
           .action(async (opts: {
             email?: string;
+            ownerToken?: string;
             agent: string;
             preset?: string;
             style?: string;
@@ -281,16 +329,20 @@ const plugin = {
             let token = String(opts.token || "").trim();
             let proof = String(opts.proof || "").trim();
             let callbackUrl = String(opts.callback || "").trim();
+            const ownerToken = String(opts.ownerToken || readStoredOwnerToken() || "").trim();
 
             try {
               console.log(`Connecting to Claw of Deceit at ${apiBase}`);
 
               if (!token || !proof) {
-                if (!opts.email) throw new Error("Provide either --token/--proof or --email");
+                if (!opts.email && !ownerToken) throw new Error("Provide either --token/--proof, --email, or a stored owner token");
                 const startRes = await fetch(`${apiBase}/api/openclaw/connect-session`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ email: opts.email }),
+                  body: JSON.stringify({
+                    email: opts.email,
+                    ownerToken: ownerToken || undefined,
+                  }),
                 });
 
                 if (!startRes.ok) throw new Error(`connect-session failed (${startRes.status})`);
@@ -312,7 +364,14 @@ const plugin = {
               const cbRes = await fetch(callbackUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token, proof, agentName: opts.agent, presetId, style }),
+                body: JSON.stringify({
+                  token,
+                  proof,
+                  agentName: opts.agent,
+                  presetId,
+                  style,
+                  ownerToken: ownerToken || undefined,
+                }),
               });
 
               if (!cbRes.ok) {
@@ -331,6 +390,9 @@ const plugin = {
                 console.log("Decision mode: starter Mafia strategy (customize later if you want).");
               } else if (decisionCmd) {
                 console.log(`Decision hook: ${decisionCmd}`);
+              }
+              if (ownerToken) {
+                console.log("Claimed identity: owner token attached; reconnects will reuse your primary dashboard agent when available.");
               }
 
               const socket = io(apiBase, {
@@ -489,23 +551,29 @@ const plugin = {
         root
           .command("sync-style")
           .description("Sync local CLAWOFDECEIT.md style profile to deployed agent")
-          .requiredOption("--email <email>", "Owner email")
-          .requiredOption("--agent <name>", "Agent name")
+          .option("--owner-token <token>", "Override the stored owner token")
           .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
           .option("--api <url>", "Override API base URL")
-          .action(async (opts: { email: string; agent: string; path: string; api?: string }) => {
+          .action(async (opts: { ownerToken?: string; path: string; api?: string }) => {
             const apiBase = (opts.api || cfg.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
             const file = path.resolve(opts.path || DEFAULT_PROFILE_PATH);
+            const ownerToken = String(opts.ownerToken || readStoredOwnerToken() || "").trim();
 
             try {
+              if (!ownerToken) {
+                throw new Error("No owner token configured. Run `openclaw clawofdeceit auth --owner-token <token>` first.");
+              }
               if (!fs.existsSync(file)) throw new Error(`Profile file not found: ${file}`);
               const raw = fs.readFileSync(file, "utf8");
               const profile = parseArenaProfile(raw);
 
               const res = await fetch(`${apiBase}/api/openclaw/style-sync`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: opts.email, agentName: opts.agent, profile }),
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${ownerToken}`,
+                },
+                body: JSON.stringify({ profile }),
               });
 
               if (!res.ok) {
@@ -517,7 +585,7 @@ const plugin = {
                 ok: boolean;
                 agent?: { name: string; persona?: { style: string; presetId?: string; intensity: number } };
               };
-              console.log(`✅ Synced style for ${json.agent?.name || opts.agent}`);
+              console.log(`✅ Synced style for ${json.agent?.name || "your claimed agent"}`);
               console.log(
                 `Style: ${json.agent?.persona?.style} · preset ${json.agent?.persona?.presetId || DEFAULT_PRESET_ID} · Intensity: ${json.agent?.persona?.intensity}`,
               );

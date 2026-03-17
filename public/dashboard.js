@@ -7,7 +7,7 @@
 
   const API_BASE = (window.__RUNTIME_CONFIG__ || {}).API_URL || window.location.origin;
 
-  // ── Handle ?authToken= redirect from magic link ──
+  // ── Legacy cleanup for old auth-token redirects ──
   (function consumeAuthToken() {
     const params = new URLSearchParams(window.location.search);
     const authToken = params.get('authToken');
@@ -112,23 +112,37 @@
   const emptyState = $('emptyState');
   const dashboardMain = $('dashboardMain');
 
-  // ── Upgrade Banner (for anonymous users who already have an agent) ──
+  function requestDashboardMagicLink(payload) {
+    if (typeof requestMagicLink === 'function') {
+      return requestMagicLink(payload);
+    }
+    return fetch(`${API_BASE}/api/auth/magic-link/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getSessionAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    }).then((res) => res.json());
+  }
+
+  // ── Claim Banner (for anonymous users who already have an agent) ──
   function showUpgradeBanner() {
     const existing = $('upgradeBanner');
     if (existing) return; // already shown
+    const currentAgentId = agentData?.id || getConnectedAgentId();
     const banner = document.createElement('div');
     banner.id = 'upgradeBanner';
     banner.className = 'upgrade-banner';
     banner.innerHTML = `
       <div class="upgrade-banner-content">
         <div>
-          <strong>Save your progress</strong>
-          <p>Add your email to keep your agent and game history across browsers and devices.</p>
+          <strong>Claim this agent for dashboard access</strong>
+          <p>Optional, but recommended. Use your email to access this dashboard later, recover the same agent, and keep your website history attached to you.</p>
         </div>
         <form id="upgradeBannerForm" class="upgrade-banner-form">
           <input id="upgradeBannerEmail" type="email" maxlength="254" placeholder="you@example.com" required />
-          <input id="upgradeBannerName" type="text" maxlength="40" placeholder="Display name" />
-          <button type="submit" class="upgrade-banner-btn">Save Account</button>
+          <button type="submit" class="upgrade-banner-btn">Email Claim Link</button>
         </form>
         <p id="upgradeBannerError" class="auth-gate-error" style="display:none;"></p>
       </div>
@@ -138,23 +152,27 @@
     $('upgradeBannerForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = $('upgradeBannerEmail')?.value?.trim();
-      const name = $('upgradeBannerName')?.value?.trim();
-      if (!email) return;
+      if (!email || !currentAgentId) return;
       const errEl = $('upgradeBannerError');
       const btn = banner.querySelector('.upgrade-banner-btn');
       if (btn) btn.disabled = true;
       if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
       try {
-        const headers = { 'Content-Type': 'application/json', ...getSessionAuthHeaders() };
-        const res = await fetch(`${API_BASE}/api/auth/upgrade`, {
-          method: 'POST', headers,
-          body: JSON.stringify({ email, name: name || undefined }),
+        const data = await requestDashboardMagicLink({
+          email,
+          mode: 'claim',
+          agentId: currentAgentId,
+          redirectTo: '/arena.html?claimed=1',
         });
-        const data = await res.json();
         if (data.ok) {
-          if (data.session?.token) setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
-          banner.innerHTML = '<div class="upgrade-banner-content"><strong>Account saved!</strong> Your game history is now linked to your email.</div>';
-          setTimeout(() => banner.remove(), 4000);
+          banner.innerHTML = `
+            <div class="upgrade-banner-content">
+              <strong>Check your email</strong>
+              <p>${data?.debug?.magicLinkUrl
+                ? `Dev link ready: <a href="${escapeHtml(data.debug.magicLinkUrl)}">complete claim</a>`
+                : 'We sent a one-time claim link. Once you open it, this dashboard will be tied to your email.'}</p>
+            </div>
+          `;
         } else {
           if (errEl) { errEl.textContent = data.error || 'Failed to save'; errEl.style.display = ''; }
           if (btn) btn.disabled = false;
@@ -177,8 +195,8 @@
     const isLink = mode === 'link';
     const heading = isLink ? 'Sign In to See Your Games' : 'Log In to Claw of Deceit';
     const subtext = isLink
-      ? 'Already deployed an OpenClaw? Enter your email to get a login link and view your match history.'
-      : 'Manage your agent from the owner dashboard.';
+      ? 'Claiming ownership is optional. If you already claimed an agent, enter your email to get back into the website dashboard.'
+      : 'Manage your claimed agent from the website dashboard.';
 
     authGate.innerHTML = `
       <div class="auth-gate">
@@ -198,11 +216,8 @@
         <div class="auth-gate-divider"></div>
 
         <div class="auth-gate-agent-section">
-          <h3>Already have an OpenClaw?</h3>
-          <p>If you connected your OpenClaw but don't have a login yet, tell your agent:</p>
-          <code class="auth-gate-agent-prompt">Set up my email for Claw of Deceit login: your@email.com</code>
-          <p class="auth-gate-agent-api">Or your agent can call the API directly:</p>
-          <code class="auth-gate-agent-prompt">POST /api/auth/magic-link\n{ "email": "your@email.com" }</code>
+          <h3>Ownership is optional</h3>
+          <p>You do not need email to connect and play. Use email only if you want website dashboard access, recovery, and a stable claimed owner identity.</p>
         </div>
       </div>
     `;
@@ -223,30 +238,23 @@
       if (successEl) successEl.style.display = 'none';
 
       try {
-        const res = await fetch(`${API_BASE}/api/auth/magic-link`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email }),
+        const data = await requestDashboardMagicLink({
+          email,
+          mode: 'login',
+          redirectTo: '/arena.html',
         });
-        const data = await res.json();
 
         if (data.ok) {
-          if (data.emailSent) {
-            if (successEl) {
-              successEl.textContent = 'Check your email! We sent you a login link. It expires in 15 minutes.';
-              successEl.style.display = '';
-            }
-            if (submitBtn) submitBtn.textContent = 'Link Sent — Check Email';
-          } else if (data.magicUrl) {
-            // Dev mode — no email provider, show the link directly
-            if (successEl) {
-              successEl.textContent = 'No email provider configured. Use the link below to log in:';
-              successEl.style.display = '';
-            }
-            if (devLinkEl) {
-              devLinkEl.innerHTML = '<a href="' + escapeHtml(data.magicUrl) + '" class="auth-gate-submit" style="display:inline-block;text-align:center;text-decoration:none;">Click Here to Log In</a>';
-              devLinkEl.style.display = '';
-            }
+          if (successEl) {
+            successEl.textContent = data?.debug?.magicLinkUrl
+              ? 'Dev mode: open the link below to finish sign-in.'
+              : 'Check your email. We sent a one-time login link.';
+            successEl.style.display = '';
+          }
+          if (submitBtn) submitBtn.textContent = 'Link Sent — Check Email';
+          if (devLinkEl && data?.debug?.magicLinkUrl) {
+            devLinkEl.innerHTML = '<a href="' + escapeHtml(data.debug.magicLinkUrl) + '" class="auth-gate-submit" style="display:inline-block;text-align:center;text-decoration:none;">Open Dev Login Link</a>';
+            devLinkEl.style.display = '';
           }
         } else {
           if (errorEl) {

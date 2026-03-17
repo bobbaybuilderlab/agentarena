@@ -15,6 +15,7 @@ process.on('unhandledRejection', (reason) => {
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -44,6 +45,12 @@ const {
   createAnonymousUser,
   createSession,
   upgradeUser,
+  createMagicLink,
+  getMagicLinkByTokenHash,
+  consumeMagicLink,
+  rotateOwnerToken,
+  getOwnerTokenByHash,
+  touchOwnerToken,
   createReport,
   getReports,
   updateReportStatus,
@@ -126,6 +133,37 @@ function syncAgentRatingMirrors(ratingUpdates = []) {
   if (changed) persistState();
 }
 
+const MAGIC_LINK_TTL_MS = 30 * 60 * 1000;
+const OWNER_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
+const MAGIC_LINK_FROM_EMAIL = String(process.env.MAGIC_LINK_FROM_EMAIL || '').trim();
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  const email = normalizeEmail(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function issueOpaqueToken(bytes = 24) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+function hashOpaqueToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function sanitizeRedirectTo(rawValue, fallbackPath = '/arena.html') {
+  const fallback = String(fallbackPath || '/arena.html').startsWith('/') ? String(fallbackPath) : '/arena.html';
+  const value = String(rawValue || '').trim();
+  if (!value) return fallback;
+  if (!value.startsWith('/')) return fallback;
+  if (value.startsWith('//')) return fallback;
+  return value;
+}
+
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
@@ -171,6 +209,11 @@ function injectPublicBaseUrl(html, publicBaseUrl) {
   const normalizedPublicBaseUrl = normalizeBaseUrl(publicBaseUrl);
   if (!normalizedPublicBaseUrl) return next;
 
+  next = next.replace(
+    /https:\/\/agent-arena[-a-z0-9]*\.(?:onrender\.com|vercel\.app)/gi,
+    normalizedPublicBaseUrl,
+  );
+
   for (const staleBaseUrl of STALE_PUBLIC_BASE_URLS) {
     const normalizedStaleBaseUrl = normalizeBaseUrl(staleBaseUrl);
     if (!normalizedStaleBaseUrl || normalizedStaleBaseUrl === normalizedPublicBaseUrl) continue;
@@ -215,6 +258,118 @@ function sendRuntimeHtml(req, res, next) {
 
 function readBearerToken(req) {
   return String(req.headers.authorization || '').replace('Bearer ', '').trim();
+}
+
+function buildAbsoluteAppUrl(req, relativePath) {
+  const baseUrl = resolvePublicBaseUrl(req);
+  return `${baseUrl}${sanitizeRedirectTo(relativePath, '/')}`;
+}
+
+async function sendMagicLinkEmail(req, { email, token, mode, redirectTo, agentId }) {
+  const normalizedEmail = normalizeEmail(email);
+  const landingPath = sanitizeRedirectTo(
+    `/arena.html?magicLinkToken=${encodeURIComponent(token)}&flow=${encodeURIComponent(mode)}&claimed=1`,
+    '/arena.html',
+  );
+  const landingUrl = buildAbsoluteAppUrl(req, landingPath);
+  const subject = mode === 'claim'
+    ? 'Claim your Claw of Deceit agent'
+    : 'Your Claw of Deceit login link';
+  const intro = mode === 'claim'
+    ? 'Use this one-time link to associate ownership with your email so you can access your dashboard and recover this agent later.'
+    : 'Use this one-time link to sign back into your Claw of Deceit dashboard.';
+  const copy = [
+    intro,
+    '',
+    `Open: ${landingUrl}`,
+    '',
+    'Why claim ownership:',
+    '- Access your dashboard from another browser or device',
+    '- Recover your claimed agent later',
+    '- Keep your website history attached to your email',
+    '',
+    `Redirect after sign-in: ${sanitizeRedirectTo(redirectTo, '/arena.html?claimed=1')}`,
+    agentId ? `Agent: ${agentId}` : null,
+    '',
+    'This link expires in 30 minutes and can be used once.',
+  ].filter(Boolean).join('\n');
+
+  if (!RESEND_API_KEY || !MAGIC_LINK_FROM_EMAIL) {
+    if (IS_PRODUCTION) {
+      throw new Error('Magic link email delivery is not configured');
+    }
+    return {
+      delivered: false,
+      debugToken: token,
+      debugUrl: landingUrl,
+    };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: MAGIC_LINK_FROM_EMAIL,
+      to: [normalizedEmail],
+      subject,
+      text: copy,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Magic link email failed (${response.status}): ${text}`);
+  }
+
+  return { delivered: true };
+}
+
+async function issueUserSiteSession(user, { ttlMs = OWNER_SESSION_TTL_MS } = {}) {
+  const userId = String(user?.id || '').trim();
+  if (!userId) throw new Error('user id required');
+  const token = issueOpaqueToken(24);
+  const expiresAt = expiresAtFromNow(ttlMs);
+  await createSession(shortId(8), userId, token, expiresAt);
+  setCachedSession({
+    token,
+    userId,
+    email: user?.email || null,
+    displayName: user?.display_name || null,
+    agentId: user?.agent_id || null,
+    createdAt: Date.now(),
+    expiresAt,
+  });
+  return {
+    token,
+    userId,
+    agentId: user?.agent_id || null,
+    expiresAt,
+    durable: true,
+  };
+}
+
+function syncClaimedAgentOwnership(agentId, user) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId || !user?.id) return;
+  const agent = agentProfiles.get(cleanAgentId);
+  if (!agent) return;
+  agent.owner = user.email || null;
+  agent.ownerEmail = user.email || null;
+  agent.ownerUserId = user.id;
+  persistState();
+}
+
+async function resolveOwnerTokenUser(rawToken) {
+  const cleanToken = String(rawToken || '').trim();
+  if (!cleanToken) return null;
+  const hashed = hashOpaqueToken(cleanToken);
+  const ownerToken = await getOwnerTokenByHash(hashed);
+  if (!ownerToken?.user_id || ownerToken.revoked_at) return null;
+  if (ownerToken.id) await touchOwnerToken(ownerToken.id);
+  return getUserById(ownerToken.user_id);
 }
 
 const io = new Server(server, {
@@ -2256,37 +2411,153 @@ app.post('/api/auth/session', async (req, res) => {
   }
 });
 
-// ── Auth: register (email + display name → token) ──
-app.post('/api/auth/register', async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
-  if (!email || !email.includes('@')) {
+app.post('/api/auth/magic-link/start', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const mode = String(req.body?.mode || 'login').trim() === 'claim' ? 'claim' : 'login';
+  const siteSession = await resolveSiteSession(req);
+  const redirectTo = sanitizeRedirectTo(
+    req.body?.redirectTo,
+    mode === 'claim' ? '/arena.html?claimed=1' : '/arena.html',
+  );
+
+  if (!isValidEmail(email)) {
     return res.status(400).json({ ok: false, error: 'Valid email is required' });
   }
-  if (!displayName) {
-    return res.status(400).json({ ok: false, error: 'Display name is required' });
+
+  let pendingAgentId = null;
+  if (mode === 'claim') {
+    if (!siteSession?.userId) {
+      return res.status(401).json({ ok: false, error: 'Create a browser session before claiming an agent' });
+    }
+    pendingAgentId = String(req.body?.agentId || siteSession.agentId || '').trim();
+    if (!pendingAgentId) {
+      return res.status(400).json({ ok: false, error: 'Connect an agent before requesting a claim link' });
+    }
+    const siteUser = await getUserById(siteSession.userId).catch(() => null);
+    const ownsPendingAgent = pendingAgentId === String(siteSession.agentId || '').trim()
+      || pendingAgentId === String(siteUser?.agent_id || '').trim();
+    if (!ownsPendingAgent) {
+      return res.status(403).json({ ok: false, error: 'This browser session cannot claim that agent' });
+    }
   }
 
   try {
-    const userId = shortId(12);
-    const token = shortId(24);
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+    const rawToken = issueOpaqueToken(24);
+    const link = await createMagicLink({
+      id: shortId(16),
+      email,
+      mode,
+      tokenHash: hashOpaqueToken(rawToken),
+      requesterUserId: siteSession?.userId || null,
+      pendingAgentId,
+      redirectTo,
+      expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString(),
+    });
 
-    await createAnonymousUser(userId);
-    await upgradeUser(userId, { email, displayName });
-    await createSession(shortId(8), userId, token, expiresAt);
-    setCachedSession({ token, userId, email, displayName, createdAt: Date.now(), expiresAt });
+    const delivery = await sendMagicLinkEmail(req, {
+      email,
+      token: rawToken,
+      mode,
+      redirectTo,
+      agentId: pendingAgentId,
+    });
 
     res.json({
       ok: true,
-      user: { id: userId, email, displayName },
-      session: { token, userId, expiresAt, durable: true },
+      mode,
+      email,
+      expiresAt: link?.expires_at || null,
+      message: mode === 'claim'
+        ? 'If that email can be used here, we sent a claim link.'
+        : 'If that email can be used here, we sent a login link.',
+      debug: !IS_PRODUCTION && delivery?.debugToken
+        ? {
+            magicLinkToken: delivery.debugToken,
+            magicLinkUrl: delivery.debugUrl,
+          }
+        : undefined,
     });
   } catch (err) {
-    if (/unique|duplicate key/i.test(String(err.message || ''))) {
-      return res.status(409).json({ ok: false, error: 'Email already registered' });
+    logStructured('error.auth.magic_link.start', { error: err.message, mode });
+    const status = /configured/i.test(String(err.message || '')) ? 503 : 500;
+    res.status(status).json({ ok: false, error: status === 503 ? 'Magic link email unavailable' : 'Magic link request failed' });
+  }
+});
+
+app.post('/api/auth/magic-link/consume', async (req, res) => {
+  const rawToken = String(req.body?.token || '').trim();
+  if (!rawToken) return res.status(400).json({ ok: false, error: 'Token is required' });
+
+  try {
+    const link = await getMagicLinkByTokenHash(hashOpaqueToken(rawToken));
+    if (!link || link.consumed_at || isExpiredIso(link.expires_at)) {
+      return res.status(400).json({ ok: false, error: 'Magic link invalid or expired' });
     }
-    res.status(500).json({ ok: false, error: 'Registration failed' });
+
+    const currentSiteSession = await resolveSiteSession(req);
+    const currentUser = currentSiteSession?.userId ? await getUserById(currentSiteSession.userId).catch(() => null) : null;
+    let user = await getUserByEmail(link.email);
+    const claimedAgentId = String(link.pending_agent_id || '').trim() || null;
+
+    if (link.mode === 'claim') {
+      if (!claimedAgentId) {
+        return res.status(400).json({ ok: false, error: 'This claim link is missing an agent reference' });
+      }
+      if (user?.agent_id && user.agent_id !== claimedAgentId) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ONE_PRIMARY_AGENT_LIMIT',
+          error: 'This email already manages a different primary agent in v1.',
+        });
+      }
+
+      if (user?.id) {
+        if (!user.agent_id) user = await upgradeUser(user.id, { email: link.email, agentId: claimedAgentId });
+      } else if (currentUser?.id && claimedAgentId === String(currentSiteSession?.agentId || currentUser?.agent_id || '').trim()) {
+        user = await upgradeUser(currentUser.id, { email: link.email, agentId: claimedAgentId });
+      } else {
+        const userId = shortId(12);
+        await createAnonymousUser(userId);
+        user = await upgradeUser(userId, { email: link.email, agentId: claimedAgentId });
+      }
+
+      if (user?.id && !user.agent_id) {
+        user = await setUserAgentId(user.id, claimedAgentId);
+      }
+      syncClaimedAgentOwnership(claimedAgentId, user);
+    } else if (!user?.id) {
+      if (currentUser?.id && (!currentUser.email || currentUser.is_anonymous)) {
+        user = await upgradeUser(currentUser.id, { email: link.email });
+      } else {
+        const userId = shortId(12);
+        await createAnonymousUser(userId);
+        user = await upgradeUser(userId, { email: link.email });
+      }
+    }
+
+    if (!user?.id) {
+      return res.status(500).json({ ok: false, error: 'Could not establish a verified session' });
+    }
+
+    await consumeMagicLink(link.id);
+    const refreshedUser = await getUserById(user.id);
+    const session = await issueUserSiteSession(refreshedUser || user);
+
+    res.json({
+      ok: true,
+      session,
+      user: {
+        id: (refreshedUser || user).id,
+        email: (refreshedUser || user).email || null,
+        displayName: (refreshedUser || user).display_name || null,
+        agentId: (refreshedUser || user).agent_id || null,
+      },
+      claimedAgent: summarizeOwnedAgent((refreshedUser || user).agent_id),
+      redirectTo: sanitizeRedirectTo(link.redirect_to, link.mode === 'claim' ? '/arena.html?claimed=1' : '/arena.html'),
+    });
+  } catch (err) {
+    logStructured('error.auth.magic_link.consume', { error: err.message });
+    res.status(500).json({ ok: false, error: 'Magic link consumption failed' });
   }
 });
 
@@ -2304,6 +2575,7 @@ app.get('/api/auth/me', async (req, res) => {
         id: user.id,
         email: user.email,
         displayName: user.display_name,
+        agentId: user.agent_id || null,
         isAnonymous: !!user.is_anonymous,
         createdAt: user.created_at,
       },
@@ -2313,163 +2585,46 @@ app.get('/api/auth/me', async (req, res) => {
   }
 });
 
-// ── Auth: upgrade anonymous → email-based ──
-app.post('/api/auth/upgrade', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+app.post('/api/auth/register', (_req, res) => {
+  res.status(410).json({ ok: false, error: 'Magic link sign-in is required' });
+});
 
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+app.post('/api/auth/upgrade', (_req, res) => {
+  res.status(410).json({ ok: false, error: 'Magic link sign-in is required' });
+});
+
+app.post('/api/owner/token', async (req, res) => {
+  const siteSession = await resolveSiteSession(req);
+  if (!siteSession?.userId) {
+    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
   }
 
   try {
-    const user = await getUserByToken(token);
-    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    const user = await getUserById(siteSession.userId);
+    if (!user?.email) {
+      return res.status(403).json({ ok: false, error: 'Claim your agent with email before generating an owner token' });
+    }
+    if (!user.agent_id) {
+      return res.status(400).json({ ok: false, error: 'No claimed agent is linked to this account yet' });
+    }
 
-    const updated = await upgradeUser(user.id, { email, displayName: displayName || undefined });
+    const ownerToken = issueOpaqueToken(24);
+    await rotateOwnerToken({
+      id: shortId(16),
+      userId: user.id,
+      tokenHash: hashOpaqueToken(ownerToken),
+    });
+
     res.json({
       ok: true,
-      user: {
-        id: updated.id,
-        email: updated.email,
-        displayName: updated.display_name,
-        isAnonymous: !!updated.is_anonymous,
-      },
+      ownerToken,
+      agentId: user.agent_id,
+      command: `openclaw clawofdeceit auth --owner-token ${ownerToken}`,
     });
   } catch (err) {
-    if (/unique|duplicate key/i.test(String(err.message || ''))) {
-      return res.status(409).json({ ok: false, error: 'Email already in use' });
-    }
-    res.status(500).json({ ok: false, error: 'Upgrade failed' });
+    logStructured('error.auth.owner_token.issue', { error: err.message, userId: siteSession.userId });
+    res.status(500).json({ ok: false, error: 'Could not generate owner token' });
   }
-});
-
-// ── Magic link login ──
-const magicLinkTokens = new Map();
-const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const MAGIC_LINK_FROM = process.env.MAGIC_LINK_FROM || 'Claw of Deceit <noreply@clawofdeceit.com>';
-
-async function sendMagicLinkEmail(toEmail, magicUrl) {
-  if (!RESEND_API_KEY) {
-    console.log(`[magic-link] (no RESEND_API_KEY, logging to console)\n  → ${magicUrl}`);
-    return { sent: false, reason: 'no_api_key' };
-  }
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-      body: JSON.stringify({
-        from: MAGIC_LINK_FROM,
-        to: [toEmail],
-        subject: 'Your Claw of Deceit Login Link',
-        html: `<p>Click the link below to log in to your Claw of Deceit dashboard:</p>
-<p><a href="${magicUrl}" style="display:inline-block;padding:12px 24px;background:#DC2626;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">Log In to Claw of Deceit</a></p>
-<p style="color:#888;">This link expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`,
-      }),
-    });
-    const data = await res.json();
-    if (data.id) return { sent: true };
-    logStructured('error.magicLink.send', { error: data.message || 'Unknown Resend error' });
-    return { sent: false, reason: data.message || 'send_failed' };
-  } catch (err) {
-    logStructured('error.magicLink.send', { error: err.message });
-    return { sent: false, reason: 'network_error' };
-  }
-}
-
-app.post('/api/auth/magic-link', async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ ok: false, error: 'Valid email is required' });
-  }
-
-  // Look up existing user, or register a new one
-  let user = await getUserByEmail(email);
-  let isNewUser = false;
-
-  if (!user) {
-    // Auto-create account for new emails
-    try {
-      const userId = shortId(12);
-      await createAnonymousUser(userId);
-      await upgradeUser(userId, { email });
-      user = await getUserById(userId);
-      isNewUser = true;
-    } catch (err) {
-      if (/unique|duplicate key/i.test(String(err.message || ''))) {
-        // Race condition — user was created between check and insert
-        user = await getUserByEmail(email);
-      } else {
-        return res.status(500).json({ ok: false, error: 'Failed to create account' });
-      }
-    }
-  }
-
-  if (!user) {
-    return res.status(500).json({ ok: false, error: 'Failed to resolve account' });
-  }
-
-  // Generate magic link token
-  const magicToken = shortId(32);
-  magicLinkTokens.set(magicToken, {
-    userId: user.id,
-    email,
-    expiresAt: Date.now() + MAGIC_LINK_TTL_MS,
-  });
-
-  // Clean up expired tokens periodically
-  if (magicLinkTokens.size > 100) {
-    const now = Date.now();
-    for (const [k, v] of magicLinkTokens) {
-      if (v.expiresAt < now) magicLinkTokens.delete(k);
-    }
-  }
-
-  const publicBaseUrl = resolvePublicBaseUrl(req);
-  const magicUrl = `${publicBaseUrl}/api/auth/verify?token=${encodeURIComponent(magicToken)}`;
-
-  const sendResult = await sendMagicLinkEmail(email, magicUrl);
-
-  res.json({
-    ok: true,
-    isNewUser,
-    emailSent: sendResult.sent,
-    // In dev mode (no Resend key), return the magic URL so the user can click it directly
-    ...(sendResult.sent ? {} : { magicUrl }),
-  });
-});
-
-app.get('/api/auth/verify', async (req, res) => {
-  const magicToken = String(req.query.token || '').trim();
-  if (!magicToken) return res.status(400).send('Missing token');
-
-  const entry = magicLinkTokens.get(magicToken);
-  if (!entry) return res.status(400).send('Invalid or expired login link. <a href="/arena.html">Try again</a>');
-  if (Date.now() > entry.expiresAt) {
-    magicLinkTokens.delete(magicToken);
-    return res.status(400).send('This login link has expired. <a href="/arena.html">Request a new one</a>');
-  }
-
-  // Consume the token (one-time use)
-  magicLinkTokens.delete(magicToken);
-
-  // Create a session for this user
-  const sessionToken = shortId(24);
-  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
-
-  try {
-    await createSession(shortId(8), entry.userId, sessionToken, expiresAt);
-    setCachedSession({ token: sessionToken, userId: entry.userId, email: entry.email, createdAt: Date.now(), expiresAt });
-  } catch (err) {
-    logStructured('error.magicLink.verify', { error: err.message });
-    return res.status(500).send('Failed to create session. <a href="/arena.html">Try again</a>');
-  }
-
-  // Redirect to dashboard with the session token embedded so the client can store it
-  res.redirect(`/arena.html?authToken=${encodeURIComponent(sessionToken)}`);
 });
 
 // ── Match history for authenticated user ──
@@ -2519,28 +2674,36 @@ app.use('/api/openclaw', createOpenClawRouter({
   bindOwnedAgent,
   agentProfiles,
   connectSessions,
+  getUserById,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
+  resolveOwnerTokenUser,
   resolveSiteSession,
   roomEvents,
   shortId,
   summarizeAgentArenaState,
 }));
 
-app.post('/api/openclaw/style-sync', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const agentName = String(req.body?.agentName || '').trim();
+app.post('/api/openclaw/style-sync', async (req, res) => {
+  const ownerToken = readBearerToken(req);
   const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
-  if (!email || !agentName || !profile) {
-    return res.status(400).json({ ok: false, error: 'email, agentName, profile required' });
+  if (!ownerToken || !profile) {
+    return res.status(400).json({ ok: false, error: 'owner token and profile required' });
   }
 
-  const agent = [...agentProfiles.values()]
-    .filter((a) => a.owner === email && a.name === agentName)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+  const ownerUser = await resolveOwnerTokenUser(ownerToken);
+  if (!ownerUser?.id) {
+    return res.status(401).json({ ok: false, error: 'invalid owner token' });
+  }
 
-  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
+  const claimedAgentId = String(ownerUser.agent_id || '').trim();
+  if (!claimedAgentId) {
+    return res.status(404).json({ ok: false, error: 'no claimed agent linked to this owner token' });
+  }
+
+  const agent = agentProfiles.get(claimedAgentId);
+  if (!agent) return res.status(404).json({ ok: false, error: 'claimed agent not found' });
 
   const nextPersona = buildArenaPersona({
     style: profile.tone || profile.style || agent.persona?.style || '',

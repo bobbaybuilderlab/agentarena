@@ -30,11 +30,27 @@ const DEFAULT_SQLITE_PATH = path.join(__dirname, '..', '..', 'data', 'arena.db')
 let dbState = null;
 let initPromise = null;
 let warnedUnavailable = false;
+const memoryUsers = new Map();
+const memorySessions = new Map();
+const memoryMagicLinks = new Map();
+const memoryOwnerTokens = new Map();
 
 function warnUnavailable(message) {
   if (warnedUnavailable) return;
   warnedUnavailable = true;
   console.warn(message);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeEmailValue(value) {
+  return String(value || '').trim().toLowerCase() || null;
+}
+
+function duplicateEmailError() {
+  return new Error('duplicate key value violates unique constraint "users_email_key"');
 }
 
 function normalizeIso(value) {
@@ -319,9 +335,149 @@ async function getAgentRating(agentId, { mode = MAFIA_ELO_MODE } = {}) {
   return normalizeRatingRow(row || { agent_id: cleanAgentId, mode });
 }
 
+function normalizeMagicLinkRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    email: normalizeEmailValue(row.email),
+    expires_at: normalizeIso(row.expires_at) || row.expires_at || null,
+    consumed_at: normalizeIso(row.consumed_at) || row.consumed_at || null,
+    created_at: normalizeIso(row.created_at) || row.created_at || null,
+  };
+}
+
+function normalizeOwnerTokenRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    revoked_at: normalizeIso(row.revoked_at) || row.revoked_at || null,
+    last_used_at: normalizeIso(row.last_used_at) || row.last_used_at || null,
+    created_at: normalizeIso(row.created_at) || row.created_at || null,
+  };
+}
+
+function findMemoryUserByEmail(email) {
+  const normalizedEmail = normalizeEmailValue(email);
+  if (!normalizedEmail) return null;
+  for (const user of memoryUsers.values()) {
+    if (normalizeEmailValue(user.email) === normalizedEmail) return normalizeUserRow(user);
+  }
+  return null;
+}
+
+function getMemoryUserById(userId) {
+  return normalizeUserRow(memoryUsers.get(String(userId || '').trim()) || null);
+}
+
+function upsertMemoryUser(user) {
+  const normalizedId = String(user?.id || '').trim();
+  if (!normalizedId) return null;
+  const existing = memoryUsers.get(normalizedId) || null;
+  const next = {
+    id: normalizedId,
+    email: normalizeEmailValue(user.email),
+    display_name: user.display_name || null,
+    agent_id: user.agent_id || null,
+    is_anonymous: user.is_anonymous !== false,
+    created_at: existing?.created_at || normalizeIso(user.created_at) || nowIso(),
+    updated_at: normalizeIso(user.updated_at) || nowIso(),
+  };
+  memoryUsers.set(normalizedId, next);
+  return normalizeUserRow(next);
+}
+
+function upsertMemorySession(session) {
+  const normalizedToken = String(session?.token || '').trim();
+  if (!normalizedToken) return null;
+  const next = {
+    id: String(session.id || '').trim() || normalizedToken,
+    user_id: String(session.user_id || '').trim() || null,
+    token: normalizedToken,
+    expires_at: normalizeIso(session.expires_at) || session.expires_at || null,
+    created_at: normalizeIso(session.created_at) || nowIso(),
+  };
+  memorySessions.set(normalizedToken, next);
+  return normalizeSessionRow(next);
+}
+
+function getMemorySessionByToken(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return null;
+  const session = memorySessions.get(normalizedToken) || null;
+  if (!session) return null;
+  const expiresAt = new Date(session.expires_at || '').getTime();
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    memorySessions.delete(normalizedToken);
+    return null;
+  }
+  return normalizeSessionRow(session);
+}
+
+function upsertMemoryMagicLink(link) {
+  const normalizedId = String(link?.id || '').trim();
+  if (!normalizedId) return null;
+  const existing = memoryMagicLinks.get(normalizedId) || null;
+  const next = {
+    id: normalizedId,
+    email: normalizeEmailValue(link.email),
+    mode: String(link.mode || '').trim() || 'login',
+    token_hash: String(link.token_hash || '').trim(),
+    requester_user_id: String(link.requester_user_id || '').trim() || null,
+    pending_agent_id: String(link.pending_agent_id || '').trim() || null,
+    redirect_to: link.redirect_to || null,
+    expires_at: normalizeIso(link.expires_at) || link.expires_at || null,
+    consumed_at: normalizeIso(link.consumed_at) || link.consumed_at || null,
+    created_at: existing?.created_at || normalizeIso(link.created_at) || nowIso(),
+  };
+  memoryMagicLinks.set(normalizedId, next);
+  return normalizeMagicLinkRow(next);
+}
+
+function findMemoryMagicLinkByTokenHash(tokenHash) {
+  const normalizedHash = String(tokenHash || '').trim();
+  if (!normalizedHash) return null;
+  for (const link of memoryMagicLinks.values()) {
+    if (String(link.token_hash || '').trim() === normalizedHash) return normalizeMagicLinkRow(link);
+  }
+  return null;
+}
+
+function upsertMemoryOwnerToken(token) {
+  const normalizedId = String(token?.id || '').trim();
+  if (!normalizedId) return null;
+  const existing = memoryOwnerTokens.get(normalizedId) || null;
+  const next = {
+    id: normalizedId,
+    user_id: String(token.user_id || '').trim() || null,
+    token_hash: String(token.token_hash || '').trim(),
+    revoked_at: normalizeIso(token.revoked_at) || token.revoked_at || null,
+    last_used_at: normalizeIso(token.last_used_at) || token.last_used_at || null,
+    created_at: existing?.created_at || normalizeIso(token.created_at) || nowIso(),
+  };
+  memoryOwnerTokens.set(normalizedId, next);
+  return normalizeOwnerTokenRow(next);
+}
+
+function findMemoryOwnerTokenByHash(tokenHash) {
+  const normalizedHash = String(tokenHash || '').trim();
+  if (!normalizedHash) return null;
+  for (const token of memoryOwnerTokens.values()) {
+    if (String(token.token_hash || '').trim() === normalizedHash) return normalizeOwnerTokenRow(token);
+  }
+  return null;
+}
+
 async function createAnonymousUser(id) {
   const adapter = await ensureDb();
-  if (!adapter || adapter.kind === 'none') return { id, is_anonymous: true };
+  if (!adapter || adapter.kind === 'none') {
+    return upsertMemoryUser({
+      id,
+      email: null,
+      display_name: null,
+      agent_id: null,
+      is_anonymous: true,
+    });
+  }
 
   if (adapter.kind === 'postgres') {
     await adapter.pool.query(
@@ -343,17 +499,22 @@ async function upgradeUser(userId, { email, displayName, agentId } = {}) {
   const adapter = await ensureDb();
 
   if (email && (typeof email !== 'string' || email.length > 254)) email = typeof email === 'string' ? email.slice(0, 254) : undefined;
+  email = normalizeEmailValue(email);
   if (displayName && (typeof displayName !== 'string' || displayName.length > 32)) displayName = typeof displayName === 'string' ? displayName.slice(0, 32) : undefined;
   if (agentId && (typeof agentId !== 'string' || agentId.length > 64)) agentId = typeof agentId === 'string' ? agentId.slice(0, 64) : undefined;
 
   if (!adapter || adapter.kind === 'none') {
-    return normalizeUserRow({
+    const existing = getMemoryUserById(userId) || null;
+    const duplicate = email ? findMemoryUserByEmail(email) : null;
+    if (duplicate?.id && duplicate.id !== String(userId || '').trim()) throw duplicateEmailError();
+    return upsertMemoryUser({
       id: userId,
-      email: email || null,
-      display_name: displayName || null,
-      agent_id: agentId || null,
+      email: email || existing?.email || null,
+      display_name: displayName || existing?.display_name || null,
+      agent_id: agentId || existing?.agent_id || null,
       is_anonymous: false,
-      updated_at: new Date().toISOString(),
+      created_at: existing?.created_at || nowIso(),
+      updated_at: nowIso(),
     });
   }
 
@@ -409,6 +570,11 @@ async function upgradeUser(userId, { email, displayName, agentId } = {}) {
 
 async function getUserByToken(token) {
   const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && token) {
+    const session = getMemorySessionByToken(token);
+    if (!session?.user_id) return null;
+    return getMemoryUserById(session.user_id);
+  }
   if (!adapter || adapter.kind === 'none' || !token) return null;
 
   if (adapter.kind === 'postgres') {
@@ -430,6 +596,9 @@ async function getUserByToken(token) {
 
 async function getUserById(userId) {
   const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && userId) {
+    return getMemoryUserById(userId);
+  }
   if (!adapter || adapter.kind === 'none' || !userId) return null;
 
   if (adapter.kind === 'postgres') {
@@ -441,25 +610,35 @@ async function getUserById(userId) {
 }
 
 async function getUserByEmail(email) {
+  const normalizedEmail = normalizeEmailValue(email);
   const adapter = await ensureDb();
-  const cleanEmail = String(email || '').trim().toLowerCase();
-  if (!adapter || adapter.kind === 'none' || !cleanEmail) return null;
+  if ((!adapter || adapter.kind === 'none') && normalizedEmail) {
+    return findMemoryUserByEmail(normalizedEmail);
+  }
+  if (!adapter || adapter.kind === 'none' || !normalizedEmail) return null;
 
   if (adapter.kind === 'postgres') {
-    const result = await adapter.pool.query('SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1', [cleanEmail]);
+    const result = await adapter.pool.query('SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1', [normalizedEmail]);
     return normalizeUserRow(result.rows[0] || null);
   }
 
-  return normalizeUserRow(adapter.database.prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1').get(cleanEmail));
+  return normalizeUserRow(
+    adapter.database.prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1').get(normalizedEmail),
+  );
 }
 
 async function setUserAgentId(userId, agentId) {
   const adapter = await ensureDb();
   if (!adapter || adapter.kind === 'none') {
-    return normalizeUserRow({
+    const existing = getMemoryUserById(userId) || null;
+    return upsertMemoryUser({
       id: userId,
+      email: existing?.email || null,
+      display_name: existing?.display_name || null,
       agent_id: agentId || null,
-      updated_at: new Date().toISOString(),
+      is_anonymous: existing?.is_anonymous !== false,
+      created_at: existing?.created_at || nowIso(),
+      updated_at: nowIso(),
     });
   }
 
@@ -484,7 +663,10 @@ async function setUserAgentId(userId, agentId) {
 async function createSession(id, userId, token, expiresAt) {
   const adapter = await ensureDb();
   const fallback = normalizeSessionRow({ id, user_id: userId, token, expires_at: expiresAt });
-  if (!adapter || adapter.kind === 'none') return fallback;
+  if (!adapter || adapter.kind === 'none') {
+    upsertMemorySession(fallback);
+    return fallback;
+  }
 
   if (adapter.kind === 'postgres') {
     await adapter.pool.query(
@@ -502,6 +684,9 @@ async function createSession(id, userId, token, expiresAt) {
 
 async function getSessionByToken(token) {
   const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && token) {
+    return getMemorySessionByToken(token);
+  }
   if (!adapter || adapter.kind === 'none' || !token) return null;
 
   if (adapter.kind === 'postgres') {
@@ -515,6 +700,238 @@ async function getSessionByToken(token) {
   return normalizeSessionRow(adapter.database.prepare(
     "SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')",
   ).get(token));
+}
+
+async function createMagicLink({
+  id,
+  email,
+  mode,
+  tokenHash,
+  requesterUserId,
+  pendingAgentId,
+  redirectTo,
+  expiresAt,
+}) {
+  const adapter = await ensureDb();
+  const normalizedEmail = normalizeEmailValue(email);
+  const row = normalizeMagicLinkRow({
+    id,
+    email: normalizedEmail,
+    mode: String(mode || 'login').trim() || 'login',
+    token_hash: String(tokenHash || '').trim(),
+    requester_user_id: String(requesterUserId || '').trim() || null,
+    pending_agent_id: String(pendingAgentId || '').trim() || null,
+    redirect_to: redirectTo || null,
+    expires_at: expiresAt,
+    consumed_at: null,
+    created_at: nowIso(),
+  });
+
+  if (!adapter || adapter.kind === 'none') {
+    return upsertMemoryMagicLink(row);
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      INSERT INTO magic_links (
+        id, email, mode, token_hash, requester_user_id, pending_agent_id, redirect_to, expires_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `, [
+      row.id,
+      row.email,
+      row.mode,
+      row.token_hash,
+      row.requester_user_id,
+      row.pending_agent_id,
+      row.redirect_to,
+      row.expires_at,
+    ]);
+    return normalizeMagicLinkRow(result.rows[0] || null);
+  }
+
+  adapter.database.prepare(`
+    INSERT INTO magic_links (
+      id, email, mode, token_hash, requester_user_id, pending_agent_id, redirect_to, expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    row.id,
+    row.email,
+    row.mode,
+    row.token_hash,
+    row.requester_user_id,
+    row.pending_agent_id,
+    row.redirect_to,
+    row.expires_at,
+  );
+  return normalizeMagicLinkRow(adapter.database.prepare('SELECT * FROM magic_links WHERE id = ?').get(row.id));
+}
+
+async function getMagicLinkByTokenHash(tokenHash) {
+  const normalizedHash = String(tokenHash || '').trim();
+  const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && normalizedHash) {
+    return findMemoryMagicLinkByTokenHash(normalizedHash);
+  }
+  if (!adapter || adapter.kind === 'none' || !normalizedHash) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(
+      'SELECT * FROM magic_links WHERE token_hash = $1 LIMIT 1',
+      [normalizedHash],
+    );
+    return normalizeMagicLinkRow(result.rows[0] || null);
+  }
+
+  return normalizeMagicLinkRow(
+    adapter.database.prepare('SELECT * FROM magic_links WHERE token_hash = ? LIMIT 1').get(normalizedHash),
+  );
+}
+
+async function consumeMagicLink(id) {
+  const normalizedId = String(id || '').trim();
+  const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && normalizedId) {
+    const existing = memoryMagicLinks.get(normalizedId);
+    if (!existing) return null;
+    return upsertMemoryMagicLink({
+      ...existing,
+      consumed_at: nowIso(),
+    });
+  }
+  if (!adapter || adapter.kind === 'none' || !normalizedId) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      UPDATE magic_links
+      SET consumed_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [normalizedId]);
+    return normalizeMagicLinkRow(result.rows[0] || null);
+  }
+
+  adapter.database.prepare(`
+    UPDATE magic_links
+    SET consumed_at = datetime('now')
+    WHERE id = ?
+  `).run(normalizedId);
+  return normalizeMagicLinkRow(adapter.database.prepare('SELECT * FROM magic_links WHERE id = ?').get(normalizedId));
+}
+
+async function rotateOwnerToken({ id, userId, tokenHash }) {
+  const normalizedId = String(id || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  const normalizedHash = String(tokenHash || '').trim();
+  const adapter = await ensureDb();
+  const row = normalizeOwnerTokenRow({
+    id: normalizedId,
+    user_id: normalizedUserId,
+    token_hash: normalizedHash,
+    revoked_at: null,
+    last_used_at: null,
+    created_at: nowIso(),
+  });
+
+  if (!adapter || adapter.kind === 'none') {
+    for (const [tokenId, token] of memoryOwnerTokens.entries()) {
+      if (token.user_id === normalizedUserId && !token.revoked_at) {
+        memoryOwnerTokens.set(tokenId, {
+          ...token,
+          revoked_at: nowIso(),
+        });
+      }
+    }
+    return upsertMemoryOwnerToken(row);
+  }
+
+  if (adapter.kind === 'postgres') {
+    const client = await adapter.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'UPDATE owner_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL',
+        [normalizedUserId],
+      );
+      const inserted = await client.query(`
+        INSERT INTO owner_tokens (id, user_id, token_hash)
+        VALUES ($1, $2, $3)
+        RETURNING *
+      `, [normalizedId, normalizedUserId, normalizedHash]);
+      await client.query('COMMIT');
+      return normalizeOwnerTokenRow(inserted.rows[0] || null);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  adapter.database.prepare(`
+    UPDATE owner_tokens
+    SET revoked_at = datetime('now')
+    WHERE user_id = ? AND revoked_at IS NULL
+  `).run(normalizedUserId);
+  adapter.database.prepare(`
+    INSERT INTO owner_tokens (id, user_id, token_hash)
+    VALUES (?, ?, ?)
+  `).run(normalizedId, normalizedUserId, normalizedHash);
+  return normalizeOwnerTokenRow(adapter.database.prepare('SELECT * FROM owner_tokens WHERE id = ?').get(normalizedId));
+}
+
+async function getOwnerTokenByHash(tokenHash) {
+  const normalizedHash = String(tokenHash || '').trim();
+  const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && normalizedHash) {
+    return findMemoryOwnerTokenByHash(normalizedHash);
+  }
+  if (!adapter || adapter.kind === 'none' || !normalizedHash) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(
+      'SELECT * FROM owner_tokens WHERE token_hash = $1 LIMIT 1',
+      [normalizedHash],
+    );
+    return normalizeOwnerTokenRow(result.rows[0] || null);
+  }
+
+  return normalizeOwnerTokenRow(
+    adapter.database.prepare('SELECT * FROM owner_tokens WHERE token_hash = ? LIMIT 1').get(normalizedHash),
+  );
+}
+
+async function touchOwnerToken(id) {
+  const normalizedId = String(id || '').trim();
+  const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && normalizedId) {
+    const existing = memoryOwnerTokens.get(normalizedId);
+    if (!existing) return null;
+    return upsertMemoryOwnerToken({
+      ...existing,
+      last_used_at: nowIso(),
+    });
+  }
+  if (!adapter || adapter.kind === 'none' || !normalizedId) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      UPDATE owner_tokens
+      SET last_used_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [normalizedId]);
+    return normalizeOwnerTokenRow(result.rows[0] || null);
+  }
+
+  adapter.database.prepare(`
+    UPDATE owner_tokens
+    SET last_used_at = datetime('now')
+    WHERE id = ?
+  `).run(normalizedId);
+  return normalizeOwnerTokenRow(adapter.database.prepare('SELECT * FROM owner_tokens WHERE id = ?').get(normalizedId));
 }
 
 async function recordMatch({
@@ -1351,6 +1768,12 @@ module.exports = {
   setUserAgentId,
   createSession,
   getSessionByToken,
+  createMagicLink,
+  getMagicLinkByTokenHash,
+  consumeMagicLink,
+  rotateOwnerToken,
+  getOwnerTokenByHash,
+  touchOwnerToken,
   recordMatch,
   getMatchesByUser,
   getPlayerMatches,

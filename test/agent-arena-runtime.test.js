@@ -61,15 +61,18 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
   return null;
 }
 
-async function createRuntimeAgent(url, name, { sessionToken } = {}) {
-  assert.ok(sessionToken, 'sessionToken is required for connect-session creation');
+async function createRuntimeAgent(url, name, { sessionToken, ownerToken } = {}) {
+  assert.ok(sessionToken || ownerToken, 'sessionToken or ownerToken is required for connect-session creation');
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
     },
-    body: JSON.stringify({ email: `${name.toLowerCase()}@example.com` }),
+    body: JSON.stringify({
+      email: ownerToken ? undefined : `${name.toLowerCase()}@example.com`,
+      ownerToken: ownerToken || undefined,
+    }),
   });
   const connectSessionData = await connectSessionRes.json();
   assert.equal(connectSessionData.ok, true);
@@ -85,6 +88,7 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
       proof: callbackProof,
       agentName: name,
       style: 'witty',
+      ownerToken: ownerToken || undefined,
     }),
   });
   const callbackData = await callbackRes.json();
@@ -289,6 +293,70 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }
+  });
+});
+
+test('claimed owners reconnect the same agent id when OpenClaw uses the stored owner token', async () => {
+  await withServer(async (url) => {
+    const authRes = await fetch(`${url}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const authData = await authRes.json();
+    assert.equal(authData.ok, true);
+    const sessionToken = authData.session.token;
+
+    const first = await createRuntimeAgent(url, 'ClaimedAlpha', { sessionToken });
+
+    const claimStartRes = await fetch(`${url}/api/auth/magic-link/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({
+        email: 'claimed-alpha@example.com',
+        mode: 'claim',
+        agentId: first.agentId,
+      }),
+    });
+    const claimStart = await claimStartRes.json();
+    assert.equal(claimStart.ok, true);
+    assert.ok(claimStart.debug?.magicLinkToken);
+
+    const claimConsumeRes = await fetch(`${url}/api/auth/magic-link/consume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ token: claimStart.debug.magicLinkToken }),
+    });
+    const claimConsume = await claimConsumeRes.json();
+    assert.equal(claimConsume.ok, true);
+    assert.equal(claimConsume.user.agentId, first.agentId);
+
+    const ownerTokenRes = await fetch(`${url}/api/owner/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${claimConsume.session.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    const ownerTokenData = await ownerTokenRes.json();
+    assert.equal(ownerTokenData.ok, true);
+    assert.ok(ownerTokenData.ownerToken);
+
+    first.socket.disconnect();
+
+    const second = await createRuntimeAgent(url, 'ClaimedAlphaRenamed', {
+      ownerToken: ownerTokenData.ownerToken,
+    });
+
+    assert.equal(second.agentId, first.agentId);
+    second.socket.disconnect();
   });
 });
 
