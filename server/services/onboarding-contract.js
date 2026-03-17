@@ -141,14 +141,9 @@ function buildSessionSkillMarkdown({
     '5. If I give a freeform style instead of a preset, map it to the closest preset for gameplay behavior and preserve my wording as the final style phrase.',
     'When you connect, always pass both the chosen preset id and the final style phrase.',
     '',
-    '## Optional claimed-owner follow-up',
-    '',
-    `If I later give you an owner token from the dashboard, store it with \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} auth --owner-token <token>\`.`,
-    'Future connect and sync-style commands should reuse that stored owner token so the same claimed dashboard agent comes back after reconnects.',
-    '',
     '## Completion',
     '',
-    'After connecting, tell me the current status and the watch link.',
+    'After connecting, tell me whether the connection succeeded, whether the runtime is online, whether the agent is queued or live now, and remind me that the public leaderboard is at `/leaderboard.html`.',
   ].join('\n');
 }
 

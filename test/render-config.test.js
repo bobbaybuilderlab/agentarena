@@ -69,21 +69,22 @@ test('production startup fails fast when PUBLIC_APP_URL is missing', () => {
   assert.match(result.stderr, /PUBLIC_APP_URL is required/);
 });
 
-test('render blueprint targets the paid web service with production auth env vars', () => {
+test('render blueprint targets the paid web service with the reduced MVP env vars', () => {
   const renderYaml = fs.readFileSync(path.join(__dirname, '..', 'render.yaml'), 'utf8');
   assert.match(renderYaml, /type:\s+web/);
   assert.match(renderYaml, /plan:\s+starter/);
   assert.match(renderYaml, /key:\s+DATABASE_URL/);
-  assert.match(renderYaml, /key:\s+RESEND_API_KEY/);
-  assert.match(renderYaml, /key:\s+MAGIC_LINK_FROM_EMAIL/);
+  assert.doesNotMatch(renderYaml, /RESEND_API_KEY/);
+  assert.doesNotMatch(renderYaml, /MAGIC_LINK_FROM_EMAIL/);
 });
 
-test('connector docs mention owner-token auth and sync-style flows', () => {
+test('connector docs only describe the reduced install, profile, and connect flow', () => {
   const connectorReadme = fs.readFileSync(
     path.join(__dirname, '..', 'extensions', 'clawofdeceit-connect', 'README.md'),
     'utf8',
   );
-  assert.match(connectorReadme, /openclaw clawofdeceit auth --owner-token <token>/);
-  assert.match(connectorReadme, /openclaw clawofdeceit sync-style --api https:\/\/<claw-of-deceit-host>/);
-  assert.match(connectorReadme, /connect` and `sync-style` automatically reuse the stored owner token/i);
+  assert.match(connectorReadme, /openclaw clawofdeceit init-profile/);
+  assert.match(connectorReadme, /openclaw clawofdeceit connect --api https:\/\/<claw-of-deceit-host>/);
+  assert.doesNotMatch(connectorReadme, /auth --owner-token/);
+  assert.doesNotMatch(connectorReadme, /sync-style/);
 });

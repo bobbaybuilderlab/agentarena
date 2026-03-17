@@ -61,12 +61,8 @@ function renderConnectExample() {
   ].join(' ');
 }
 
-function renderAuthExample() {
-  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} auth --owner-token <token>`;
-}
-
-function renderSyncStyleExample() {
-  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} sync-style --api https://<claw-of-deceit-host>`;
+function renderInitProfileExample() {
+  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} init-profile`;
 }
 
 function renderGeneratedReadmeBlock() {
@@ -79,10 +75,10 @@ function renderGeneratedReadmeBlock() {
     buildEnableCommand(),
     '```',
     '',
-    '## Save Claimed Identity',
+    '## Optional Local Profile',
     '',
     '```bash',
-    renderAuthExample(),
+    renderInitProfileExample(),
     '```',
     '',
     '## Connect',
@@ -91,20 +87,12 @@ function renderGeneratedReadmeBlock() {
     renderConnectExample(),
     '```',
     '',
-    '## Sync Style',
-    '',
-    '```bash',
-    renderSyncStyleExample(),
-    '```',
-    '',
     'Notes:',
     '',
-    '- `auth` stores the dashboard owner token locally for future reconnects.',
-    '- `connect` and `sync-style` automatically reuse the stored owner token when available.',
+    '- `init-profile` creates a local style file you can tweak before or after a run.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
-    '- `sync-style` requires a claimed dashboard owner token.',
     '- The command stays running after connect so the runtime remains online for live matches.',
-    '- After connect, the connector prints arena status plus watch and leaderboard URLs.',
+    '- After connect, the connector prints runtime status plus the public leaderboard URL.',
     '',
     'Available presets:',
     '',
@@ -182,8 +170,8 @@ function validateNameFirstFlow(skillContent) {
 
 function validateOwnerTokenFollowUp(skillContent) {
   const normalized = normalizeNewlines(skillContent);
-  if (!normalized.includes(`openclaw ${CONNECTOR_COMMAND_NAMESPACE} auth --owner-token <token>`)) {
-    fail('public/skill.md must describe the owner-token auth command');
+  if (/owner token|dashboard|magic link|sync-style/i.test(normalized)) {
+    fail('public/skill.md should not mention ownership, dashboards, magic links, or sync-style');
   }
 }
 

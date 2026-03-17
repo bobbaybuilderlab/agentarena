@@ -83,110 +83,17 @@ async function ensureSession() {
     if (data.ok && data.session) {
       setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
       if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
-      if (data.selectedAgentId) setStoredValue(STORAGE_KEYS.agentId, data.selectedAgentId);
-      else if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
-      else if (data.ownedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.ownedAgent.id);
-      else setStoredValue(STORAGE_KEYS.agentId, '');
+      if (data.session.agentId && !getConnectedAgentId()) {
+        setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
+      }
       return data.session;
     }
   } catch (_err) { /* silent fail -- don't block page load */ }
   return null;
 }
 
-async function fetchCurrentUserProfile() {
-  const token = getSessionToken();
-  if (!token) return null;
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.ok ? data.user : null;
-  } catch (_err) {
-    return null;
-  }
-}
-
-async function logoutCurrentSession({ redirectTo = '/arena.html' } = {}) {
-  const token = getSessionToken();
-  try {
-    if (token) {
-      await fetch(`${API_BASE}/api/auth/logout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    }
-  } catch (_err) {
-    // Best-effort server-side logout. Always clear local site state.
-  }
-
-  clearAllSiteState();
-  if (redirectTo) window.location.assign(redirectTo);
-}
-
-async function requestMagicLink({ email, mode, agentId, redirectTo }) {
-  const res = await fetch(`${API_BASE}/api/auth/magic-link/start`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getSessionAuthHeaders(),
-    },
-    body: JSON.stringify({
-      email,
-      mode,
-      agentId: agentId || undefined,
-      redirectTo: redirectTo || undefined,
-    }),
-  });
-  return res.json();
-}
-
-async function consumeMagicLinkFromUrl() {
-  const params = new URLSearchParams(window.location.search || '');
-  const token = params.get('magicLinkToken');
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/magic-link/consume`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getSessionAuthHeaders(),
-      },
-      body: JSON.stringify({ token }),
-    });
-    const data = await res.json();
-    if (!data?.ok || !data?.session?.token) {
-      return { ok: false, error: data?.error || 'Magic link invalid or expired' };
-    }
-
-    setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
-    if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
-    if (data.session.agentId) setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
-    else if (data.claimedAgent?.id) setStoredValue(STORAGE_KEYS.agentId, data.claimedAgent.id);
-
-    const redirectTo = data.redirectTo || '/arena.html?claimed=1';
-    const target = `${window.location.origin}${redirectTo}`;
-    if (window.location.href !== target) {
-      window.location.replace(target);
-      return { ok: true, redirected: true };
-    }
-
-    params.delete('magicLinkToken');
-    window.history.replaceState({}, '', `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`);
-    return { ok: true, data };
-  } catch (_err) {
-    return { ok: false, error: 'Could not complete magic link sign-in' };
-  }
-}
-
 // Auto-initialize session on page load
 ensureSession();
-consumeMagicLinkFromUrl();
 
 // Agent-native onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
@@ -203,21 +110,6 @@ const viewSkillBtn = document.getElementById('viewSkillBtn');
 const watchLiveBtn = document.getElementById('watchLiveBtn');
 const shareOnXBtn = document.getElementById('shareOnXBtn');
 const shareRow = document.getElementById('shareRow');
-const claimCard = document.getElementById('claimCard');
-const claimEmailInput = document.getElementById('claimEmailInput');
-const claimSendBtn = document.getElementById('claimSendBtn');
-const claimStatus = document.getElementById('claimStatus');
-const loginEmailInput = document.getElementById('loginEmailInput');
-const loginSendBtn = document.getElementById('loginSendBtn');
-const loginStatus = document.getElementById('loginStatus');
-const profileBadge = document.getElementById('profileBadge');
-const accountNavLink = document.getElementById('accountNavLink');
-const ownerTokenCard = document.getElementById('ownerTokenCard');
-const ownerTokenStatus = document.getElementById('ownerTokenStatus');
-const ownerTokenCommand = document.getElementById('ownerTokenCommand');
-const generateOwnerTokenBtn = document.getElementById('generateOwnerTokenBtn');
-const copyOwnerTokenBtn = document.getElementById('copyOwnerTokenBtn');
-const ownerShareClaimBtn = document.getElementById('ownerShareClaimBtn');
 
 let connectSessionId = getStoredValue(STORAGE_KEYS.connectSessionId) || null;
 let connectCommand = '';
@@ -225,67 +117,6 @@ let connectExpiresAt = null;
 let connectAccessToken = getStoredValue(STORAGE_KEYS.connectAccessToken) || '';
 let statusPoll = null;
 let publicOnboarding = null;
-
-async function syncOwnerNav() {
-  if (!profileBadge && !accountNavLink) return;
-  const currentUser = await fetchCurrentUserProfile();
-  if (profileBadge) {
-    if (currentUser?.email) {
-      profileBadge.textContent = currentUser.email;
-      profileBadge.setAttribute('href', '/account.html');
-      profileBadge.setAttribute('aria-label', `Open account for ${currentUser.email}`);
-      profileBadge.style.display = 'inline-flex';
-    } else {
-      profileBadge.textContent = '';
-      profileBadge.setAttribute('href', '/account.html');
-      profileBadge.style.display = 'none';
-    }
-  }
-  if (accountNavLink) {
-    accountNavLink.style.display = currentUser?.email ? '' : 'none';
-  }
-}
-
-async function updateClaimCardVisibility() {
-  if (!claimCard) return;
-  const currentUser = await fetchCurrentUserProfile();
-  const agentId = getConnectedAgentId();
-  claimCard.style.display = agentId ? 'block' : 'none';
-
-  if (!claimStatus) return;
-  if (!agentId) {
-    claimStatus.textContent = 'Connect an agent first, then you can claim ownership with email.';
-    return;
-  }
-  if (currentUser?.email && currentUser?.agentId && currentUser.agentId === agentId) {
-    claimStatus.textContent = `${currentUser.email} now owns this website dashboard.`;
-    return;
-  }
-  claimStatus.textContent = 'Optional but recommended: use email to claim dashboard access and future recovery.';
-}
-
-async function refreshOwnerTokenPanel() {
-  if (!ownerTokenCard) return;
-  const currentUser = await fetchCurrentUserProfile();
-  const token = getSessionToken();
-  if (!token || !currentUser?.email || !currentUser?.agentId) {
-    ownerTokenCard.style.display = 'none';
-    return;
-  }
-
-  ownerTokenCard.style.display = 'block';
-  if (ownerTokenStatus) {
-    ownerTokenStatus.textContent = `Signed in as ${currentUser.email}. Generate an owner token to reconnect the same claimed agent from OpenClaw and keep its dashboard history stable.`;
-  }
-  if (ownerTokenCommand && !ownerTokenCommand.textContent.trim()) {
-    ownerTokenCommand.textContent = 'openclaw clawofdeceit auth --owner-token <token>';
-  }
-
-  if (ownerShareClaimBtn) {
-    const agentName = currentUser.agentId;
-    ownerShareClaimBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(`I claimed my Claw of Deceit agent and can manage it from the dashboard now: ${window.location.origin}/arena.html?agentId=${encodeURIComponent(agentName)}`)}`;
-  }
-}
 
 function getOnboarding(connect) {
   return connect?.onboarding || {};
@@ -304,77 +135,20 @@ function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
   ].filter(Boolean).join('\n');
 }
 
-function currentOwnedArenaUrl() {
-  const agentId = getConnectedAgentId();
-  return agentId ? `/arena.html?agentId=${encodeURIComponent(agentId)}` : '/arena.html';
+function currentLeaderboardUrl() {
+  return '/leaderboard.html';
 }
 
 function updateShareState(connect) {
   if (!shareOnXBtn || !watchLiveBtn || !shareRow) return;
-  const fallbackPath = currentOwnedArenaUrl();
+  const fallbackPath = currentLeaderboardUrl();
   const watchPath = connect?.watchUrl || fallbackPath;
   const watchUrl = `${window.location.origin}${watchPath}`;
   watchLiveBtn.href = watchPath;
   const agentName = connect?.agentName || 'my agent';
-  const text = `I just connected ${agentName} to Claw of Deceit. Watch my agent play: ${watchUrl}`;
+  const text = `I just connected ${agentName} to Claw of Deceit. Track the leaderboard here: ${watchUrl}`;
   shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
   shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
-}
-
-async function sendClaimLink() {
-  if (!claimEmailInput || !claimStatus || !claimSendBtn) return;
-  const email = claimEmailInput.value.trim();
-  const agentId = getConnectedAgentId();
-  if (!email || !agentId) {
-    claimStatus.textContent = 'Enter your email after the agent is connected.';
-    return;
-  }
-
-  try {
-    claimSendBtn.disabled = true;
-    claimStatus.textContent = 'Sending claim link...';
-    const data = await requestMagicLink({
-      email,
-      mode: 'claim',
-      agentId,
-      redirectTo: '/arena.html?claimed=1',
-    });
-    if (!data?.ok) throw new Error(data?.error || 'Could not send claim link');
-    claimStatus.textContent = data?.debug?.magicLinkUrl
-      ? `Claim link ready. Dev shortcut: ${data.debug.magicLinkUrl}`
-      : 'Check your email. The claim link is optional, but it unlocks dashboard access and recovery.';
-  } catch (err) {
-    claimStatus.textContent = err.message || 'Could not send claim link';
-  } finally {
-    claimSendBtn.disabled = false;
-  }
-}
-
-async function sendLoginLink() {
-  if (!loginEmailInput || !loginStatus || !loginSendBtn) return;
-  const email = loginEmailInput.value.trim();
-  if (!email) {
-    loginStatus.textContent = 'Enter your email to receive a login link.';
-    return;
-  }
-
-  try {
-    loginSendBtn.disabled = true;
-    loginStatus.textContent = 'Sending login link...';
-    const data = await requestMagicLink({
-      email,
-      mode: 'login',
-      redirectTo: '/arena.html',
-    });
-    if (!data?.ok) throw new Error(data?.error || 'Could not send login link');
-    loginStatus.textContent = data?.debug?.magicLinkUrl
-      ? `Login link ready. Dev shortcut: ${data.debug.magicLinkUrl}`
-      : 'Check your email for a one-time dashboard login link.';
-  } catch (err) {
-    loginStatus.textContent = err.message || 'Could not send login link';
-  } finally {
-    loginSendBtn.disabled = false;
-  }
 }
 
 async function loadPublicOnboarding() {
@@ -447,7 +221,6 @@ generateCmdBtn?.addEventListener('click', async () => {
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
     statusEl.textContent = 'Ready. Paste this into OpenClaw.';
-    updateClaimCardVisibility();
     if (statusPoll) clearInterval(statusPoll);
     statusPoll = setInterval(checkConnectionStatus, 3000);
   } catch (err) {
@@ -489,8 +262,6 @@ async function checkConnectionStatus() {
       if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
       syncArenaEntryButton();
       refreshFirstWinChecklist();
-      updateClaimCardVisibility();
-      refreshOwnerTokenPanel();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
       updateShareState(data.connect);
 
@@ -503,13 +274,12 @@ async function checkConnectionStatus() {
         setTimeout(() => celebEl.remove(), 5000);
       }
 
-      if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId && data.connect.watchUrl) {
-        statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.connect.watchUrl)}">Open Arena</a>`;
+      if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId) {
+        statusEl.textContent = `${safeAgentName} is live now. Check the leaderboard while the match runs.`;
         return;
       }
       if (data.connect.arena?.runtimeConnected) {
-        const waitPath = data.connect.watchUrl || currentOwnedArenaUrl();
-        statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Arena</a>`;
+        statusEl.textContent = `${safeAgentName} is online and waiting for enough agents to open the next table.`;
         return;
       }
       statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
@@ -527,52 +297,6 @@ async function checkConnectionStatus() {
   }
 }
 
-async function loadOwnedAgentStatus() {
-  if (!statusEl && !watchLiveBtn && !shareRow && !startArenaBtn) return;
-
-  await ensureSession();
-  const headers = getSessionAuthHeaders();
-  if (!headers.Authorization) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/agents/mine`, { headers });
-    const data = await res.json();
-    if (!data?.ok) return;
-
-    if (data.selectedAgentId) {
-      setStoredValue(STORAGE_KEYS.agentId, data.selectedAgentId);
-    } else if (data.session?.agentId) {
-      setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
-    }
-
-    syncArenaEntryButton();
-    refreshFirstWinChecklist();
-    if (data.agent) {
-      updateShareState({
-        status: 'connected',
-        agentName: data.agent.name,
-        watchUrl: data.agent.watchUrl,
-      });
-    }
-
-    if (!statusEl || !data.agent) return;
-
-    const safeAgentName = escapeHtml(data.agent.name || 'Your agent');
-    if (data.agent.arena?.runtimeConnected && data.agent.arena?.activeRoomId && data.agent.watchUrl) {
-      statusEl.innerHTML = `${safeAgentName} is live now. <a href="${escapeHtml(data.agent.watchUrl)}">Open Arena</a>`;
-      return;
-    }
-    if (data.agent.arena?.runtimeConnected) {
-      const waitPath = data.agent.watchUrl || currentOwnedArenaUrl();
-      statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(waitPath)}">Open Arena</a>`;
-      return;
-    }
-    statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
-  } catch {
-    // keep silent; other page data can still render
-  }
-}
-
 function resumeConnectFlow() {
   if (!statusEl || !connectSessionId) return;
   if (statusPoll) clearInterval(statusPoll);
@@ -582,24 +306,6 @@ function resumeConnectFlow() {
 }
 
 checkStatusBtn?.addEventListener('click', checkConnectionStatus);
-claimSendBtn?.addEventListener('click', () => {
-  void sendClaimLink();
-});
-loginSendBtn?.addEventListener('click', () => {
-  void sendLoginLink();
-});
-claimEmailInput?.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    void sendClaimLink();
-  }
-});
-loginEmailInput?.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    void sendLoginLink();
-  }
-});
 
 // Leaderboard + live rooms
 const leaderboardList = document.getElementById('leaderboardList');
@@ -865,7 +571,7 @@ function refreshFirstWinChecklist() {
   const hasGenerated = Boolean(connectSessionId || getStoredValue(STORAGE_KEYS.hasGeneratedCommand) === '1');
   const hasInstalled = getStoredValue(STORAGE_KEYS.connectorInstalled) === '1' || Boolean(getConnectedAgentId());
   const hasConnected = Boolean(getConnectedAgentId());
-  const hasViewedArena = getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
+  const hasViewedArena = hasConnected || getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
 
   function mark(el, done, label) {
     if (!el) return;
@@ -874,7 +580,7 @@ function refreshFirstWinChecklist() {
   }
   mark(stepInstall, hasInstalled, 'Prepare this OpenClaw once');
   mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time connect message');
-  mark(stepWatch, hasViewedArena, 'Watch your agent play');
+  mark(stepWatch, hasViewedArena, 'Check the leaderboard');
 }
 
 async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
@@ -914,7 +620,8 @@ function roomModeLabel(mode) {
 }
 
 function roomArenaUrl(room) {
-  return `/arena.html?mode=mafia&room=${encodeURIComponent(String(room?.roomId || ''))}&spectate=1`;
+  void room;
+  return '/leaderboard.html';
 }
 
 function pickRandomRoom(rooms) {
@@ -924,7 +631,7 @@ function pickRandomRoom(rooms) {
 
 function syncArenaEntryButton() {
   if (!startArenaBtn) return;
-  startArenaBtn.textContent = getConnectedAgentId() ? 'Agent settings' : 'Send in your agent';
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Deploy another agent' : 'Deploy an agent';
 }
 
 function setArenaEntryStatus(message) {
@@ -978,8 +685,8 @@ async function loadLiveRooms() {
     }
 
     if (randomLiveRoomBtn) {
-      randomLiveRoomBtn.href = randomRoom ? roomArenaUrl(randomRoom) : '/arena.html';
-      randomLiveRoomBtn.textContent = randomRoom ? 'Open a live transcript' : 'Open the Arena';
+      randomLiveRoomBtn.href = '/leaderboard.html';
+      randomLiveRoomBtn.textContent = 'Open leaderboard';
     }
 
     if (pulseMission) {
@@ -988,9 +695,9 @@ async function loadLiveRooms() {
         const hostReady = randomRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
         pulseMission.style.display = 'block';
         if (pulseTitle) pulseTitle.textContent = `Room ${randomRoom.roomId} is live right now`;
-        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Open the transcript view to follow the table with the normal delay.`;
+        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Use the leaderboard to track the active ecosystem.`;
         if (pulseJoinBtn) pulseJoinBtn.href = roomArenaUrl(randomRoom);
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open this transcript';
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open leaderboard';
         if (pulseMeta) pulseMeta.textContent = `${randomRoom.players}/${requiredAgents} agents · ${randomRoom.hotLobby ? 'Hot lobby 🔥' : escapeHtml(randomRoom.phase || 'Live now')}`;
       } else {
         const arena = data.summary?.arena || {};
@@ -999,8 +706,8 @@ async function loadLiveRooms() {
         if (pulseCopy) pulseCopy.textContent = arena.connectedAgents
           ? `There are ${Number(arena.connectedAgents || 0)} connected agents online. Connect ${Number(arena.missingAgents || 0)} more to open the next ${requiredAgents}-agent table.`
           : 'No connected agents are online yet. Connect an OpenClaw agent to help open the first table.';
-        if (pulseJoinBtn) pulseJoinBtn.href = '/arena.html';
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open the Arena';
+        if (pulseJoinBtn) pulseJoinBtn.href = '/connect.html';
+        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Deploy an agent';
         if (pulseMeta) pulseMeta.textContent = 'Agent-only launch · no guest seats · no simulated bots';
       }
     }
@@ -1010,15 +717,15 @@ async function loadLiveRooms() {
       const launchLine = launch.hostConnected
         ? 'Host online'
         : 'Host reconnecting';
-      const safeMode = encodeURIComponent(String(room.mode || 'mafia'));
-      const safeRoomId = encodeURIComponent(String(room.roomId || ''));
+      void room.mode;
+      void room.roomId;
       return `
       <article>
         <h3>${escapeHtml(roomModeLabel(room.mode))} · ${escapeHtml(room.roomId)}${room.hotLobby ? ' 🔥' : ''}</h3>
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/arena.html?mode=${safeMode}&room=${safeRoomId}&spectate=1">Open live transcript</a>
+          <a class="btn btn-primary" href="/leaderboard.html">Open leaderboard</a>
         </div>
       </article>
     `;
@@ -1034,61 +741,23 @@ refreshLiveRoomsBtn?.addEventListener('click', async () => {
 });
 
 liveRoomsList?.addEventListener('click', (e) => {
-  const link = e.target.closest('a[href*="/arena.html?"]');
+  const link = e.target.closest('a[href="/leaderboard.html"]');
   if (!link) return;
+  setStoredValue(STORAGE_KEYS.viewedWatch, '1');
   refreshFirstWinChecklist();
 });
 
 pulseJoinBtn?.addEventListener('click', () => {
+  setStoredValue(STORAGE_KEYS.viewedWatch, '1');
   refreshFirstWinChecklist();
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back to the Arena.');
+  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back here to connect another agent.');
   window.location.href = '/connect.html';
 });
 
-generateOwnerTokenBtn?.addEventListener('click', async () => {
-  if (!ownerTokenStatus || !ownerTokenCommand) return;
-  try {
-    generateOwnerTokenBtn.disabled = true;
-    ownerTokenStatus.textContent = 'Generating owner token...';
-    const res = await fetch(`${API_BASE}/api/owner/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getSessionAuthHeaders(),
-      },
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'Could not generate owner token');
-    ownerTokenCommand.textContent = data.command || `openclaw clawofdeceit auth --owner-token ${data.ownerToken}`;
-    ownerTokenStatus.textContent = 'Owner token generated. Save it into OpenClaw to reconnect the same claimed agent.';
-    if (copyOwnerTokenBtn) copyOwnerTokenBtn.style.display = 'inline-flex';
-  } catch (err) {
-    ownerTokenStatus.textContent = err.message || 'Could not generate owner token';
-  } finally {
-    generateOwnerTokenBtn.disabled = false;
-  }
-});
-
-copyOwnerTokenBtn?.addEventListener('click', async () => {
-  if (!ownerTokenCommand?.textContent) return;
-  try {
-    await navigator.clipboard.writeText(ownerTokenCommand.textContent);
-    copyOwnerTokenBtn.textContent = 'Copied!';
-    setTimeout(() => {
-      copyOwnerTokenBtn.textContent = 'Copy Command';
-    }, 2000);
-  } catch (_err) {
-    if (ownerTokenStatus) ownerTokenStatus.textContent = 'Could not copy automatically. Copy the command manually.';
-  }
-});
-
 refreshFirstWinChecklist();
-void updateClaimCardVisibility();
-void refreshOwnerTokenPanel();
-void syncOwnerNav();
 
 if (document.body.classList.contains('page-watch-owner')) {
   setStoredValue(STORAGE_KEYS.viewedWatch, '1');
@@ -1097,7 +766,6 @@ if (document.body.classList.contains('page-watch-owner')) {
 
 syncArenaEntryButton();
 void loadPublicOnboarding();
-void loadOwnedAgentStatus();
 resumeConnectFlow();
 
 if (leaderboardList) {

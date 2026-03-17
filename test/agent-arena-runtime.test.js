@@ -61,18 +61,15 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
   return null;
 }
 
-async function createRuntimeAgent(url, name, { sessionToken, ownerToken } = {}) {
-  assert.ok(sessionToken || ownerToken, 'sessionToken or ownerToken is required for connect-session creation');
+async function createRuntimeAgent(url, name, { sessionToken } = {}) {
+  assert.ok(sessionToken, 'sessionToken is required for connect-session creation');
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      Authorization: `Bearer ${sessionToken}`,
     },
-    body: JSON.stringify({
-      email: ownerToken ? undefined : `${name.toLowerCase()}@example.com`,
-      ownerToken: ownerToken || undefined,
-    }),
+    body: JSON.stringify({}),
   });
   const connectSessionData = await connectSessionRes.json();
   assert.equal(connectSessionData.ok, true);
@@ -88,7 +85,6 @@ async function createRuntimeAgent(url, name, { sessionToken, ownerToken } = {}) 
       proof: callbackProof,
       agentName: name,
       style: 'witty',
-      ownerToken: ownerToken || undefined,
     }),
   });
   const callbackData = await callbackRes.json();
@@ -181,10 +177,6 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       }, 4000, 25);
       assert.ok(seatedRoomId, 'expected all six agents to receive a room assignment');
 
-      const watchRes = await fetch(`${url}/api/play/watch`);
-      const watchData = await watchRes.json();
-      assert.equal(watchData.ok, true);
-
       const baselineData = await waitFor(async () => {
         const res = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
         const data = await res.json();
@@ -261,102 +253,9 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Number(statsData.uniqueAgents || 0) >= 6, true);
       assert.equal(typeof statsData.mafiasCaught, 'number');
 
-      const mineRes = await fetch(`${url}/api/agents/mine`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const mineData = await mineRes.json();
-      assert.equal(mineData.ok, true);
-      assert.equal(mineData.session.agentId, agents[5].agentId);
-      assert.equal(mineData.session.primaryAgentId, agents[5].agentId);
-      assert.equal(Array.isArray(mineData.agents), true);
-      assert.equal(mineData.agents.length, 6);
-      assert.equal(mineData.selectedAgentId, agents[5].agentId);
-      assert.equal(mineData.agent.id, agents[5].agentId);
-      assert.equal(Number(mineData.agent.mmr || 0) >= 0, true);
-      assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
-      assert.equal(Number(mineData.stats.ratedMatches || 0) >= 1, true);
-      assert.equal('peakMmr' in mineData.stats, true);
-      assert.equal('isProvisional' in mineData.stats, true);
-      assert.equal(typeof mineData.stats.nightKillCredits, 'number');
-
-      const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const mineMatchesData = await mineMatchesRes.json();
-      assert.equal(mineMatchesData.ok, true);
-      assert.equal(mineMatchesData.agentId, agents[5].agentId);
-      assert.equal(mineMatchesData.primaryAgentId, agents[5].agentId);
-      assert.equal(Array.isArray(mineMatchesData.matches), true);
-      assert.equal(mineMatchesData.matches.length >= 1, true);
-      assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
-      assert.match(mineMatchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }
-  });
-});
-
-test('claimed owners reconnect the same agent id when OpenClaw uses the stored owner token', async () => {
-  await withServer(async (url) => {
-    const authRes = await fetch(`${url}/api/auth/session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const authData = await authRes.json();
-    assert.equal(authData.ok, true);
-    const sessionToken = authData.session.token;
-
-    const first = await createRuntimeAgent(url, 'ClaimedAlpha', { sessionToken });
-
-    const claimStartRes = await fetch(`${url}/api/auth/magic-link/start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({
-        email: 'claimed-alpha@example.com',
-        mode: 'claim',
-        agentId: first.agentId,
-      }),
-    });
-    const claimStart = await claimStartRes.json();
-    assert.equal(claimStart.ok, true);
-    assert.ok(claimStart.debug?.magicLinkToken);
-
-    const claimConsumeRes = await fetch(`${url}/api/auth/magic-link/consume`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({ token: claimStart.debug.magicLinkToken }),
-    });
-    const claimConsume = await claimConsumeRes.json();
-    assert.equal(claimConsume.ok, true);
-    assert.equal(claimConsume.user.agentId, first.agentId);
-
-    const ownerTokenRes = await fetch(`${url}/api/owner/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${claimConsume.session.token}`,
-      },
-      body: JSON.stringify({}),
-    });
-    const ownerTokenData = await ownerTokenRes.json();
-    assert.equal(ownerTokenData.ok, true);
-    assert.ok(ownerTokenData.ownerToken);
-
-    first.socket.disconnect();
-
-    const second = await createRuntimeAgent(url, 'ClaimedAlphaRenamed', {
-      ownerToken: ownerTokenData.ownerToken,
-    });
-
-    assert.equal(second.agentId, first.agentId);
-    second.socket.disconnect();
   });
 });
 

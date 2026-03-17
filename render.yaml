@@ -18,9 +18,5 @@ services:
         sync: false
       - key: OPS_ADMIN_TOKEN
         sync: false
-      - key: RESEND_API_KEY
-        sync: false
-      - key: MAGIC_LINK_FROM_EMAIL
-        sync: false
       - key: SENTRY_DSN
         sync: false

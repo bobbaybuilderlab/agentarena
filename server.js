@@ -15,7 +15,6 @@ process.on('unhandledRejection', (reason) => {
 
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -39,19 +38,9 @@ const {
   getRatingHealth,
   getUserByToken,
   getUserById,
-  getUserByEmail,
   getSessionByToken,
-  deleteSessionByToken,
-  setUserAgentId,
   createAnonymousUser,
   createSession,
-  upgradeUser,
-  createMagicLink,
-  getMagicLinkByTokenHash,
-  consumeMagicLink,
-  rotateOwnerToken,
-  getOwnerTokenByHash,
-  touchOwnerToken,
   createReport,
   getReports,
   updateReportStatus,
@@ -132,37 +121,6 @@ function syncAgentRatingMirrors(ratingUpdates = []) {
     changed = true;
   }
   if (changed) persistState();
-}
-
-const MAGIC_LINK_TTL_MS = 30 * 60 * 1000;
-const OWNER_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
-const MAGIC_LINK_FROM_EMAIL = String(process.env.MAGIC_LINK_FROM_EMAIL || '').trim();
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function isValidEmail(value) {
-  const email = normalizeEmail(value);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function issueOpaqueToken(bytes = 24) {
-  return crypto.randomBytes(bytes).toString('base64url');
-}
-
-function hashOpaqueToken(token) {
-  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
-}
-
-function sanitizeRedirectTo(rawValue, fallbackPath = '/arena.html') {
-  const fallback = String(fallbackPath || '/arena.html').startsWith('/') ? String(fallbackPath) : '/arena.html';
-  const value = String(rawValue || '').trim();
-  if (!value) return fallback;
-  if (!value.startsWith('/')) return fallback;
-  if (value.startsWith('//')) return fallback;
-  return value;
 }
 
 const app = express();
@@ -259,118 +217,6 @@ function sendRuntimeHtml(req, res, next) {
 
 function readBearerToken(req) {
   return String(req.headers.authorization || '').replace('Bearer ', '').trim();
-}
-
-function buildAbsoluteAppUrl(req, relativePath) {
-  const baseUrl = resolvePublicBaseUrl(req);
-  return `${baseUrl}${sanitizeRedirectTo(relativePath, '/')}`;
-}
-
-async function sendMagicLinkEmail(req, { email, token, mode, redirectTo, agentId }) {
-  const normalizedEmail = normalizeEmail(email);
-  const landingPath = sanitizeRedirectTo(
-    `/arena.html?magicLinkToken=${encodeURIComponent(token)}&flow=${encodeURIComponent(mode)}&claimed=1`,
-    '/arena.html',
-  );
-  const landingUrl = buildAbsoluteAppUrl(req, landingPath);
-  const subject = mode === 'claim'
-    ? 'Claim your Claw of Deceit agent'
-    : 'Your Claw of Deceit login link';
-  const intro = mode === 'claim'
-    ? 'Use this one-time link to associate ownership with your email so you can access your dashboard and recover this agent later.'
-    : 'Use this one-time link to sign back into your Claw of Deceit dashboard.';
-  const copy = [
-    intro,
-    '',
-    `Open: ${landingUrl}`,
-    '',
-    'Why claim ownership:',
-    '- Access your dashboard from another browser or device',
-    '- Recover your claimed agent later',
-    '- Keep your website history attached to your email',
-    '',
-    `Redirect after sign-in: ${sanitizeRedirectTo(redirectTo, '/arena.html?claimed=1')}`,
-    agentId ? `Agent: ${agentId}` : null,
-    '',
-    'This link expires in 30 minutes and can be used once.',
-  ].filter(Boolean).join('\n');
-
-  if (!RESEND_API_KEY || !MAGIC_LINK_FROM_EMAIL) {
-    if (IS_PRODUCTION) {
-      throw new Error('Magic link email delivery is not configured');
-    }
-    return {
-      delivered: false,
-      debugToken: token,
-      debugUrl: landingUrl,
-    };
-  }
-
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: MAGIC_LINK_FROM_EMAIL,
-      to: [normalizedEmail],
-      subject,
-      text: copy,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Magic link email failed (${response.status}): ${text}`);
-  }
-
-  return { delivered: true };
-}
-
-async function issueUserSiteSession(user, { ttlMs = OWNER_SESSION_TTL_MS } = {}) {
-  const userId = String(user?.id || '').trim();
-  if (!userId) throw new Error('user id required');
-  const token = issueOpaqueToken(24);
-  const expiresAt = expiresAtFromNow(ttlMs);
-  await createSession(shortId(8), userId, token, expiresAt);
-  setCachedSession({
-    token,
-    userId,
-    email: user?.email || null,
-    displayName: user?.display_name || null,
-    agentId: user?.agent_id || null,
-    createdAt: Date.now(),
-    expiresAt,
-  });
-  return {
-    token,
-    userId,
-    agentId: user?.agent_id || null,
-    expiresAt,
-    durable: true,
-  };
-}
-
-function syncClaimedAgentOwnership(agentId, user) {
-  const cleanAgentId = String(agentId || '').trim();
-  if (!cleanAgentId || !user?.id) return;
-  const agent = agentProfiles.get(cleanAgentId);
-  if (!agent) return;
-  agent.owner = user.email || null;
-  agent.ownerEmail = user.email || null;
-  agent.ownerUserId = user.id;
-  persistState();
-}
-
-async function resolveOwnerTokenUser(rawToken) {
-  const cleanToken = String(rawToken || '').trim();
-  if (!cleanToken) return null;
-  const hashed = hashOpaqueToken(cleanToken);
-  const ownerToken = await getOwnerTokenByHash(hashed);
-  if (!ownerToken?.user_id || ownerToken.revoked_at) return null;
-  if (ownerToken.id) await touchOwnerToken(ownerToken.id);
-  return getUserById(ownerToken.user_id);
 }
 
 const io = new Server(server, {
@@ -1775,14 +1621,9 @@ function buildArenaAvailability() {
 
 function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) {
   const cleanAgentId = String(agentId || '').trim();
-  if (!cleanAgentId) return '/arena.html';
-  const params = new URLSearchParams({ agentId: cleanAgentId });
-  if (arena?.activeRoomId) {
-    params.set('mode', 'mafia');
-    params.set('room', String(arena.activeRoomId));
-    params.set('spectate', '1');
-  }
-  return `/arena.html?${params.toString()}`;
+  if (!cleanAgentId) return '/leaderboard.html';
+  void arena;
+  return '/leaderboard.html';
 }
 
 async function resolveSiteSession(req) {
@@ -1828,54 +1669,6 @@ async function resolveSiteSession(req) {
   };
 }
 
-function updateCachedUserPrimaryAgent(userId, agentId) {
-  for (const session of sessions.values()) {
-    if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
-    if (session?.userId === userId) session.agentId = agentId;
-  }
-}
-
-async function rememberUserPrimaryAgent(userId, agentId) {
-  const cleanUserId = String(userId || '').trim();
-  const cleanAgentId = String(agentId || '').trim() || null;
-  if (!cleanUserId) return;
-  try {
-    await setUserAgentId(cleanUserId, cleanAgentId);
-  } catch (err) {
-    logStructured('warn.userPrimaryAgent.persistence_unavailable', {
-      userId: cleanUserId,
-      agentId: cleanAgentId,
-      error: err.message,
-    });
-    if (IS_PRODUCTION) throw err;
-  }
-  updateCachedUserPrimaryAgent(cleanUserId, cleanAgentId);
-}
-
-function assignAgentOwnerUserId(agentId, ownerUserId, { ifMissing = false } = {}) {
-  const cleanAgentId = String(agentId || '').trim();
-  const cleanUserId = String(ownerUserId || '').trim();
-  if (!cleanAgentId || !cleanUserId) return null;
-
-  const agent = agentProfiles.get(cleanAgentId);
-  if (!agent) return null;
-
-  const existingOwnerUserId = String(agent.ownerUserId || '').trim();
-  if (ifMissing && existingOwnerUserId && existingOwnerUserId !== cleanUserId) return null;
-  if (existingOwnerUserId === cleanUserId) return agent;
-
-  agent.ownerUserId = cleanUserId;
-  persistState();
-  return agent;
-}
-
-function rescueLegacyOwnedAgentOwnership(ownerUserId, primaryAgentId) {
-  const cleanUserId = String(ownerUserId || '').trim();
-  const cleanAgentId = String(primaryAgentId || '').trim();
-  if (!cleanUserId || !cleanAgentId) return null;
-  return assignAgentOwnerUserId(cleanAgentId, cleanUserId, { ifMissing: true });
-}
-
 function getAgentLastConnectedAt(agent) {
   const runtime = getAgentRuntime(agent?.id);
   return Number(runtime?.connectedAt || agent?.openclaw?.connectedAt || 0);
@@ -1891,28 +1684,6 @@ function toActivityTimestamp(value) {
 function toActivityIso(value) {
   const timestamp = toActivityTimestamp(value);
   return timestamp > 0 ? new Date(timestamp).toISOString() : null;
-}
-
-function compareOwnedAgentSummaries(a, b) {
-  const aLive = Boolean(a?.arena?.activeRoomId);
-  const bLive = Boolean(b?.arena?.activeRoomId);
-  if (aLive !== bLive) return aLive ? -1 : 1;
-
-  const aRuntimeConnected = Boolean(a?.arena?.runtimeConnected);
-  const bRuntimeConnected = Boolean(b?.arena?.runtimeConnected);
-  if (aRuntimeConnected !== bRuntimeConnected) return aRuntimeConnected ? -1 : 1;
-
-  const activityDelta = toActivityTimestamp(b?.activityAt) - toActivityTimestamp(a?.activityAt);
-  if (activityDelta !== 0) return activityDelta;
-
-  return String(a?.name || a?.id || '').localeCompare(String(b?.name || b?.id || ''));
-}
-
-function listOwnedAgentsForUser(ownerUserId) {
-  const cleanUserId = String(ownerUserId || '').trim();
-  if (!cleanUserId) return [];
-  return [...agentProfiles.values()]
-    .filter((agent) => String(agent?.ownerUserId || '').trim() === cleanUserId);
 }
 
 function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
@@ -1950,83 +1721,6 @@ function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
   };
 }
 
-async function listRenderableOwnedAgentsForUser(ownerUserId) {
-  const ownedAgents = listOwnedAgentsForUser(ownerUserId);
-  if (!ownedAgents.length) return [];
-
-  const summaries = await Promise.all(ownedAgents.map(async (agent) => {
-    const statsBundle = await buildOwnedAgentStats(agent.id);
-    const summary = summarizeOwnedAgentProfile(agent, {
-      stats: statsBundle?.stats || null,
-    });
-    if (!summary) return null;
-
-    if (summary.arena?.runtimeConnected) return summary;
-    if (summary.lastPlayedAt) return summary;
-    if (summary.lastConnectedAt) return summary;
-    return null;
-  }));
-
-  return summaries.filter(Boolean).sort(compareOwnedAgentSummaries);
-}
-
-async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', includeStats = false } = {}) {
-  if (!siteSession?.userId) {
-    return {
-      primaryAgentId: null,
-      selectedAgentId: null,
-      selectionSource: 'none',
-      agents: [],
-      agent: null,
-      statsBundle: null,
-    };
-  }
-
-  let primaryAgentId = String(siteSession.primaryAgentId || siteSession.agentId || '').trim() || null;
-  if (primaryAgentId) rescueLegacyOwnedAgentOwnership(siteSession.userId, primaryAgentId);
-
-  const requestedId = String(requestedAgentId || '').trim();
-  const ownedAgents = await listRenderableOwnedAgentsForUser(siteSession.userId);
-  const ownedById = new Map(ownedAgents.map((agent) => [agent.id, agent]));
-
-  let selectedAgent = requestedId ? ownedById.get(requestedId) || null : null;
-  let selectionSource = selectedAgent ? 'query' : 'none';
-
-  if (!selectedAgent && primaryAgentId) {
-    selectedAgent = ownedById.get(primaryAgentId) || null;
-    if (selectedAgent) selectionSource = 'primary';
-  }
-
-  if (!selectedAgent && ownedAgents.length > 0) {
-    selectedAgent = ownedAgents[0];
-    selectionSource = 'auto';
-  }
-
-  if (selectedAgent?.id && selectedAgent.id !== primaryAgentId) {
-    await rememberUserPrimaryAgent(siteSession.userId, selectedAgent.id);
-    primaryAgentId = selectedAgent.id;
-  }
-
-  const agent = selectedAgent || null;
-  return {
-    primaryAgentId,
-    selectedAgentId: agent?.id || null,
-    selectionSource,
-    agents: ownedAgents,
-    agent,
-    statsBundle: includeStats && agent?.id ? await buildOwnedAgentStats(agent.id) : null,
-  };
-}
-
-async function bindOwnedAgent(ownerUserId, agentId) {
-  const cleanUserId = String(ownerUserId || '').trim();
-  const cleanAgentId = String(agentId || '').trim();
-  if (!cleanUserId || !cleanAgentId) return;
-
-  assignAgentOwnerUserId(cleanAgentId, cleanUserId);
-  await rememberUserPrimaryAgent(cleanUserId, cleanAgentId);
-}
-
 async function resolveMatchAgentId(rawId) {
   const normalizedId = String(rawId || '').trim();
   if (!normalizedId) return '';
@@ -2044,10 +1738,6 @@ async function resolveMatchAgentId(rawId) {
   }
 
   return normalizedId;
-}
-
-function summarizeOwnedAgent(agentId) {
-  return summarizeOwnedAgentProfile(agentId);
 }
 
 function decorateMatchForClient(match) {
@@ -2351,6 +2041,13 @@ app.post('/api/track/share', (_req, res) => {
   res.json({ ok: true });
 });
 
+function sendRetiredDashboardResponse(res) {
+  res.status(410).json({
+    ok: false,
+    error: 'Website accounts, ownership claims, and personal dashboards are not part of the current MVP.',
+  });
+}
+
 app.post('/api/auth/session', async (req, res) => {
   // Check for existing session token
   const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
@@ -2360,21 +2057,17 @@ app.post('/api/auth/session', async (req, res) => {
       getSessionByToken(existingToken),
     ]);
     if (siteSession?.userId) {
-      const ownedContext = await buildOwnedArenaContext(siteSession);
       return res.json({
         ok: true,
         session: {
           token: existingToken,
           userId: siteSession.userId || existing?.user_id || null,
-          agentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
-          primaryAgentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
+          agentId: siteSession?.agentId || null,
+          primaryAgentId: siteSession?.agentId || null,
           isAnonymous: siteSession?.isAnonymous !== false,
           expiresAt: siteSession?.expiresAt || existing?.expires_at || null,
           durable: siteSession?.durable !== false,
         },
-        ownedAgent: ownedContext.agent,
-        ownedAgents: ownedContext.agents,
-        selectedAgentId: ownedContext.selectedAgentId,
         renewed: true,
       });
     }
@@ -2395,9 +2088,6 @@ app.post('/api/auth/session', async (req, res) => {
     res.json({
       ok: true,
       session: { token, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt, durable: true },
-      ownedAgent: null,
-      ownedAgents: [],
-      selectedAgentId: null,
     });
   } catch (err) {
     logStructured('error.auth.session.create', { error: err.message });
@@ -2411,403 +2101,60 @@ app.post('/api/auth/session', async (req, res) => {
     res.json({
       ok: true,
       session: { token: token2, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt: fallbackExpiresAt, durable: false },
-      ownedAgent: null,
-      ownedAgents: [],
-      selectedAgentId: null,
     });
   }
 });
 
-app.post('/api/auth/magic-link/start', async (req, res) => {
-  const email = normalizeEmail(req.body?.email);
-  const mode = String(req.body?.mode || 'login').trim() === 'claim' ? 'claim' : 'login';
-  const siteSession = await resolveSiteSession(req);
-  const redirectTo = sanitizeRedirectTo(
-    req.body?.redirectTo,
-    mode === 'claim' ? '/arena.html?claimed=1' : '/arena.html',
-  );
-
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ ok: false, error: 'Valid email is required' });
-  }
-
-  let pendingAgentId = null;
-  if (mode === 'claim') {
-    if (!siteSession?.userId) {
-      return res.status(401).json({ ok: false, error: 'Create a browser session before claiming an agent' });
-    }
-    pendingAgentId = String(req.body?.agentId || siteSession.agentId || '').trim();
-    if (!pendingAgentId) {
-      return res.status(400).json({ ok: false, error: 'Connect an agent before requesting a claim link' });
-    }
-    const siteUser = await getUserById(siteSession.userId).catch(() => null);
-    const ownsPendingAgent = pendingAgentId === String(siteSession.agentId || '').trim()
-      || pendingAgentId === String(siteUser?.agent_id || '').trim();
-    if (!ownsPendingAgent) {
-      return res.status(403).json({ ok: false, error: 'This browser session cannot claim that agent' });
-    }
-  }
-
-  try {
-    const rawToken = issueOpaqueToken(24);
-    const link = await createMagicLink({
-      id: shortId(16),
-      email,
-      mode,
-      tokenHash: hashOpaqueToken(rawToken),
-      requesterUserId: siteSession?.userId || null,
-      pendingAgentId,
-      redirectTo,
-      expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString(),
-    });
-
-    const delivery = await sendMagicLinkEmail(req, {
-      email,
-      token: rawToken,
-      mode,
-      redirectTo,
-      agentId: pendingAgentId,
-    });
-
-    res.json({
-      ok: true,
-      mode,
-      email,
-      expiresAt: link?.expires_at || null,
-      message: mode === 'claim'
-        ? 'If that email can be used here, we sent a claim link.'
-        : 'If that email can be used here, we sent a login link.',
-      debug: !IS_PRODUCTION && delivery?.debugToken
-        ? {
-            magicLinkToken: delivery.debugToken,
-            magicLinkUrl: delivery.debugUrl,
-          }
-        : undefined,
-    });
-  } catch (err) {
-    logStructured('error.auth.magic_link.start', { error: err.message, mode });
-    const status = /configured/i.test(String(err.message || '')) ? 503 : 500;
-    res.status(status).json({ ok: false, error: status === 503 ? 'Magic link email unavailable' : 'Magic link request failed' });
-  }
+app.post('/api/auth/magic-link/start', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
-app.post('/api/auth/magic-link/consume', async (req, res) => {
-  const rawToken = String(req.body?.token || '').trim();
-  if (!rawToken) return res.status(400).json({ ok: false, error: 'Token is required' });
-
-  try {
-    const link = await getMagicLinkByTokenHash(hashOpaqueToken(rawToken));
-    if (!link || link.consumed_at || isExpiredIso(link.expires_at)) {
-      return res.status(400).json({ ok: false, error: 'Magic link invalid or expired' });
-    }
-
-    const currentSiteSession = await resolveSiteSession(req);
-    const currentUser = currentSiteSession?.userId ? await getUserById(currentSiteSession.userId).catch(() => null) : null;
-    let user = await getUserByEmail(link.email);
-    const claimedAgentId = String(link.pending_agent_id || '').trim() || null;
-
-    if (link.mode === 'claim') {
-      if (!claimedAgentId) {
-        return res.status(400).json({ ok: false, error: 'This claim link is missing an agent reference' });
-      }
-      if (user?.agent_id && user.agent_id !== claimedAgentId) {
-        return res.status(409).json({
-          ok: false,
-          code: 'ONE_PRIMARY_AGENT_LIMIT',
-          error: 'This email already manages a different primary agent in v1.',
-        });
-      }
-
-      if (user?.id) {
-        if (!user.agent_id) user = await upgradeUser(user.id, { email: link.email, agentId: claimedAgentId });
-      } else if (currentUser?.id && claimedAgentId === String(currentSiteSession?.agentId || currentUser?.agent_id || '').trim()) {
-        user = await upgradeUser(currentUser.id, { email: link.email, agentId: claimedAgentId });
-      } else {
-        const userId = shortId(12);
-        await createAnonymousUser(userId);
-        user = await upgradeUser(userId, { email: link.email, agentId: claimedAgentId });
-      }
-
-      if (user?.id && !user.agent_id) {
-        user = await setUserAgentId(user.id, claimedAgentId);
-      }
-      syncClaimedAgentOwnership(claimedAgentId, user);
-    } else if (!user?.id) {
-      if (currentUser?.id && (!currentUser.email || currentUser.is_anonymous)) {
-        user = await upgradeUser(currentUser.id, { email: link.email });
-      } else {
-        const userId = shortId(12);
-        await createAnonymousUser(userId);
-        user = await upgradeUser(userId, { email: link.email });
-      }
-    }
-
-    if (!user?.id) {
-      return res.status(500).json({ ok: false, error: 'Could not establish a verified session' });
-    }
-
-    await consumeMagicLink(link.id);
-    const refreshedUser = await getUserById(user.id);
-    const session = await issueUserSiteSession(refreshedUser || user);
-
-    res.json({
-      ok: true,
-      session,
-      user: {
-        id: (refreshedUser || user).id,
-        email: (refreshedUser || user).email || null,
-        displayName: (refreshedUser || user).display_name || null,
-        agentId: (refreshedUser || user).agent_id || null,
-      },
-      claimedAgent: summarizeOwnedAgent((refreshedUser || user).agent_id),
-      redirectTo: sanitizeRedirectTo(link.redirect_to, link.mode === 'claim' ? '/arena.html?claimed=1' : '/arena.html'),
-    });
-  } catch (err) {
-    logStructured('error.auth.magic_link.consume', { error: err.message });
-    res.status(500).json({ ok: false, error: 'Magic link consumption failed' });
-  }
+app.post('/api/auth/magic-link/consume', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
-app.post('/api/auth/logout', async (req, res) => {
-  const siteSession = await resolveSiteSession(req);
-  if (!siteSession?.token) {
-    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
-  }
-
-  try {
-    await deleteSessionByToken(siteSession.token);
-    clearCachedSession(siteSession.token);
-    res.json({ ok: true });
-  } catch (err) {
-    logStructured('error.auth.logout', { error: err.message, userId: siteSession.userId || null });
-    res.status(500).json({ ok: false, error: 'Could not log out' });
-  }
+app.post('/api/auth/logout', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
-// ── Auth: get current user profile ──
-app.get('/api/auth/me', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
-  try {
-    const user = await getUserByToken(token);
-    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
-    res.json({
-      ok: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.display_name,
-        agentId: user.agent_id || null,
-        isAnonymous: !!user.is_anonymous,
-        createdAt: user.created_at,
-      },
-    });
-  } catch (_err) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch profile' });
-  }
+app.get('/api/auth/me', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
 app.post('/api/auth/register', (_req, res) => {
-  res.status(410).json({ ok: false, error: 'Magic link sign-in is required' });
+  sendRetiredDashboardResponse(res);
 });
 
 app.post('/api/auth/upgrade', (_req, res) => {
-  res.status(410).json({ ok: false, error: 'Magic link sign-in is required' });
+  sendRetiredDashboardResponse(res);
 });
 
-app.post('/api/owner/token', async (req, res) => {
-  const siteSession = await resolveSiteSession(req);
-  if (!siteSession?.userId) {
-    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
-  }
-
-  try {
-    const user = await getUserById(siteSession.userId);
-    if (!user?.email) {
-      return res.status(403).json({ ok: false, error: 'Claim your agent with email before generating an owner token' });
-    }
-    if (!user.agent_id) {
-      return res.status(400).json({ ok: false, error: 'No claimed agent is linked to this account yet' });
-    }
-
-    const ownerToken = issueOpaqueToken(24);
-    await rotateOwnerToken({
-      id: shortId(16),
-      userId: user.id,
-      tokenHash: hashOpaqueToken(ownerToken),
-    });
-
-    res.json({
-      ok: true,
-      ownerToken,
-      agentId: user.agent_id,
-      command: `openclaw clawofdeceit auth --owner-token ${ownerToken}`,
-    });
-  } catch (err) {
-    logStructured('error.auth.owner_token.issue', { error: err.message, userId: siteSession.userId });
-    res.status(500).json({ ok: false, error: 'Could not generate owner token' });
-  }
+app.post('/api/owner/token', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
-// ── Match history for authenticated user ──
-app.get('/api/matches/mine', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
-  try {
-    const siteSession = await resolveSiteSession(req);
-    if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
-    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
-    const offset = Math.max(Number(req.query.offset) || 0, 0);
-    const ownedContext = await buildOwnedArenaContext(siteSession, {
-      requestedAgentId: req.query.agentId,
-    });
-    const agentId = String(ownedContext.selectedAgentId || '').trim();
-    let matches = [];
-    let source = 'none';
-    let durability = 'none';
-    if (agentId) {
-      matches = await getPlayerMatches(agentId, limit, offset);
-      if (matches.length) {
-        source = 'database';
-        durability = 'database';
-      } else if (offset === 0) {
-        matches = getPlayerMatchesFallback(agentId, limit);
-        source = 'memory';
-        durability = 'ephemeral_memory';
-      }
-    }
-    res.json({
-      ok: true,
-      agentId: agentId || null,
-      selectedAgentId: ownedContext.selectedAgentId || null,
-      primaryAgentId: ownedContext.primaryAgentId || null,
-      matches: decorateMatchesForClient(matches),
-      source,
-      durability,
-    });
-  } catch (err) {
-    logStructured('error.getPlayerMatches.mine', { error: err.message });
-    res.status(500).json({ ok: false, error: 'Failed to fetch matches' });
-  }
+app.get('/api/matches/mine', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
 app.use('/api/openclaw', createOpenClawRouter({
-  bindOwnedAgent,
   agentProfiles,
   connectSessions,
-  getUserById,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
-  resolveOwnerTokenUser,
   resolveSiteSession,
   roomEvents,
   shortId,
   summarizeAgentArenaState,
 }));
 
-app.post('/api/openclaw/style-sync', async (req, res) => {
-  const ownerToken = readBearerToken(req);
-  const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
-  if (!ownerToken || !profile) {
-    return res.status(400).json({ ok: false, error: 'owner token and profile required' });
-  }
-
-  const ownerUser = await resolveOwnerTokenUser(ownerToken);
-  if (!ownerUser?.id) {
-    return res.status(401).json({ ok: false, error: 'invalid owner token' });
-  }
-
-  const claimedAgentId = String(ownerUser.agent_id || '').trim();
-  if (!claimedAgentId) {
-    return res.status(404).json({ ok: false, error: 'no claimed agent linked to this owner token' });
-  }
-
-  const agent = agentProfiles.get(claimedAgentId);
-  if (!agent) return res.status(404).json({ ok: false, error: 'claimed agent not found' });
-
-  const nextPersona = buildArenaPersona({
-    style: profile.tone || profile.style || agent.persona?.style || '',
-    presetId: profile.preset || agent.persona?.presetId,
-    intensity: profile.intensity || agent.persona?.intensity || 7,
-  });
-
-  agent.persona = {
-    ...agent.persona,
-    style: nextPersona.style,
-    presetId: nextPersona.presetId,
-    intensity: nextPersona.intensity,
-  };
-  agent.arenaProfile = {
-    ...profile,
-    syncedAt: Date.now(),
-  };
-
-  persistState();
-  res.json({ ok: true, agent });
+app.post('/api/openclaw/style-sync', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
-app.get('/api/agents/mine', async (req, res) => {
-  const siteSession = await resolveSiteSession(req);
-  if (!siteSession?.userId) {
-    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
-  }
-
-  const ownedContext = await buildOwnedArenaContext(siteSession, {
-    requestedAgentId: req.query.agentId,
-    includeStats: true,
-  });
-
-  // Compute win streak from recent matches
-  let streak = 0;
-  const agentIdForStreak = String(ownedContext.selectedAgentId || '').trim();
-  if (agentIdForStreak) {
-    try {
-      const recentMatches = await getPlayerMatches(agentIdForStreak, 50);
-      for (const m of recentMatches) {
-        const role = String(m.role || '').toLowerCase();
-        const winner = String(m.winner || '').toLowerCase();
-        if (role && winner && role === winner) {
-          streak++;
-        } else {
-          break;
-        }
-      }
-    } catch (_err) { /* streak stays 0 */ }
-  }
-
-  // Compute rank from leaderboard
-  let rank = null;
-  if (agentIdForStreak) {
-    try {
-      const leaders = await getLeaderboardEntries({ mode: 'mafia', limit: 100 });
-      const idx = leaders.findIndex((entry) => entry.id === agentIdForStreak);
-      if (idx >= 0) rank = idx + 1;
-    } catch (_err) { /* rank stays null */ }
-  }
-
-  res.json({
-    ok: true,
-    session: {
-      userId: siteSession.userId,
-      isAnonymous: siteSession.isAnonymous !== false,
-      agentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
-      primaryAgentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
-    },
-    agents: ownedContext.agents,
-    selectedAgentId: ownedContext.selectedAgentId || null,
-    selectionSource: ownedContext.selectionSource || 'none',
-    agent: ownedContext.agent,
-    stats: ownedContext.statsBundle?.stats || null,
-    statsSource: ownedContext.statsBundle?.source || 'none',
-    statsDurability: ownedContext.statsBundle?.durability || 'none',
-    statsCapped: Boolean(ownedContext.statsBundle?.capped),
-    streak,
-    rank,
-    arena: buildArenaAvailability(),
-  });
+app.get('/api/agents/mine', (_req, res) => {
+  sendRetiredDashboardResponse(res);
 });
 
 app.get('/api/agents/:id', async (req, res) => {
@@ -3607,36 +2954,8 @@ app.post('/api/play/instant', (req, res) => {
   });
 });
 
-// ── Watch: spectate the most active game ──
 app.get('/api/play/watch', (_req, res) => {
-  const allRooms = listPlayableRooms(PUBLIC_LAUNCH_MODE, 'all');
-  const active = allRooms
-    .filter((r) => r.status === 'in_progress')
-    .sort((a, b) => (b.players || 0) - (a.players || 0));
-
-  if (active.length > 0) {
-    const best = active[0];
-    return res.json({
-      ok: true,
-      found: true,
-      roomId: best.roomId,
-      mode: best.mode,
-      watchUrl: `/arena.html?mode=${best.mode}&room=${best.roomId}&spectate=1`,
-      players: best.players,
-    });
-  }
-  const arena = buildArenaAvailability();
-  res.json({
-    ok: true,
-    found: false,
-    mode: arena.mode,
-    connectedAgents: arena.connectedAgents,
-    requiredAgents: arena.requiredAgents,
-    missingAgents: arena.missingAgents,
-    message: arena.connectedAgents > 0
-      ? `No live agent-only Mafia room is running yet. Need ${arena.missingAgents} more connected agent(s) to open the arena.`
-      : 'No live agent-only Mafia rooms yet. Connect an OpenClaw agent to help open the arena.',
-  });
+  sendRetiredDashboardResponse(res);
 });
 
 // ── Match page for sharing ──
@@ -3682,9 +3001,9 @@ app.get('/match/:matchId', async (req, res) => {
   <nav class="topnav">
     <a class="brand" href="/">Claw of Deceit</a>
     <div class="nav-links">
-      <a href="/arena.html">Arena</a>
+      <a href="/how-it-works.html">How It Works</a>
       <a href="/leaderboard.html">Leaderboard</a>
-      <a href="/guide.html#join">Join</a>
+      <a href="/connect.html">Deploy Agent</a>
     </div>
   </nav>
   <section class="hero-simple mb-16" style="min-height:auto; padding: 3rem 0;">
@@ -3696,7 +3015,7 @@ app.get('/match/:matchId', async (req, res) => {
         <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
         <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
         <div class="row mt-12" style="justify-content: center; gap: 1rem;">
-          <a class="btn btn-primary" href="/arena.html">Open Arena</a>
+          <a class="btn btn-primary" href="/leaderboard.html">View Leaderboard</a>
           <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
         </div>
       </div>
@@ -3714,6 +3033,10 @@ app.get('/config.js', (req, res) => {
   res.type('application/javascript');
   res.set('Cache-Control', 'no-store');
   res.send(buildRuntimeConfigScript(req));
+});
+
+app.get(['/arena.html', '/account.html', '/dashboard.html'], (_req, res) => {
+  res.redirect(302, '/leaderboard.html');
 });
 
 app.use(sendRuntimeHtml);

@@ -33,12 +33,12 @@ async function createSiteSession(base) {
   return authData.session.token;
 }
 
-test('connect session endpoints require a site session and secret access token', async () => {
+test('connect-session routes require a site session and keep the session skill aligned with the reduced MVP surface', async () => {
   await withServer(async (base) => {
     const noSessionRes = await fetch(`${base}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: 'victim@example.com' }),
+      body: JSON.stringify({}),
     });
     assert.equal(noSessionRes.status, 401);
 
@@ -49,7 +49,7 @@ test('connect session endpoints require a site session and secret access token',
         'content-type': 'application/json',
         authorization: `Bearer ${sessionToken}`,
       },
-      body: JSON.stringify({ email: 'victim@example.com' }),
+      body: JSON.stringify({}),
     });
     assert.equal(createRes.status, 200);
     const created = await createRes.json();
@@ -73,7 +73,6 @@ test('connect session endpoints require a site session and secret access token',
     );
     assert.equal(created.connect.onboarding.defaultPresetId, 'pragmatic');
     assert.equal(created.connect.onboarding.stylePresets.length, 8);
-    assert.equal(created.connect.onboarding.stylePresets[0].starterPrompt.length > 0, true);
     assert.equal(created.connect.onboarding.advancedSetupUrl, '/connect.html');
 
     const noAuthStatus = await fetch(`${base}/api/openclaw/connect-session/${id}`);
@@ -95,6 +94,7 @@ test('connect session endpoints require a site session and secret access token',
     assert.equal(statusData.ok, true);
     assert.equal('accessToken' in statusData.connect, false);
     assert.equal('callbackProof' in statusData.connect, false);
+    assert.equal('watchUrl' in statusData.connect, false);
     assert.equal(statusData.connect.onboarding.connectCommand, null);
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
     assert.equal(statusData.connect.onboarding.sessionSkillUrl, null);
@@ -121,7 +121,10 @@ test('connect session endpoints require a site session and secret access token',
     assert.match(skillBody, /pick and play/);
     assert.match(skillBody, /pick and customize/);
     assert.match(skillBody, /Pragmatic \(pragmatic\)/);
-    assert.match(skillBody, /openclaw clawofdeceit auth --owner-token <token>/);
+    assert.doesNotMatch(skillBody, /owner token/i);
+    assert.doesNotMatch(skillBody, /dashboard/i);
+    assert.doesNotMatch(skillBody, /magic link/i);
+    assert.doesNotMatch(skillBody, /sync-style/i);
     assert.doesNotMatch(skillBody, /\/guide\.html/);
 
     const storedConnect = connectSessions.get(id);
@@ -133,223 +136,7 @@ test('connect session endpoints require a site session and secret access token',
   });
 });
 
-test('connected OpenClaw agents bind to the current site session for owner watch', async () => {
-  await withServer(async (base) => {
-    const sessionToken = await createSiteSession(base);
-
-    const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({}),
-    });
-    assert.equal(createRes.status, 200);
-    const created = await createRes.json();
-    assert.equal(created.ok, true);
-
-    const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agentName: 'owner_agent', style: 'paranoid detective' }),
-    });
-    assert.equal(confirmRes.status, 200);
-    const confirmed = await confirmRes.json();
-    assert.equal(confirmed.ok, true);
-    assert.equal(confirmed.connect.agentId.length > 0, true);
-    assert.equal(confirmed.agent.persona.presetId, 'paranoid');
-    assert.equal(confirmed.agent.persona.style, 'paranoid detective');
-    liveAgentRuntimes.set(confirmed.connect.agentId, {
-      agentId: confirmed.connect.agentId,
-      connected: true,
-      status: 'idle',
-      socketId: `sock-${confirmed.connect.agentId}`,
-      currentRoomId: null,
-      currentPlayerId: null,
-      connectedAt: Date.now(),
-      lastSeenAt: Date.now(),
-    });
-
-    const mineRes = await fetch(`${base}/api/agents/mine`, {
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    assert.equal(mineRes.status, 200);
-    const mine = await mineRes.json();
-    assert.equal(mine.ok, true);
-    assert.equal(mine.session.agentId, confirmed.connect.agentId);
-    assert.equal(mine.session.primaryAgentId, confirmed.connect.agentId);
-    assert.equal(mine.session.isAnonymous, true);
-    assert.equal(Array.isArray(mine.agents), true);
-    assert.equal(mine.agents.length, 1);
-    assert.equal(mine.selectedAgentId, confirmed.connect.agentId);
-    assert.equal(mine.agent.id, confirmed.connect.agentId);
-    assert.match(mine.agent.watchUrl, /\/arena\.html\?agentId=/);
-    assert.equal(mine.agent.arena.runtimeConnected, true);
-    assert.equal(typeof mine.stats, 'object');
-    assert.equal(mine.stats.gamesPlayed, 0);
-    assert.equal(mine.stats.mmr, 1000);
-    assert.equal(mine.stats.ratedMatches, 0);
-    assert.equal(mine.stats.isProvisional, true);
-    assert.equal(mine.stats.nightKillCredits, 0);
-    assert.equal(confirmed.agent.ownerUserId, mine.session.userId);
-  });
-});
-
-test('logout clears only the browser session and magic-link login restores the same claimed agent', async () => {
-  await withServer(async (base) => {
-    const sessionToken = await createSiteSession(base);
-    const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({ email: 'preset-owner@example.com' }),
-    });
-    assert.equal(createRes.status, 200);
-    const created = await createRes.json();
-    assert.equal(created.ok, true);
-
-    const callbackRes = await fetch(`${base}/api/openclaw/callback`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        token: created.connect.id,
-        proof: created.connect.callbackProof,
-        agentName: 'preset_owner',
-        style: 'friendly manipulator',
-      }),
-    });
-    assert.equal(callbackRes.status, 200);
-    const connected = await callbackRes.json();
-    assert.equal(connected.ok, true);
-    assert.equal(connected.agent.persona.presetId, 'charming');
-    assert.equal(connected.agent.persona.style, 'friendly manipulator');
-
-    const claimStartRes = await fetch(`${base}/api/auth/magic-link/start`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({
-        email: 'preset-owner@example.com',
-        mode: 'claim',
-        agentId: connected.agent.id,
-      }),
-    });
-    assert.equal(claimStartRes.status, 200);
-    const claimStart = await claimStartRes.json();
-    assert.equal(claimStart.ok, true);
-    assert.ok(claimStart.debug?.magicLinkToken);
-
-    const claimConsumeRes = await fetch(`${base}/api/auth/magic-link/consume`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({ token: claimStart.debug.magicLinkToken }),
-    });
-    assert.equal(claimConsumeRes.status, 200);
-    const claimConsume = await claimConsumeRes.json();
-    assert.equal(claimConsume.ok, true);
-    assert.equal(claimConsume.user.email, 'preset-owner@example.com');
-    assert.equal(claimConsume.user.agentId, connected.agent.id);
-
-    const ownerTokenRes = await fetch(`${base}/api/owner/token`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${claimConsume.session.token}`,
-      },
-      body: JSON.stringify({}),
-    });
-    assert.equal(ownerTokenRes.status, 200);
-    const ownerTokenData = await ownerTokenRes.json();
-    assert.equal(ownerTokenData.ok, true);
-    assert.ok(ownerTokenData.ownerToken);
-
-    const syncRes = await fetch(`${base}/api/openclaw/style-sync`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${ownerTokenData.ownerToken}`,
-      },
-      body: JSON.stringify({
-        profile: {
-          preset: 'chaotic',
-          tone: 'chaotic preacher',
-          intensity: 9,
-        },
-      }),
-    });
-    assert.equal(syncRes.status, 200);
-    const synced = await syncRes.json();
-    assert.equal(synced.ok, true);
-    assert.equal(synced.agent.persona.presetId, 'chaotic');
-    assert.equal(synced.agent.persona.style, 'chaotic preacher');
-    assert.equal(synced.agent.persona.intensity, 9);
-
-    const logoutRes = await fetch(`${base}/api/auth/logout`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${claimConsume.session.token}`,
-      },
-      body: JSON.stringify({}),
-    });
-    assert.equal(logoutRes.status, 200);
-    const logoutData = await logoutRes.json();
-    assert.equal(logoutData.ok, true);
-
-    const meAfterLogoutRes = await fetch(`${base}/api/auth/me`, {
-      headers: { authorization: `Bearer ${claimConsume.session.token}` },
-    });
-    assert.equal(meAfterLogoutRes.status, 401);
-
-    const loginStartRes = await fetch(`${base}/api/auth/magic-link/start`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: 'preset-owner@example.com',
-        mode: 'login',
-      }),
-    });
-    assert.equal(loginStartRes.status, 200);
-    const loginStart = await loginStartRes.json();
-    assert.equal(loginStart.ok, true);
-    assert.ok(loginStart.debug?.magicLinkToken);
-
-    const loginConsumeRes = await fetch(`${base}/api/auth/magic-link/consume`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ token: loginStart.debug.magicLinkToken }),
-    });
-    assert.equal(loginConsumeRes.status, 200);
-    const loginConsume = await loginConsumeRes.json();
-    assert.equal(loginConsume.ok, true);
-    assert.equal(loginConsume.user.email, 'preset-owner@example.com');
-    assert.equal(loginConsume.user.agentId, connected.agent.id);
-
-    const restoredMineRes = await fetch(`${base}/api/agents/mine`, {
-      headers: { authorization: `Bearer ${loginConsume.session.token}` },
-    });
-    assert.equal(restoredMineRes.status, 200);
-    const restoredMine = await restoredMineRes.json();
-    assert.equal(restoredMine.ok, true);
-    assert.equal(restoredMine.selectedAgentId, connected.agent.id);
-    assert.equal(restoredMine.session.primaryAgentId, connected.agent.id);
-    assert.equal(restoredMine.agent.id, connected.agent.id);
-  });
-});
-
-test('one site session can own multiple connected OpenClaws and select between them', async () => {
+test('each confirmed connect session creates a fresh agent id for multi-agent use', async () => {
   await withServer(async (base) => {
     const sessionToken = await createSiteSession(base);
 
@@ -364,6 +151,7 @@ test('one site session can own multiple connected OpenClaws and select between t
       });
       assert.equal(createRes.status, 200);
       const created = await createRes.json();
+
       const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -372,70 +160,53 @@ test('one site session can own multiple connected OpenClaws and select between t
       assert.equal(confirmRes.status, 200);
       const confirmed = await confirmRes.json();
       assert.equal(confirmed.ok, true);
-      liveAgentRuntimes.set(confirmed.agent.id, {
-        agentId: confirmed.agent.id,
-        connected: true,
-        status: 'idle',
-        socketId: `sock-${confirmed.agent.id}`,
-        currentRoomId: null,
-        currentPlayerId: null,
-        connectedAt: Date.now(),
-        lastSeenAt: Date.now(),
-      });
-      return confirmed.agent.id;
+      assert.equal('watchUrl' in confirmed.connect, false);
+      return confirmed;
     }
 
-    const alphaId = await connectAgent('alpha_watch', 'patient observer');
-    const bravoId = await connectAgent('bravo_watch', 'chaotic preacher');
+    const alpha = await connectAgent('alpha_one', 'paranoid detective');
+    const bravo = await connectAgent('bravo_two', 'friendly manipulator');
 
-    const mineRes = await fetch(`${base}/api/agents/mine`, {
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    assert.equal(mineRes.status, 200);
-    const mine = await mineRes.json();
-    assert.equal(mine.ok, true);
-    assert.equal(mine.session.primaryAgentId, bravoId);
-    assert.equal(mine.selectedAgentId, bravoId);
-    assert.equal(mine.agents.length, 2);
-    assert.deepEqual(mine.agents.map((agent) => agent.id).sort(), [alphaId, bravoId].sort());
+    assert.notEqual(alpha.agent.id, bravo.agent.id);
+    assert.equal(alpha.agent.persona.presetId, 'paranoid');
+    assert.equal(bravo.agent.persona.presetId, 'charming');
+    assert.equal(agentProfiles.size, 2);
+  });
+});
 
-    const alphaRes = await fetch(`${base}/api/agents/mine?agentId=${encodeURIComponent(alphaId)}`, {
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    assert.equal(alphaRes.status, 200);
-    const alphaMine = await alphaRes.json();
-    assert.equal(alphaMine.ok, true);
-    assert.equal(alphaMine.selectedAgentId, alphaId);
-    assert.equal(alphaMine.agent.id, alphaId);
-    assert.equal(alphaMine.session.primaryAgentId, alphaId);
+test('retired dashboard and ownership routes return 410 and old pages redirect to the leaderboard', async () => {
+  await withServer(async (base) => {
+    const retiredRoutes = [
+      { method: 'post', path: '/api/auth/magic-link/start' },
+      { method: 'post', path: '/api/auth/magic-link/consume' },
+      { method: 'post', path: '/api/auth/logout' },
+      { method: 'get', path: '/api/auth/me' },
+      { method: 'post', path: '/api/auth/register' },
+      { method: 'post', path: '/api/auth/upgrade' },
+      { method: 'post', path: '/api/owner/token' },
+      { method: 'get', path: '/api/matches/mine' },
+      { method: 'get', path: '/api/agents/mine' },
+      { method: 'post', path: '/api/openclaw/style-sync' },
+      { method: 'get', path: '/api/play/watch' },
+    ];
 
-    liveAgentRuntimes.set(bravoId, {
-      ...liveAgentRuntimes.get(bravoId),
-      connected: false,
-      status: 'offline',
-      socketId: null,
-    });
+    for (const route of retiredRoutes) {
+      const res = await fetch(`${base}${route.path}`, {
+        method: route.method.toUpperCase(),
+        headers: { 'content-type': 'application/json' },
+        body: route.method === 'post' ? JSON.stringify({}) : undefined,
+      });
+      assert.equal(res.status, 410, `${route.method.toUpperCase()} ${route.path} should be retired`);
+      const data = await res.json();
+      assert.match(data.error || '', /not part of the current MVP/i);
+    }
 
-    const offlineRes = await fetch(`${base}/api/agents/mine`, {
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    assert.equal(offlineRes.status, 200);
-    const offlineMine = await offlineRes.json();
-    assert.equal(offlineMine.ok, true);
-    assert.equal(Array.isArray(offlineMine.agents), true);
-    assert.equal(offlineMine.agents.length, 2);
-    assert.equal(offlineMine.agents.some((agent) => agent.id === bravoId), true);
-    const offlineBravo = offlineMine.agents.find((agent) => agent.id === bravoId);
-    assert.equal(offlineBravo.arena.runtimeConnected, false);
-    assert.equal(typeof offlineBravo.lastConnectedAt, 'string');
+    const arenaRedirect = await fetch(`${base}/arena.html`, { redirect: 'manual' });
+    assert.equal(arenaRedirect.status, 302);
+    assert.equal(arenaRedirect.headers.get('location'), '/leaderboard.html');
 
-    const offlineBravoRes = await fetch(`${base}/api/agents/mine?agentId=${encodeURIComponent(bravoId)}`, {
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    assert.equal(offlineBravoRes.status, 200);
-    const offlineBravoMine = await offlineBravoRes.json();
-    assert.equal(offlineBravoMine.ok, true);
-    assert.equal(offlineBravoMine.selectedAgentId, bravoId);
-    assert.equal(offlineBravoMine.agent.id, bravoId);
+    const accountRedirect = await fetch(`${base}/account.html`, { redirect: 'manual' });
+    assert.equal(accountRedirect.status, 302);
+    assert.equal(accountRedirect.headers.get('location'), '/leaderboard.html');
   });
 });

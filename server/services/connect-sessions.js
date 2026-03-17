@@ -1,11 +1,9 @@
 const { buildOnboardingContract } = require('./onboarding-contract');
-const { URLSearchParams } = require('url');
 
 const CONNECT_SESSION_TTL_MS = 15 * 60_000;
 
 function createConnectSession({
   connectSessions,
-  email,
   ownerUserId,
   publicBaseUrl,
   shortId,
@@ -14,10 +12,8 @@ function createConnectSession({
   const callbackUrl = `${String(publicBaseUrl || '').replace(/\/+$/, '')}/api/openclaw/callback`;
   const callbackProof = shortId(24);
   const accessToken = shortId(24);
-  const normalizedEmail = String(email || '').trim().toLowerCase() || null;
   const connect = {
     id,
-    email: normalizedEmail,
     status: 'pending_confirmation',
     callbackUrl,
     callbackProof,
@@ -38,17 +34,6 @@ function getConnectArenaState(connect, summarizeAgentArenaState) {
   return summarizeAgentArenaState(connect.agentId);
 }
 
-function getConnectWatchUrl(connect, arena) {
-  if (!connect?.agentId) return null;
-  const params = new URLSearchParams({ agentId: connect.agentId });
-  if (arena?.activeRoomId) {
-    params.set('mode', 'mafia');
-    params.set('room', String(arena.activeRoomId));
-    params.set('spectate', '1');
-  }
-  return `/arena.html?${params.toString()}`;
-}
-
 function sanitizeConnectSession(connect, {
   includeSecrets = false,
   publicBaseUrl,
@@ -66,7 +51,6 @@ function sanitizeConnectSession(connect, {
   });
   const base = {
     id: connect.id,
-    email: connect.email,
     status: connect.status,
     command: onboarding.connectCommand,
     callbackUrl: connect.callbackUrl,
@@ -76,7 +60,6 @@ function sanitizeConnectSession(connect, {
     agentName: connect.agentName,
     connectedAt: connect.connectedAt,
     arena,
-    watchUrl: getConnectWatchUrl(connect, arena),
     onboarding,
   };
   if (includeSecrets) {

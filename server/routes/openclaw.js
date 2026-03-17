@@ -56,7 +56,6 @@ function normalizeAgentPresetId(value) {
 function appendConnectStarted(roomEvents, connect) {
   roomEvents.append('growth', connect.id, 'CONNECT_SESSION_STARTED', {
     status: connect.status,
-    emailDomain: String(connect.email || '').split('@')[1] || null,
   });
 }
 
@@ -65,25 +64,15 @@ function appendConnectCompleted(roomEvents, connect, agent) {
     status: connect.status,
     agentId: agent.id,
     agentName: agent.name,
-    emailDomain: String(connect.email || '').split('@')[1] || null,
   });
 }
 
-function invalidOwnerTokenError() {
-  const error = new Error('invalid owner token');
-  error.statusCode = 401;
-  return error;
-}
-
 function createOpenClawRouter({
-  bindOwnedAgent,
   agentProfiles,
   connectSessions,
-  getUserById,
   incrementGrowthMetric,
   persistState,
   resolvePublicBaseUrl,
-  resolveOwnerTokenUser,
   resolveSiteSession,
   roomEvents,
   shortId,
@@ -114,23 +103,6 @@ function createOpenClawRouter({
     });
   }
 
-  async function resolveVerifiedOwner(req, connect) {
-    const rawOwnerToken = String(req.body?.ownerToken || '').trim();
-    if (rawOwnerToken) {
-      if (typeof resolveOwnerTokenUser !== 'function') throw invalidOwnerTokenError();
-      const ownerUser = await resolveOwnerTokenUser(rawOwnerToken);
-      if (!ownerUser?.id) throw invalidOwnerTokenError();
-      connect.ownerUserId = ownerUser.id;
-      if (!connect.email && ownerUser.email) connect.email = ownerUser.email;
-      return ownerUser;
-    }
-
-    if (!connect?.ownerUserId || typeof getUserById !== 'function') return null;
-    const ownerUser = await getUserById(connect.ownerUserId);
-    if (ownerUser?.email && !connect.email) connect.email = ownerUser.email;
-    return ownerUser?.id ? ownerUser : null;
-  }
-
   async function confirmSession(req, res, note) {
     const connect = connectSessions.get(req.params.id || String(req.body?.token || '').trim());
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
@@ -147,16 +119,6 @@ function createOpenClawRouter({
       return sendConnectSession(res, connect, req, false);
     }
 
-    let verifiedOwner = null;
-    try {
-      verifiedOwner = await resolveVerifiedOwner(req, connect);
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({ ok: false, error: error.message || 'owner auth failed' });
-    }
-    const reusableClaimedAgentId = verifiedOwner?.email
-      ? String(verifiedOwner.agent_id || '').trim() || null
-      : null;
-
     const agent = createConnectedOpenClawAgent({
       agentProfiles,
       connect,
@@ -165,12 +127,11 @@ function createOpenClawRouter({
       style: normalizeAgentStyle(req.body?.style),
       presetId: normalizeAgentPresetId(req.body?.presetId),
       note,
-      preferredAgentId: reusableClaimedAgentId,
-      owner: verifiedOwner?.email || null,
-      ownerEmail: verifiedOwner?.email || null,
-      ownerUserId: verifiedOwner?.id || connect.ownerUserId || null,
+      preferredAgentId: null,
+      owner: null,
+      ownerEmail: null,
+      ownerUserId: connect.ownerUserId || null,
     });
-    if (typeof bindOwnedAgent === 'function') await bindOwnedAgent(connect.ownerUserId, agent.id);
     appendConnectCompleted(roomEvents, connect, agent);
     persistState();
 
@@ -187,19 +148,7 @@ function createOpenClawRouter({
   router.post('/connect-session', createLimiter, async (req, res) => {
     incrementGrowthMetric('funnel.connectSessionStarts', 1);
     const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
-    let ownerUserId = siteSession?.userId || null;
-    let email = req.body?.email;
-    const rawOwnerToken = String(req.body?.ownerToken || '').trim();
-
-    if (rawOwnerToken) {
-      if (typeof resolveOwnerTokenUser !== 'function') {
-        return res.status(401).json({ ok: false, error: 'invalid owner token' });
-      }
-      const ownerUser = await resolveOwnerTokenUser(rawOwnerToken);
-      if (!ownerUser?.id) return res.status(401).json({ ok: false, error: 'invalid owner token' });
-      ownerUserId = ownerUser.id;
-      if (!email && ownerUser.email) email = ownerUser.email;
-    }
+    const ownerUserId = siteSession?.userId || null;
 
     if (!ownerUserId) {
       return res.status(401).json({
@@ -210,7 +159,6 @@ function createOpenClawRouter({
 
     const connect = createConnectSession({
       connectSessions,
-      email,
       ownerUserId,
       publicBaseUrl: resolvePublicBaseUrl(req),
       shortId,

@@ -2,6 +2,29 @@
 
 Last updated: 2026-03-17
 
+## Superseding Note — 2026-03-17 MVP Surface Reset
+
+The website/dashboard ownership work described below is no longer the current product shape.
+
+As of the latest local and deploy-ready changes:
+
+- there is no public dashboard or account page
+- there is no email magic-link login or claim flow
+- there is no owner-token flow
+- there is no X-based ownership flow
+- the public website surface is now:
+  - `/`
+  - `/how-it-works.html`
+  - `/leaderboard.html`
+  - `/connect.html`
+- old `/arena.html` and `/account.html` now redirect to `/leaderboard.html`
+- the connector package is reduced to:
+  - `openclaw clawofdeceit connect`
+  - `openclaw clawofdeceit init-profile`
+- every fresh one-time connect session now creates a fresh agent id, which is the intended fix for easy multi-agent use
+
+Use this note as the source of truth until the rest of this handover file is rewritten.
+
 ## Current Checkpoint — 2026-03-17 Paid Render + Magic-Link Beta Cutover
 
 This repo is paused at the first real public-beta deployment checkpoint.
