@@ -1,6 +1,97 @@
 # Claw of Deceit Handover
 
-Last updated: 2026-03-15
+Last updated: 2026-03-17
+
+## Current Checkpoint — 2026-03-17 Paid Render + Magic-Link Beta Cutover
+
+This repo is paused at the first real public-beta deployment checkpoint.
+
+### Current live state
+
+- Canonical public URL is now `https://clawofdeceit.com`.
+- `www.clawofdeceit.com` redirects to the apex domain.
+- The hosted app is healthy and reports:
+  - `publicBaseUrl: https://clawofdeceit.com`
+  - `databaseDriver: postgres`
+  - `durableStorageRequired: true`
+- Render custom domain is live.
+- Render Postgres is upgraded to `basic_256mb`.
+- Render web service is upgraded to `starter`.
+- Optional email magic-link login/claim is live and the production endpoint returns `200`.
+- The duplicate `Email Login` header button/modal on `My Games` was removed; the page now uses the inline logged-out auth gate only.
+
+### What was completed in this pass
+
+- Implemented the optional ownership claim flow:
+  - email magic-link claim/login
+  - owner token generation
+  - claimed-agent reconnect path for OpenClaw
+  - X share CTA as a social/share action only
+- Connected the hosted app to Render Postgres.
+- Wired production auth env vars on Render:
+  - `PUBLIC_APP_URL`
+  - `ALLOWED_ORIGINS`
+  - `DATABASE_URL`
+  - `OPS_ADMIN_TOKEN`
+  - `RESEND_API_KEY`
+  - `MAGIC_LINK_FROM_EMAIL`
+- Cut the site over from the old Render host to `clawofdeceit.com`.
+- Verified:
+  - `https://clawofdeceit.com/health`
+  - `https://clawofdeceit.com/config.js`
+  - `POST /api/auth/magic-link/start`
+- Ran local test suite successfully:
+  - `npm test`
+  - `37/37` passing at the time of the My Games login cleanup
+
+### Beta readiness call
+
+Current recommendation: **yes for small public beta**, **not yet for a "fully production-hardened" claim**.
+
+What this means:
+
+- It is reasonable to share the beta with early users now.
+- The critical launch-path pieces are live:
+  - paid web service
+  - paid Postgres
+  - canonical domain
+  - email magic links
+  - claimed-agent ownership path
+- Remaining work is mostly hardening, operator visibility, and real-world flow validation rather than a missing launch prerequisite.
+
+### Important follow-up items
+
+1. Rotate the Resend API key.
+   The key was pasted in chat during setup, so it should be treated as exposed.
+2. Do a full real-user login/claim test end to end.
+   Use a real inbox and verify:
+   - login email arrives
+   - claim/login link works
+   - dashboard session is created
+   - claimed agent appears correctly on `arena.html`
+3. Do one full OpenClaw ownership smoke:
+   - connect
+   - claim
+   - generate owner token
+   - reconnect from OpenClaw
+   - confirm the same claimed agent/history persists
+4. Decide on Sentry.
+   This is not blocking beta, but it is the next sensible observability step before broader sharing.
+
+### Known non-blocking risks
+
+- This is still a single-service MVP shape.
+- Operational visibility is still light until Sentry or similar monitoring is added.
+- The login/claim flow has been endpoint-verified in production, but the full real inbox flow was intentionally deferred to the next session.
+- Multi-agent website ownership is still intentionally limited compared with a full account-management product.
+
+### Suggested first steps next session
+
+1. Learn what Sentry will and will not give us for this app.
+2. Rotate the Resend API key and replace it on Render.
+3. Run the full real login/claim flow using an actual inbox.
+4. Run one founder-quality OpenClaw reconnect smoke on the live domain.
+5. If those checks pass, start sharing the beta more broadly.
 
 ## Current Checkpoint — 2026-03-15 Frontend Redesign
 
