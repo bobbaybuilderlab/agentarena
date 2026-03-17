@@ -77,3 +77,13 @@ test('render blueprint targets the paid web service with production auth env var
   assert.match(renderYaml, /key:\s+RESEND_API_KEY/);
   assert.match(renderYaml, /key:\s+MAGIC_LINK_FROM_EMAIL/);
 });
+
+test('connector docs mention owner-token auth and sync-style flows', () => {
+  const connectorReadme = fs.readFileSync(
+    path.join(__dirname, '..', 'extensions', 'clawofdeceit-connect', 'README.md'),
+    'utf8',
+  );
+  assert.match(connectorReadme, /openclaw clawofdeceit auth --owner-token <token>/);
+  assert.match(connectorReadme, /openclaw clawofdeceit sync-style --api https:\/\/<claw-of-deceit-host>/);
+  assert.match(connectorReadme, /connect` and `sync-style` automatically reuse the stored owner token/i);
+});

@@ -112,10 +112,16 @@ test('connect session endpoints require a site session and secret access token',
     assert.match(skillBody, new RegExp(`Connect token: ${id}`));
     assert.match(skillBody, new RegExp(`Callback proof: ${created.connect.callbackProof}`));
     assert.match(skillBody, /return to `\/connect\.html` and use the step-by-step fallback/);
+    const namePromptIndex = skillBody.indexOf('Help me pick a short agent name.');
+    const branchPromptIndex = skillBody.indexOf('Do you want to play now with the starter Mafia strategy, or customize first?');
+    assert.notEqual(namePromptIndex, -1);
+    assert.notEqual(branchPromptIndex, -1);
+    assert.equal(namePromptIndex < branchPromptIndex, true);
     assert.match(skillBody, /play now with the starter Mafia strategy, or customize first/);
     assert.match(skillBody, /pick and play/);
     assert.match(skillBody, /pick and customize/);
     assert.match(skillBody, /Pragmatic \(pragmatic\)/);
+    assert.match(skillBody, /openclaw clawofdeceit auth --owner-token <token>/);
     assert.doesNotMatch(skillBody, /\/guide\.html/);
 
     const storedConnect = connectSessions.get(id);
@@ -190,7 +196,7 @@ test('connected OpenClaw agents bind to the current site session for owner watch
   });
 });
 
-test('magic-link claim verifies ownership and owner-token style sync updates the claimed agent', async () => {
+test('logout clears only the browser session and magic-link login restores the same claimed agent', async () => {
   await withServer(async (base) => {
     const sessionToken = await createSiteSession(base);
     const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
@@ -285,6 +291,61 @@ test('magic-link claim verifies ownership and owner-token style sync updates the
     assert.equal(synced.agent.persona.presetId, 'chaotic');
     assert.equal(synced.agent.persona.style, 'chaotic preacher');
     assert.equal(synced.agent.persona.intensity, 9);
+
+    const logoutRes = await fetch(`${base}/api/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${claimConsume.session.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(logoutRes.status, 200);
+    const logoutData = await logoutRes.json();
+    assert.equal(logoutData.ok, true);
+
+    const meAfterLogoutRes = await fetch(`${base}/api/auth/me`, {
+      headers: { authorization: `Bearer ${claimConsume.session.token}` },
+    });
+    assert.equal(meAfterLogoutRes.status, 401);
+
+    const loginStartRes = await fetch(`${base}/api/auth/magic-link/start`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: 'preset-owner@example.com',
+        mode: 'login',
+      }),
+    });
+    assert.equal(loginStartRes.status, 200);
+    const loginStart = await loginStartRes.json();
+    assert.equal(loginStart.ok, true);
+    assert.ok(loginStart.debug?.magicLinkToken);
+
+    const loginConsumeRes = await fetch(`${base}/api/auth/magic-link/consume`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ token: loginStart.debug.magicLinkToken }),
+    });
+    assert.equal(loginConsumeRes.status, 200);
+    const loginConsume = await loginConsumeRes.json();
+    assert.equal(loginConsume.ok, true);
+    assert.equal(loginConsume.user.email, 'preset-owner@example.com');
+    assert.equal(loginConsume.user.agentId, connected.agent.id);
+
+    const restoredMineRes = await fetch(`${base}/api/agents/mine`, {
+      headers: { authorization: `Bearer ${loginConsume.session.token}` },
+    });
+    assert.equal(restoredMineRes.status, 200);
+    const restoredMine = await restoredMineRes.json();
+    assert.equal(restoredMine.ok, true);
+    assert.equal(restoredMine.selectedAgentId, connected.agent.id);
+    assert.equal(restoredMine.session.primaryAgentId, connected.agent.id);
+    assert.equal(restoredMine.agent.id, connected.agent.id);
   });
 });
 

@@ -41,6 +41,7 @@ const {
   getUserById,
   getUserByEmail,
   getSessionByToken,
+  deleteSessionByToken,
   setUserAgentId,
   createAnonymousUser,
   createSession,
@@ -1110,6 +1111,12 @@ function getCachedSession(token) {
     return null;
   }
   return cached;
+}
+
+function clearCachedSession(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return false;
+  return sessions.delete(normalizedToken);
 }
 
 function loadGrowthMetrics() {
@@ -2558,6 +2565,22 @@ app.post('/api/auth/magic-link/consume', async (req, res) => {
   } catch (err) {
     logStructured('error.auth.magic_link.consume', { error: err.message });
     res.status(500).json({ ok: false, error: 'Magic link consumption failed' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const siteSession = await resolveSiteSession(req);
+  if (!siteSession?.token) {
+    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
+  }
+
+  try {
+    await deleteSessionByToken(siteSession.token);
+    clearCachedSession(siteSession.token);
+    res.json({ ok: true });
+  } catch (err) {
+    logStructured('error.auth.logout', { error: err.message, userId: siteSession.userId || null });
+    res.status(500).json({ ok: false, error: 'Could not log out' });
   }
 });
 

@@ -61,6 +61,14 @@ function renderConnectExample() {
   ].join(' ');
 }
 
+function renderAuthExample() {
+  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} auth --owner-token <token>`;
+}
+
+function renderSyncStyleExample() {
+  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} sync-style --api https://<claw-of-deceit-host>`;
+}
+
 function renderGeneratedReadmeBlock() {
   return [
     '## Install',
@@ -71,15 +79,30 @@ function renderGeneratedReadmeBlock() {
     buildEnableCommand(),
     '```',
     '',
+    '## Save Claimed Identity',
+    '',
+    '```bash',
+    renderAuthExample(),
+    '```',
+    '',
     '## Connect',
     '',
     '```bash',
     renderConnectExample(),
     '```',
     '',
+    '## Sync Style',
+    '',
+    '```bash',
+    renderSyncStyleExample(),
+    '```',
+    '',
     'Notes:',
     '',
+    '- `auth` stores the dashboard owner token locally for future reconnects.',
+    '- `connect` and `sync-style` automatically reuse the stored owner token when available.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
+    '- `sync-style` requires a claimed dashboard owner token.',
     '- The command stays running after connect so the runtime remains online for live matches.',
     '- After connect, the connector prints arena status plus watch and leaderboard URLs.',
     '',
@@ -146,6 +169,24 @@ function validateDefaultPreset(skillContent) {
   }
 }
 
+function validateNameFirstFlow(skillContent) {
+  const normalized = normalizeNewlines(skillContent);
+  const nameIndex = normalized.indexOf('- help the human pick a short agent name');
+  const questionIndex = normalized.indexOf('`Do you want to play now with the starter Mafia strategy, or customize first?`');
+  if (nameIndex === -1) fail('public/skill.md must require name picking before branch selection');
+  if (questionIndex === -1) fail('public/skill.md is missing the required play-now/customize question');
+  if (nameIndex > questionIndex) {
+    fail('public/skill.md must place name picking before the play-now/customize question');
+  }
+}
+
+function validateOwnerTokenFollowUp(skillContent) {
+  const normalized = normalizeNewlines(skillContent);
+  if (!normalized.includes(`openclaw ${CONNECTOR_COMMAND_NAMESPACE} auth --owner-token <token>`)) {
+    fail('public/skill.md must describe the owner-token auth command');
+  }
+}
+
 function validateSkillPathReferences(skillContent) {
   const normalized = normalizeNewlines(skillContent);
   if (!normalized.includes('/connect.html')) {
@@ -171,6 +212,8 @@ function main() {
   const skillContent = readText(skillPath);
   validateSkillPresets(skillContent);
   validateDefaultPreset(skillContent);
+  validateNameFirstFlow(skillContent);
+  validateOwnerTokenFollowUp(skillContent);
   validateSkillPathReferences(skillContent);
   const updated = syncReadme();
   if (!checkOnly) {

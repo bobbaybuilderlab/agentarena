@@ -413,6 +413,12 @@ function getMemorySessionByToken(token) {
   return normalizeSessionRow(session);
 }
 
+function deleteMemorySessionByToken(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return false;
+  return memorySessions.delete(normalizedToken);
+}
+
 function upsertMemoryMagicLink(link) {
   const normalizedId = String(link?.id || '').trim();
   if (!normalizedId) return null;
@@ -700,6 +706,30 @@ async function getSessionByToken(token) {
   return normalizeSessionRow(adapter.database.prepare(
     "SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')",
   ).get(token));
+}
+
+async function deleteSessionByToken(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return false;
+
+  const adapter = await ensureDb();
+  if ((!adapter || adapter.kind === 'none') && normalizedToken) {
+    return deleteMemorySessionByToken(normalizedToken);
+  }
+  if (!adapter || adapter.kind === 'none') return false;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(
+      'DELETE FROM sessions WHERE token = $1',
+      [normalizedToken],
+    );
+    return result.rowCount > 0;
+  }
+
+  const result = adapter.database.prepare(
+    'DELETE FROM sessions WHERE token = ?',
+  ).run(normalizedToken);
+  return Number(result.changes || 0) > 0;
 }
 
 async function createMagicLink({
@@ -1768,6 +1798,7 @@ module.exports = {
   setUserAgentId,
   createSession,
   getSessionByToken,
+  deleteSessionByToken,
   createMagicLink,
   getMagicLinkByTokenHash,
   consumeMagicLink,

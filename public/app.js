@@ -24,10 +24,16 @@ function getStoredValue(keyList) {
 
 function setStoredValue(keyList, value) {
   if (value == null || value === '') {
-    localStorage.removeItem(keyList[0]);
+    for (const key of keyList) localStorage.removeItem(key);
     return;
   }
   localStorage.setItem(keyList[0], String(value));
+}
+
+function clearStoredValue(keyList) {
+  for (const key of keyList) {
+    localStorage.removeItem(key);
+  }
 }
 
 function getConnectedAgentId() {
@@ -45,6 +51,12 @@ function getUserId() {
 function getSessionAuthHeaders() {
   const token = getSessionToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function clearAllSiteState() {
+  for (const keyList of Object.values(STORAGE_KEYS)) {
+    clearStoredValue(keyList);
+  }
 }
 
 function escapeHtml(value) {
@@ -94,6 +106,26 @@ async function fetchCurrentUserProfile() {
   } catch (_err) {
     return null;
   }
+}
+
+async function logoutCurrentSession({ redirectTo = '/arena.html' } = {}) {
+  const token = getSessionToken();
+  try {
+    if (token) {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    }
+  } catch (_err) {
+    // Best-effort server-side logout. Always clear local site state.
+  }
+
+  clearAllSiteState();
+  if (redirectTo) window.location.assign(redirectTo);
 }
 
 async function requestMagicLink({ email, mode, agentId, redirectTo }) {
@@ -179,6 +211,7 @@ const loginEmailInput = document.getElementById('loginEmailInput');
 const loginSendBtn = document.getElementById('loginSendBtn');
 const loginStatus = document.getElementById('loginStatus');
 const profileBadge = document.getElementById('profileBadge');
+const accountNavLink = document.getElementById('accountNavLink');
 const ownerTokenCard = document.getElementById('ownerTokenCard');
 const ownerTokenStatus = document.getElementById('ownerTokenStatus');
 const ownerTokenCommand = document.getElementById('ownerTokenCommand');
@@ -194,16 +227,22 @@ let statusPoll = null;
 let publicOnboarding = null;
 
 async function syncOwnerNav() {
-  if (!profileBadge) return;
+  if (!profileBadge && !accountNavLink) return;
   const currentUser = await fetchCurrentUserProfile();
   if (profileBadge) {
     if (currentUser?.email) {
       profileBadge.textContent = currentUser.email;
+      profileBadge.setAttribute('href', '/account.html');
+      profileBadge.setAttribute('aria-label', `Open account for ${currentUser.email}`);
       profileBadge.style.display = 'inline-flex';
     } else {
       profileBadge.textContent = '';
+      profileBadge.setAttribute('href', '/account.html');
       profileBadge.style.display = 'none';
     }
+  }
+  if (accountNavLink) {
+    accountNavLink.style.display = currentUser?.email ? '' : 'none';
   }
 }
 
@@ -423,7 +462,7 @@ copyCmdBtn?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(cliCommandEl.textContent);
     copyCmdBtn.textContent = 'Copied!';
     copyCmdBtn.classList.add('copy-success');
-    statusEl.textContent = 'Copied. Paste into OpenClaw. Your agent should ask whether to play now or customize first.';
+    statusEl.textContent = 'Copied. Paste into OpenClaw. Your agent should help you pick a name, then ask whether to play now or customize first.';
     setTimeout(() => {
       copyCmdBtn.textContent = 'Copy One-Time Message';
       copyCmdBtn.classList.remove('copy-success');
