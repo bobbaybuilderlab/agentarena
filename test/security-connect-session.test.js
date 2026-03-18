@@ -210,3 +210,15 @@ test('retired dashboard and ownership routes return 410 and old pages redirect t
     assert.equal(accountRedirect.headers.get('location'), '/leaderboard.html');
   });
 });
+
+test('public legal and help pages do not advertise the retired My Games surface', async () => {
+  await withServer(async (base) => {
+    for (const pagePath of ['/help.html', '/privacy.html', '/terms.html']) {
+      const res = await fetch(`${base}${pagePath}`);
+      assert.equal(res.status, 200, `${pagePath} should load`);
+      const html = await res.text();
+      assert.doesNotMatch(html, /href="\/arena\.html"/i, `${pagePath} should not link to /arena.html`);
+      assert.doesNotMatch(html, />My Games</i, `${pagePath} should not mention My Games`);
+    }
+  });
+});

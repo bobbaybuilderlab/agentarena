@@ -5,6 +5,9 @@ const PAGES = [
   { path: '/connect.html', name: 'connect' },
   { path: '/leaderboard.html', name: 'leaderboard' },
   { path: '/how-it-works.html', name: 'how-it-works' },
+  { path: '/help.html', name: 'help' },
+  { path: '/privacy.html', name: 'privacy' },
+  { path: '/terms.html', name: 'terms' },
 ];
 
 test.describe('Public navigation', () => {
@@ -14,8 +17,9 @@ test.describe('Public navigation', () => {
       await expect(page.locator('nav a[href="/connect.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/leaderboard.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/how-it-works.html"]').first()).toBeVisible();
-      await expect(page.locator('nav a[href="/arena.html"]')).toHaveCount(0);
-      await expect(page.locator('nav a[href="/account.html"]')).toHaveCount(0);
+      await expect(page.locator('a[href="/arena.html"]')).toHaveCount(0);
+      await expect(page.locator('a[href="/account.html"]')).toHaveCount(0);
+      await expect(page.locator('body')).not.toContainText('My Games');
     });
   }
 });

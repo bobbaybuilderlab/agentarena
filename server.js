@@ -23,6 +23,7 @@ const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
 const { shortId, correlationId, logStructured } = require('./server/state/helpers');
+const { createAccountModule } = require('./server/account');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { createOpenClawRouter } = require('./server/routes/openclaw');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
@@ -1902,48 +1903,25 @@ function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) 
   return '/leaderboard.html';
 }
 
-async function resolveSiteSession(req) {
-  const token = readBearerToken(req);
-  if (!token) return null;
+const accountModule = createAccountModule({
+  createAnonymousUser,
+  createSession,
+  expiresAtFromNow,
+  getCachedSession,
+  getSessionByToken,
+  getUserByToken,
+  isProduction: IS_PRODUCTION,
+  logStructured,
+  readBearerToken,
+  setCachedSession,
+  shortId,
+});
 
-  try {
-    const [session, user] = await Promise.all([
-      getSessionByToken(token),
-      getUserByToken(token),
-    ]);
-    if (session || user) {
-      return {
-        token,
-        userId: user?.id || session?.user_id || null,
-        email: user?.email || null,
-        displayName: user?.display_name || null,
-        agentId: user?.agent_id || null,
-        primaryAgentId: user?.agent_id || null,
-        isAnonymous: !!user?.is_anonymous,
-        expiresAt: session?.expires_at || null,
-        durable: true,
-      };
-    }
-  } catch (err) {
-    logStructured('error.resolveSiteSession', { error: err.message });
-    if (IS_PRODUCTION) return null;
-  }
-
-  // Non-production fallback: check in-memory session cache
-  const fallback = getCachedSession(token);
-  if (!fallback) return null;
-  return {
-    token,
-    userId: fallback.userId || null,
-    email: fallback.email || null,
-    displayName: fallback.displayName || null,
-    agentId: fallback.agentId || null,
-    primaryAgentId: fallback.agentId || null,
-    isAnonymous: !fallback.email,
-    expiresAt: fallback.expiresAt || null,
-    durable: false,
-  };
-}
+const {
+  registerRoutes: registerAccountRoutes,
+  resolveSiteSession,
+  sendRetiredAccountResponse,
+} = accountModule;
 
 function getAgentLastConnectedAt(agent) {
   const runtime = getAgentRuntime(agent?.id);
@@ -2450,101 +2428,7 @@ app.post('/api/track/share', (_req, res) => {
   res.json({ ok: true });
 });
 
-function sendRetiredDashboardResponse(res) {
-  res.status(410).json({
-    ok: false,
-    error: 'Website accounts, ownership claims, and personal dashboards are not part of the current MVP.',
-  });
-}
-
-app.post('/api/auth/session', async (req, res) => {
-  // Check for existing session token
-  const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
-  if (existingToken) {
-    const [siteSession, existing] = await Promise.all([
-      resolveSiteSession({ headers: { authorization: `Bearer ${existingToken}` } }),
-      getSessionByToken(existingToken),
-    ]);
-    if (siteSession?.userId) {
-      return res.json({
-        ok: true,
-        session: {
-          token: existingToken,
-          userId: siteSession.userId || existing?.user_id || null,
-          agentId: siteSession?.agentId || null,
-          primaryAgentId: siteSession?.agentId || null,
-          isAnonymous: siteSession?.isAnonymous !== false,
-          expiresAt: siteSession?.expiresAt || existing?.expires_at || null,
-          durable: siteSession?.durable !== false,
-        },
-        renewed: true,
-      });
-    }
-  }
-
-  // Create anonymous user + session
-  const userId = shortId(12);
-  const token = shortId(24);
-  const expiresAt = expiresAtFromNow();
-
-  try {
-    await createAnonymousUser(userId);
-    await createSession(shortId(8), userId, token, expiresAt);
-
-    // Also keep in-memory sessions for backward compat
-    setCachedSession({ token, userId, email: null, createdAt: Date.now(), expiresAt });
-
-    res.json({
-      ok: true,
-      session: { token, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt, durable: true },
-    });
-  } catch (err) {
-    logStructured('error.auth.session.create', { error: err.message });
-    if (IS_PRODUCTION) {
-      return res.status(503).json({ ok: false, error: 'Session storage unavailable' });
-    }
-    // Non-production fallback: issue in-memory session
-    const token2 = shortId(20);
-    const fallbackExpiresAt = expiresAtFromNow();
-    setCachedSession({ token: token2, userId, createdAt: Date.now(), expiresAt: fallbackExpiresAt });
-    res.json({
-      ok: true,
-      session: { token: token2, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt: fallbackExpiresAt, durable: false },
-    });
-  }
-});
-
-app.post('/api/auth/magic-link/start', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.post('/api/auth/magic-link/consume', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.post('/api/auth/logout', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.get('/api/auth/me', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.post('/api/auth/register', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.post('/api/auth/upgrade', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.post('/api/owner/token', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
-
-app.get('/api/matches/mine', (_req, res) => {
-  sendRetiredDashboardResponse(res);
-});
+registerAccountRoutes(app);
 
 app.use('/api/openclaw', createOpenClawRouter({
   agentProfiles,
@@ -2559,11 +2443,11 @@ app.use('/api/openclaw', createOpenClawRouter({
 }));
 
 app.post('/api/openclaw/style-sync', (_req, res) => {
-  sendRetiredDashboardResponse(res);
+  sendRetiredAccountResponse(res);
 });
 
 app.get('/api/agents/mine', (_req, res) => {
-  sendRetiredDashboardResponse(res);
+  sendRetiredAccountResponse(res);
 });
 
 app.get('/api/agents/:id', async (req, res) => {
@@ -3365,7 +3249,7 @@ app.post('/api/play/instant', (req, res) => {
 });
 
 app.get('/api/play/watch', (_req, res) => {
-  sendRetiredDashboardResponse(res);
+  sendRetiredAccountResponse(res);
 });
 
 // ── Match page for sharing ──
