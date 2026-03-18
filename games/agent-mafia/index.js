@@ -23,6 +23,25 @@ function createStore() {
   return new Map();
 }
 
+function createDiscussionState(room) {
+  const speakerOrder = alivePlayers(room).map((player) => player.id);
+  return {
+    speakerOrder,
+    speakerIndex: 0,
+    currentSpeakerId: speakerOrder[0] || null,
+    turnId: null,
+    turnEndsAt: null,
+    cycleHadSpeech: false,
+    cycleNumber: 0,
+    turnNumber: 0,
+    spokenByPlayerId: {},
+  };
+}
+
+function clearDiscussionState(room) {
+  room.discussion = null;
+}
+
 const PHASE_TRANSITIONS = {
   lobby: new Set(['night']),
   night: new Set(['discussion', 'finished']),
@@ -62,8 +81,15 @@ function summarizeBotAutoplay(room) {
   }
 
   if (room.phase === 'discussion') {
-    const pending = aliveBots.filter((p) => room.actions?.vote?.[p.id] !== '__READY__').length;
-    return { enabled: true, pendingActions: pending, aliveBots: aliveBots.length, phase: room.phase, hint: pending > 0 ? 'Bots are marking ready to move into voting.' : 'Bots ready. Waiting for remaining players.' };
+    const currentSpeakerId = room.discussion?.currentSpeakerId || null;
+    const pending = currentSpeakerId && aliveBots.some((p) => p.id === currentSpeakerId) ? 1 : 0;
+    return {
+      enabled: true,
+      pendingActions: pending,
+      aliveBots: aliveBots.length,
+      phase: room.phase,
+      hint: pending > 0 ? 'A bot is taking the current discussion turn.' : 'Waiting for the next discussion speaker.',
+    };
   }
 
   if (room.phase === 'voting') {
@@ -78,14 +104,23 @@ function toPublic(room) {
   const alive = room.players.filter((p) => p.alive);
   const aliveMafia = alive.filter((p) => p.role === 'mafia');
   const voteActions = room.actions?.vote || {};
-  const discussionReadyIds = alive
-    .filter((p) => voteActions[p.id] === '__READY__')
-    .map((p) => p.id);
   const votedPlayerIds = alive
-    .filter((p) => voteActions[p.id] && voteActions[p.id] !== '__READY__')
+    .filter((p) => voteActions[p.id])
     .map((p) => p.id);
   const durationMs = room.startedAt
     ? Math.max(0, (room.finishedAt || Date.now()) - room.startedAt)
+    : null;
+  const currentSpeaker = room.discussion?.currentSpeakerId
+    ? room.players.find((player) => player.id === room.discussion.currentSpeakerId) || null
+    : null;
+  const discussion = room.phase === 'discussion' && room.discussion
+    ? {
+      currentSpeakerId: room.discussion.currentSpeakerId || null,
+      currentSpeakerName: currentSpeaker?.name || null,
+      turnId: room.discussion.turnId || null,
+      turnEndsAt: room.discussion.turnEndsAt || null,
+      speakerOrder: Array.isArray(room.discussion.speakerOrder) ? room.discussion.speakerOrder.slice() : [],
+    }
     : null;
 
   return {
@@ -116,12 +151,11 @@ function toPublic(room) {
     actionProgress: {
       nightSubmitted: aliveMafia.filter((p) => room.actions?.night?.[p.id]).length,
       nightTotal: aliveMafia.length,
-      discussionReady: discussionReadyIds.length,
-      discussionTotal: alive.length,
+      discussionSpeakerAssigned: discussion?.currentSpeakerId ? 1 : 0,
       votingSubmitted: votedPlayerIds.length,
       votingTotal: alive.length,
     },
-    discussionReadyIds,
+    discussion,
     votedPlayerIds,
     botAutoplay: true,
     autoplay: summarizeBotAutoplay(room),
@@ -160,6 +194,7 @@ function createRoom(store, { hostName, hostSocketId }) {
     tally: {},
     events: [],
     nightKillCredits: {},
+    discussion: null,
     startedAt: null,
     finishedAt: null,
     phaseEndsAt: null,
@@ -248,6 +283,7 @@ function startGame(store, { roomId, hostPlayerId }) {
   room.actions = { night: {}, vote: {} };
   room.tally = {};
   room.nightKillCredits = {};
+  room.discussion = null;
   room.startedAt = Date.now();
   room.finishedAt = null;
   room.phaseEndsAt = null;
@@ -266,11 +302,16 @@ function startGame(store, { roomId, hostPlayerId }) {
 function transitionPhase(room, nextPhase) {
   const transitioned = transitionRoomState(room, nextPhase);
   if (!transitioned.ok) return transitioned;
+  if (nextPhase === 'discussion') {
+    room.discussion = createDiscussionState(room);
+  } else {
+    clearDiscussionState(room);
+  }
   room.events.push({ type: 'PHASE', phase: nextPhase, day: room.day, at: Date.now() });
   return transitioned;
 }
 
-function submitAction(store, { roomId, playerId, type, targetId }) {
+function submitAction(store, { roomId, playerId, type, targetId, message = null, turnId = null }) {
   const room = store.get(String(roomId || '').toUpperCase());
   if (!room) return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } };
   if (room.status !== 'in_progress') return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'Game not active' } };
@@ -286,13 +327,17 @@ function submitAction(store, { roomId, playerId, type, targetId }) {
     return maybeAutoAdvance(room);
   }
 
-  if (room.phase === 'discussion' && type === 'ready') {
-    room.actions.vote[actor.id] = '__READY__';
-    const aliveCount = alivePlayers(room).length;
-    if (Object.keys(room.actions.vote).length >= aliveCount) {
-      room.actions.vote = {};
-      const transitioned = transitionPhase(room, 'voting');
-      if (!transitioned.ok) return transitioned;
+  if (room.phase === 'discussion' && ['discussion', 'pass', 'ready'].includes(type)) {
+    const discussion = room.discussion;
+    if (!discussion) return { ok: false, error: { code: 'INVALID_STATE', message: 'Discussion turn state missing' } };
+    if (discussion.currentSpeakerId && discussion.currentSpeakerId !== actor.id) {
+      return { ok: false, error: { code: 'NOT_YOUR_TURN', message: 'It is not this player\'s discussion turn' } };
+    }
+    if (turnId && discussion.turnId && turnId !== discussion.turnId) {
+      return { ok: false, error: { code: 'STALE_TURN', message: 'Discussion turn has already advanced' } };
+    }
+    if (type === 'discussion' && !String(message || '').trim()) {
+      return { ok: false, error: { code: 'MESSAGE_REQUIRED', message: 'Discussion messages require text' } };
     }
     return { ok: true, room };
   }
@@ -381,10 +426,7 @@ function resolveNight(room) {
 
 function resolveVote(room) {
   const counts = {};
-  for (const targetId of Object.values(room.actions.vote)) {
-    if (targetId === '__READY__') continue;
-    counts[targetId] = (counts[targetId] || 0) + 1;
-  }
+  for (const targetId of Object.values(room.actions.vote)) counts[targetId] = (counts[targetId] || 0) + 1;
   room.tally = counts;
   room.actions.vote = {};
 
@@ -416,6 +458,7 @@ function finish(room, winner) {
   room.winner = winner;
   room.finishedAt = Date.now();
   room.phaseEndsAt = null;
+  clearDiscussionState(room);
   room.events.push({ type: 'GAME_FINISHED', winner, day: room.day, at: Date.now() });
   capEvents(room);
   return { ok: true, room };
@@ -436,6 +479,7 @@ function prepareRematch(store, { roomId, hostPlayerId }) {
   room.actions = { night: {}, vote: {} };
   room.tally = {};
   room.nightKillCredits = {};
+  room.discussion = null;
   room.startedAt = null;
   room.finishedAt = null;
   room.phaseEndsAt = null;
@@ -496,17 +540,11 @@ function maybeAdvanceAfterRosterChange(room) {
   }
 
   if (room.phase === 'discussion') {
-    const readyCount = Object.keys(room.actions?.vote || {}).length;
-    if (readyCount >= aliveCount) {
-      room.actions.vote = {};
-      const transitioned = transitionPhase(room, 'voting');
-      if (!transitioned.ok) return transitioned;
-    }
     return { ok: true, room };
   }
 
   if (room.phase === 'voting') {
-    const voteCount = Object.values(room.actions?.vote || {}).filter((value) => value !== '__READY__').length;
+    const voteCount = Object.values(room.actions?.vote || {}).length;
     if (voteCount >= aliveCount) {
       return resolveVote(room);
     }

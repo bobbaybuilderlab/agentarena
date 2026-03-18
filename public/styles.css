@@ -7102,3 +7102,199 @@ body.page-dashboard .nav-drawer a {
     grid-template-columns: 1fr;
   }
 }
+
+/* Legal / Help Pages */
+body.page-legal {
+  background: #0a0a0f;
+  color: #e8e8f0;
+  font-family: 'Inter', 'Plus Jakarta Sans', sans-serif;
+}
+
+.legal-hero {
+  text-align: center;
+  padding: 100px 32px 56px;
+}
+
+.legal-hero h1 {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: clamp(2.2rem, 5vw, 3.4rem);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fff;
+  margin: 0 0 20px;
+}
+
+.legal-hero-divider {
+  width: 48px;
+  height: 3px;
+  background: #dc2626;
+  margin: 0 auto;
+  border-radius: 2px;
+}
+
+.legal-updated {
+  font-size: 13px;
+  color: #55556a;
+  margin: 20px 0 0;
+  letter-spacing: 0.04em;
+}
+
+.legal-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 32px 80px;
+}
+
+.legal-section {
+  margin-bottom: 48px;
+}
+
+.legal-section h2 {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: #e8e8f0;
+  margin: 0 0 16px;
+  letter-spacing: 0.03em;
+}
+
+.legal-accent {
+  color: #dc2626;
+  margin-right: 4px;
+}
+
+.legal-section p {
+  font-size: 15px;
+  color: #888899;
+  line-height: 1.75;
+  margin: 0 0 14px;
+}
+
+.legal-section p:last-child {
+  margin-bottom: 0;
+}
+
+.legal-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.legal-list li {
+  font-size: 15px;
+  color: #b0b0c0;
+  line-height: 1.6;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.legal-list li .legal-accent {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.legal-contact {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: #dc2626 !important;
+  font-size: 14px !important;
+  letter-spacing: 0.02em;
+}
+
+.help-accordion {
+  background: #0d0d16;
+  border: 1px solid #1a1a2e;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.help-accordion:hover {
+  border-color: #2a2a3e;
+}
+
+.help-accordion summary {
+  padding: 18px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e8e8f0;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: color 0.15s;
+}
+
+.help-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.help-accordion summary::after {
+  content: '+';
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: #dc2626;
+  flex-shrink: 0;
+}
+
+.help-accordion[open] summary::after {
+  content: '\2212';
+}
+
+.help-accordion[open] summary {
+  color: #fff;
+}
+
+.help-answer {
+  padding: 0 24px 18px;
+}
+
+.help-answer p {
+  font-size: 14px;
+  color: #888899;
+  line-height: 1.7;
+  margin: 0 0 10px;
+}
+
+.help-answer p:last-child {
+  margin-bottom: 0;
+}
+
+.help-answer a {
+  color: #dc2626;
+  text-decoration: none;
+}
+
+.help-answer a:hover {
+  text-decoration: underline;
+}
+
+body.page-legal .lb-footer {
+  margin-top: 0;
+}
+
+@media (max-width: 600px) {
+  .legal-hero {
+    padding: 80px 20px 40px;
+  }
+
+  .legal-wrap {
+    padding: 0 20px 60px;
+  }
+
+  .help-accordion summary {
+    padding: 14px 18px;
+    font-size: 14px;
+  }
+
+  .help-answer {
+    padding: 0 18px 14px;
+  }
+}

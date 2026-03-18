@@ -5,6 +5,7 @@ const { io: ioc } = require('socket.io-client');
 process.env.MAFIA_NIGHT_MS = '80';
 process.env.MAFIA_DISCUSSION_MS = '80';
 process.env.MAFIA_VOTING_MS = '80';
+process.env.MAFIA_DISCUSSION_TURN_MS = '30';
 process.env.AUTH_RATE_LIMIT_MAX = '20';
 
 const {
@@ -14,7 +15,11 @@ const {
   connectSessions,
   liveAgentRuntimes,
   roomEvents,
+  processPublicArenaQueue,
   createPublicArenaMafiaRoom,
+  rememberPublicArenaMatchParticipants,
+  recordFirstMatchCompletion,
+  releasePublicArenaRoom,
   buildMatchBaseline,
   clearAllGameTimers,
   resetPlayTelemetry,
@@ -61,8 +66,36 @@ async function waitFor(fn, timeoutMs = 5000, intervalMs = 50) {
   return null;
 }
 
+function emitAck(socket, eventName, payload) {
+  return new Promise((resolve) => {
+    socket.emit(eventName, payload, resolve);
+  });
+}
+
+function addQueuedTestAgent(id, name, connectedAt) {
+  const agent = {
+    id,
+    name,
+    deployed: true,
+    owner: `owner-${id}`,
+  };
+  agentProfiles.set(id, agent);
+  liveAgentRuntimes.set(id, {
+    agentId: id,
+    connected: true,
+    status: 'idle',
+    socketId: `sock-${id}`,
+    currentRoomId: null,
+    currentPlayerId: null,
+    connectedAt,
+    lastSeenAt: connectedAt,
+  });
+  return agent;
+}
+
 async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   assert.ok(sessionToken, 'sessionToken is required for connect-session creation');
+  const spokenDiscussionDays = new Set();
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: {
@@ -114,11 +147,18 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   });
 
   socket.on('mafia:agent:discussion_request', (payload) => {
+    const discussionKey = `${payload.roomId}:${payload.day}`;
+    const hasSpokenThisDay = spokenDiscussionDays.has(discussionKey);
+    if (!hasSpokenThisDay) spokenDiscussionDays.add(discussionKey);
     socket.emit('mafia:agent:decision', {
       roomId: payload.roomId,
       playerId: payload.playerId,
       phase: payload.phase,
-      type: 'ready',
+      turnId: payload.turnId,
+      type: hasSpokenThisDay ? 'pass' : 'discussion',
+      message: hasSpokenThisDay
+        ? undefined
+        : `Pressure stays on ${(payload.players || []).find((entry) => entry.id !== payload.playerId)?.name || 'the quiet seat'}.`,
     });
   });
 
@@ -150,6 +190,197 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   };
 }
 
+test('same-phase actions keep hard deadlines stable and discussion waits for its fixed deadline', async () => {
+  await withServer(async (url) => {
+    const names = ['Host', 'P2', 'P3', 'P4', 'P5', 'P6'];
+    const sockets = [];
+    try {
+      for (const _name of names) {
+        const socket = ioc(url, { reconnection: false, autoUnref: true });
+        await once(socket, 'connect');
+        sockets.push(socket);
+      }
+
+      const created = await emitAck(sockets[0], 'mafia:room:create', { name: names[0] });
+      assert.equal(created.ok, true);
+
+      const seats = new Map([[names[0], { socket: sockets[0], playerId: created.playerId }]]);
+      for (let index = 1; index < names.length; index += 1) {
+        const joined = await emitAck(sockets[index], 'mafia:room:join', { roomId: created.roomId, name: names[index] });
+        assert.equal(joined.ok, true);
+        seats.set(names[index], { socket: sockets[index], playerId: joined.playerId });
+      }
+
+      const started = await emitAck(sockets[0], 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
+      assert.equal(started.ok, true);
+
+      const room = mafiaRooms.get(created.roomId);
+      assert.ok(room);
+      assert.equal(room.phase, 'night');
+
+      const initialNightDeadline = room.phaseEndsAt;
+      const mafiaPlayers = room.players.filter((player) => player.role === 'mafia');
+      assert.equal(mafiaPlayers.length, 2);
+      const nightTarget = room.players.find((player) => player.alive && player.role !== 'mafia');
+      assert.ok(nightTarget);
+
+      const firstMafiaSeat = [...seats.values()].find((seat) => seat.playerId === mafiaPlayers[0].id);
+      const secondMafiaSeat = [...seats.values()].find((seat) => seat.playerId === mafiaPlayers[1].id);
+      assert.ok(firstMafiaSeat);
+      assert.ok(secondMafiaSeat);
+
+      const firstNightAction = await emitAck(firstMafiaSeat.socket, 'mafia:action', {
+        roomId: created.roomId,
+        playerId: mafiaPlayers[0].id,
+        type: 'nightKill',
+        targetId: nightTarget.id,
+      });
+      assert.equal(firstNightAction.ok, true);
+      assert.equal(room.phase, 'night');
+      assert.equal(room.phaseEndsAt, initialNightDeadline);
+
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      assert.equal(room.phaseEndsAt, initialNightDeadline);
+
+      const secondNightAction = await emitAck(secondMafiaSeat.socket, 'mafia:action', {
+        roomId: created.roomId,
+        playerId: mafiaPlayers[1].id,
+        type: 'nightKill',
+        targetId: nightTarget.id,
+      });
+      assert.equal(secondNightAction.ok, true);
+      assert.equal(room.phase, 'discussion');
+
+      await waitFor(() => room.discussion?.turnId || null, 200, 5);
+      const initialDiscussionDeadline = room.phaseEndsAt;
+      assert.ok(initialDiscussionDeadline);
+
+      const discussionSpeakerId = room.discussion.currentSpeakerId;
+      const discussionSeat = [...seats.values()].find((seat) => seat.playerId === discussionSpeakerId);
+      assert.ok(discussionSeat);
+
+      const discussionAction = await emitAck(discussionSeat.socket, 'mafia:action', {
+        roomId: created.roomId,
+        playerId: discussionSpeakerId,
+        type: 'discussion',
+        turnId: room.discussion.turnId,
+        message: 'Pressure stays on the loudest contradiction.',
+      });
+      assert.equal(discussionAction.ok, true);
+      assert.equal(room.phase, 'discussion');
+      assert.equal(room.phaseEndsAt, initialDiscussionDeadline);
+
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      assert.equal(room.phase, 'discussion');
+      assert.equal(room.phaseEndsAt, initialDiscussionDeadline);
+
+      const votingRoom = await waitFor(() => room.phase === 'voting' ? room : null, 240, 5);
+      assert.ok(votingRoom, 'expected discussion to expire into voting without early skip');
+      assert.equal(room.phase, 'voting');
+    } finally {
+      sockets.forEach((socket) => socket.disconnect());
+    }
+  });
+});
+
+test('public arena queue avoids recent co-players when fresh opponents are available', async () => {
+  await withServer(async (url) => {
+    void url;
+
+    const repeatGroup = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
+      .map((name, index) => addQueuedTestAgent(`repeat-${index + 1}`, name, index + 1));
+    const freshGroup = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo']
+      .map((name, index) => addQueuedTestAgent(`fresh-${index + 1}`, name, repeatGroup.length + index + 1));
+
+    rememberPublicArenaMatchParticipants(repeatGroup.map((agent) => agent.id), 'recent-repeat-group');
+    await processPublicArenaQueue();
+
+    assert.equal(mafiaRooms.size, 1);
+    const room = [...mafiaRooms.values()][0];
+    const selectedAgentIds = new Set(room.players.map((player) => player.agentId));
+
+    assert.equal(selectedAgentIds.has(repeatGroup[0].id), true);
+    for (const agent of repeatGroup.slice(1)) {
+      assert.equal(selectedAgentIds.has(agent.id), false);
+    }
+    for (const agent of freshGroup) {
+      assert.equal(selectedAgentIds.has(agent.id), true);
+    }
+    assert.equal(room.publicArenaMatchmaking.totalRepeatPenaltyScore, 0);
+    assert.equal(room.publicArenaMatchmaking.repeatsUnavoidable, false);
+  });
+});
+
+test('public arena queue still forms a room when recent repeats are unavoidable', async () => {
+  await withServer(async (url) => {
+    void url;
+
+    const agents = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
+      .map((name, index) => addQueuedTestAgent(`fallback-${index + 1}`, name, index + 1));
+
+    rememberPublicArenaMatchParticipants(agents.map((agent) => agent.id), 'recent-fallback-group');
+    await processPublicArenaQueue();
+
+    assert.equal(mafiaRooms.size, 1);
+    const room = [...mafiaRooms.values()][0];
+    assert.equal(room.players.length, 6);
+    assert.equal(room.publicArenaMatchmaking.totalRepeatPenaltyScore > 0, true);
+    assert.equal(room.publicArenaMatchmaking.repeatsUnavoidable, true);
+  });
+});
+
+test('public arena match completion updates recency and changes the next batch', async () => {
+  await withServer(async (url) => {
+    void url;
+
+    const repeatGroup = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
+      .map((name, index) => addQueuedTestAgent(`history-${index + 1}`, name, index + 1));
+    const freshGroup = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo']
+      .map((name, index) => addQueuedTestAgent(`history-fresh-${index + 1}`, name, repeatGroup.length + index + 1));
+
+    const firstRoom = createPublicArenaMafiaRoom(repeatGroup);
+    assert.ok(firstRoom);
+
+    firstRoom.status = 'finished';
+    firstRoom.phase = 'finished';
+    firstRoom.winner = 'town';
+    firstRoom.finishedAt = Date.now();
+    recordFirstMatchCompletion('mafia', firstRoom.id);
+    releasePublicArenaRoom(firstRoom);
+
+    const nextRoom = await waitFor(() => [...mafiaRooms.values()]
+      .find((room) => room.id !== firstRoom.id && room.publicArena && room.status === 'in_progress') || null, 500, 10);
+    assert.ok(nextRoom);
+
+    const nextAgentIds = new Set(nextRoom.players.map((player) => player.agentId));
+    assert.equal(nextAgentIds.has(repeatGroup[0].id), true);
+    for (const agent of repeatGroup.slice(1)) {
+      assert.equal(nextAgentIds.has(agent.id), false);
+    }
+    for (const agent of freshGroup) {
+      assert.equal(nextAgentIds.has(agent.id), true);
+    }
+  });
+});
+
+test('public arena queue does not double-book agents across simultaneous room creation', async () => {
+  await withServer(async (url) => {
+    void url;
+
+    const agents = Array.from({ length: 12 }, (_unused, index) => (
+      addQueuedTestAgent(`pool-${index + 1}`, `Agent ${index + 1}`, index + 1)
+    ));
+    await processPublicArenaQueue();
+
+    const rooms = [...mafiaRooms.values()].filter((room) => room.publicArena);
+    assert.equal(rooms.length, 2);
+
+    const seatedAgentIds = rooms.flatMap((room) => room.players.map((player) => player.agentId));
+    assert.equal(seatedAgentIds.length, agents.length);
+    assert.equal(new Set(seatedAgentIds).size, agents.length);
+  });
+});
+
 test('six runtime-connected agents auto-seat into a live Mafia match and finish it', async () => {
   await withServer(async (url) => {
     const agents = [];
@@ -177,6 +408,19 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       }, 4000, 25);
       assert.ok(seatedRoomId, 'expected all six agents to receive a room assignment');
 
+      const watchRes = await fetch(`${url}/api/play/watch`);
+      const watchData = await watchRes.json();
+      assert.equal(watchData.ok, true);
+
+      const liveHealthRes = await fetch(`${url}/health`);
+      const liveHealth = await liveHealthRes.json();
+      assert.equal(liveHealth.ok, true);
+      assert.equal(liveHealth.publicArena.connectedAgents, 6);
+      assert.equal(liveHealth.publicArena.idleAgents, 0);
+      assert.equal(liveHealth.publicArena.inMatchAgents, 6);
+      assert.equal(Number(liveHealth.publicArena.activeMatches || 0) >= 1, true);
+      assert.equal(typeof liveHealth.publicArena.reservedAgents, 'number');
+      assert.equal(typeof liveHealth.publicArena.queueRunning, 'boolean');
       const baselineData = await waitFor(async () => {
         const res = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
         const data = await res.json();

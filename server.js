@@ -239,6 +239,8 @@ const liveAgentRuntimes = new Map();
 const agentRuntimeSockets = new Map();
 const activeAgentMatchRooms = new Set();
 const completedMatchRecords = [];
+const PUBLIC_ARENA_RECENT_MATCH_LIMIT = 3;
+const publicArenaRecentCoPlayers = new Map();
 
 function clearAllGameTimers() {
   roomScheduler.clearAll();
@@ -348,6 +350,58 @@ function pickDeterministicTarget(players, actorId) {
     .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
 }
 
+function buildDeterministicDiscussionMessage(room, actor) {
+  const target = pickDeterministicTarget(room.players || [], actor?.id);
+  if (!target) return '';
+  return `${target.name} is still my strongest read. Their timing keeps landing a little too clean.`;
+}
+
+function isAvailableDiscussionSpeaker(player) {
+  if (!player?.alive) return false;
+  if (player.isBot) return true;
+  return Boolean(player.isConnected);
+}
+
+function clearMafiaDiscussionTurn(room) {
+  if (!room) return;
+  room._discussionTurnKey = null;
+  roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'discussion-turn' });
+  if (room.discussion) {
+    room.discussion.turnId = null;
+    room.discussion.turnEndsAt = null;
+  }
+}
+
+function completeMafiaDiscussionTurn(room, { spoke = false } = {}) {
+  const discussion = room?.discussion;
+  if (!discussion) return;
+  if (spoke) discussion.cycleHadSpeech = true;
+
+  clearMafiaDiscussionTurn(room);
+
+  const order = Array.isArray(discussion.speakerOrder) ? discussion.speakerOrder : [];
+  if (!order.length || !discussion.currentSpeakerId) {
+    discussion.currentSpeakerId = null;
+    return;
+  }
+
+  const currentIndex = Math.max(0, Number(discussion.speakerIndex || 0));
+  const nextIndex = (currentIndex + 1) % order.length;
+  const wrapped = nextIndex <= currentIndex;
+
+  if (wrapped) {
+    if (!discussion.cycleHadSpeech) {
+      discussion.currentSpeakerId = null;
+      return;
+    }
+    discussion.cycleHadSpeech = false;
+    discussion.cycleNumber = Math.max(0, Number(discussion.cycleNumber || 0)) + 1;
+  }
+
+  discussion.speakerIndex = nextIndex;
+  discussion.currentSpeakerId = order[nextIndex] || null;
+}
+
 function runMafiaBotAutoplay(room) {
   if (!room || room.status !== 'in_progress') return { acted: 0 };
   if (room.publicArena) return { acted: 0 };
@@ -369,11 +423,33 @@ function runMafiaBotAutoplay(room) {
   }
 
   if (room.status === 'in_progress' && room.phase === 'discussion') {
-    const readyBots = room.players.filter((p) => p.alive && p.isBot);
-    for (const bot of readyBots) {
-      const result = mafiaGame.submitAction(mafiaRooms, { roomId: room.id, playerId: bot.id, type: 'ready' });
-      if (result.ok) acted += 1;
-      if (room.phase !== 'discussion') break;
+    while (room.status === 'in_progress' && room.phase === 'discussion') {
+      const currentSpeakerId = room.discussion?.currentSpeakerId || null;
+      const speaker = currentSpeakerId
+        ? room.players.find((player) => player.id === currentSpeakerId)
+        : null;
+      if (!speaker || !speaker.alive || !speaker.isBot) break;
+
+      const alreadySpoke = Boolean(room.discussion?.spokenByPlayerId?.[speaker.id]);
+      const message = alreadySpoke ? '' : buildDeterministicDiscussionMessage(room, speaker);
+      const type = message ? 'discussion' : 'pass';
+      const result = mafiaGame.submitAction(mafiaRooms, {
+        roomId: room.id,
+        playerId: speaker.id,
+        type,
+        message,
+        turnId: room.discussion?.turnId || null,
+      });
+      if (!result.ok) break;
+      if (message) {
+        room.discussion.spokenByPlayerId[speaker.id] = true;
+        appendMafiaDiscussionMessage(room, speaker, message, {
+          phase: room.phase,
+          day: room.day,
+        });
+      }
+      completeMafiaDiscussionTurn(room, { spoke: Boolean(message) });
+      acted += 1;
     }
   }
 
@@ -411,6 +487,10 @@ function buildMafiaAgentDecisionPayload(room, player) {
     phase: room.phase,
     day: room.day,
     role: player.role,
+    phaseEndsAt: room.phaseEndsAt || null,
+    turnId: room.discussion?.turnId || null,
+    turnEndsAt: room.discussion?.turnEndsAt || null,
+    currentSpeakerId: room.discussion?.currentSpeakerId || null,
     players: alivePlayers,
     tally: room.tally || {},
     events: (room.events || []).slice(-8),
@@ -449,11 +529,37 @@ function appendMafiaDiscussionMessage(room, player, text, { phase, day } = {}) {
   return event;
 }
 
+const LIVE_AGENT_FALLBACK_DISCUSSION_MESSAGE = 'I\'m locking a public read before the vote.';
+
+function normalizeDiscussionTurnAction(type, rawMessage) {
+  const normalizedType = String(type || '').trim();
+  if (normalizedType === 'pass') {
+    return { actionType: 'pass', transcriptMessage: '' };
+  }
+
+  if (normalizedType === 'ready') {
+    const message = sanitizeDiscussionTranscriptMessage(rawMessage) || LIVE_AGENT_FALLBACK_DISCUSSION_MESSAGE;
+    return { actionType: 'discussion', transcriptMessage: message };
+  }
+
+  if (normalizedType === 'discussion') {
+    const message = sanitizeDiscussionTranscriptMessage(rawMessage);
+    if (!message) {
+      return { error: { code: 'MESSAGE_REQUIRED', message: 'Discussion messages require text' } };
+    }
+    return { actionType: 'discussion', transcriptMessage: message };
+  }
+
+  return { actionType: normalizedType, transcriptMessage: '' };
+}
+
 function emitMafiaLiveAgentRequests(room) {
   if (!room?.publicArena || room.status !== 'in_progress') return;
-  const promptKey = `${room.day}:${room.phase}`;
+  const promptKey = room.phase === 'discussion'
+    ? String(room.discussion?.turnId || '')
+    : `${room.day}:${room.phase}`;
+  if (!promptKey) return;
   if (room.liveAgentPromptKey === promptKey) return;
-  room.liveAgentPromptKey = promptKey;
 
   let eventName = null;
   let targets = [];
@@ -462,12 +568,17 @@ function emitMafiaLiveAgentRequests(room) {
     targets = room.players.filter((p) => p.alive && p.isLiveAgent && p.role === 'mafia' && !room.actions?.night?.[p.id]);
   } else if (room.phase === 'discussion') {
     eventName = 'mafia:agent:discussion_request';
-    targets = room.players.filter((p) => p.alive && p.isLiveAgent && room.actions?.vote?.[p.id] !== '__READY__');
+    const currentSpeakerId = room.discussion?.currentSpeakerId || null;
+    const currentSpeaker = currentSpeakerId
+      ? room.players.find((player) => player.id === currentSpeakerId)
+      : null;
+    targets = currentSpeaker && currentSpeaker.alive && currentSpeaker.isLiveAgent ? [currentSpeaker] : [];
   } else if (room.phase === 'voting') {
     eventName = 'mafia:agent:vote_request';
     targets = room.players.filter((p) => p.alive && p.isLiveAgent && !room.actions?.vote?.[p.id]);
   }
-  if (!eventName) return;
+  if (!eventName || !targets.length) return;
+  room.liveAgentPromptKey = promptKey;
 
   for (const player of targets) {
     const runtime = getAgentRuntime(player.agentId);
@@ -503,38 +614,100 @@ function handlePublicArenaRoomUpdate(room) {
 function scheduleMafiaPhase(room) {
   if (room.status !== 'in_progress') {
     room.phaseEndsAt = null;
+    room._phaseScheduleKey = null;
+    room.liveAgentPromptKey = null;
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    clearMafiaDiscussionTurn(room);
     handlePublicArenaRoomUpdate(room);
     return;
+  }
+
+  const phaseKey = `${room.matchId || room.id}:${room.status}:${room.phase}:${room.day}:${room.winner || ''}`;
+  const ms = room.phase === 'night' ? MAFIA_PHASE_MS.night : room.phase === 'discussion' ? MAFIA_PHASE_MS.discussion : room.phase === 'voting' ? MAFIA_PHASE_MS.voting : 0;
+  if (!ms) {
+    room.phaseEndsAt = null;
+    room._phaseScheduleKey = null;
+  } else if (room._phaseScheduleKey !== phaseKey || !room.phaseEndsAt || room.phaseEndsAt <= Date.now()) {
+    room._phaseScheduleKey = phaseKey;
+    room.phaseEndsAt = Date.now() + ms;
+    room.liveAgentPromptKey = null;
+    roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token: phaseKey }, () => {
+      if (room._phaseScheduleKey !== phaseKey) return;
+      room._phaseScheduleKey = null;
+      clearMafiaDiscussionTurn(room);
+      const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
+      if (advanced.ok) {
+        if (room.status === 'finished') recordFirstMatchCompletion('mafia', room.id);
+        emitMafiaRoom(room);
+        handlePublicArenaRoomUpdate(room);
+        scheduleMafiaPhase(room);
+      }
+    });
   }
 
   const auto = runMafiaBotAutoplay(room);
   if (auto.acted > 0) emitMafiaRoom(room);
-  handlePublicArenaRoomUpdate(room);
   if (room.status !== 'in_progress') {
     room.phaseEndsAt = null;
+    room._phaseScheduleKey = null;
+    room.liveAgentPromptKey = null;
     roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    clearMafiaDiscussionTurn(room);
     handlePublicArenaRoomUpdate(room);
     return;
   }
 
-  const token = `${room.phase}:${Date.now()}`;
-  const ms = room.phase === 'night' ? MAFIA_PHASE_MS.night : room.phase === 'discussion' ? MAFIA_PHASE_MS.discussion : room.phase === 'voting' ? MAFIA_PHASE_MS.voting : 0;
-  if (!ms) {
+  const currentPhaseKey = `${room.matchId || room.id}:${room.status}:${room.phase}:${room.day}:${room.winner || ''}`;
+  if (currentPhaseKey !== phaseKey) {
+    room._phaseScheduleKey = null;
     room.phaseEndsAt = null;
+    room.liveAgentPromptKey = null;
+    roomScheduler.clear({ namespace: 'mafia', roomId: room.id, slot: 'phase' });
+    clearMafiaDiscussionTurn(room);
+    scheduleMafiaPhase(room);
     return;
   }
-  room.phaseEndsAt = Date.now() + ms;
 
-  roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'phase', delayMs: ms, token }, () => {
-    const advanced = mafiaGame.forceAdvance(mafiaRooms, { roomId: room.id });
-    if (advanced.ok) {
-      if (room.status === 'finished') recordFirstMatchCompletion('mafia', room.id);
-      emitMafiaRoom(room);
-      handlePublicArenaRoomUpdate(room);
-      scheduleMafiaPhase(room);
+  if (room.phase === 'discussion') {
+    const discussion = room.discussion;
+    if (discussion) {
+      while (discussion.currentSpeakerId) {
+        const currentSpeaker = room.players.find((player) => player.id === discussion.currentSpeakerId);
+        if (isAvailableDiscussionSpeaker(currentSpeaker)) break;
+        completeMafiaDiscussionTurn(room, { spoke: false });
+      }
+
+      if (discussion.currentSpeakerId) {
+        if (!discussion.turnId) {
+          discussion.turnNumber = Math.max(0, Number(discussion.turnNumber || 0)) + 1;
+          discussion.turnId = `${room.matchId || room.id}:${room.day}:${discussion.cycleNumber || 0}:${discussion.turnNumber}:${discussion.currentSpeakerId}`;
+          const remainingPhaseMs = Math.max(1, Number(room.phaseEndsAt || 0) - Date.now());
+          discussion.turnEndsAt = Date.now() + Math.min(MAFIA_DISCUSSION_TURN_MS, remainingPhaseMs);
+        }
+
+        if (room._discussionTurnKey !== discussion.turnId || !discussion.turnEndsAt || discussion.turnEndsAt <= Date.now()) {
+          const turnId = discussion.turnId;
+          const delayMs = Math.max(1, Number(discussion.turnEndsAt || 0) - Date.now());
+          room._discussionTurnKey = turnId;
+          roomScheduler.schedule({ namespace: 'mafia', roomId: room.id, slot: 'discussion-turn', delayMs, token: turnId }, () => {
+            if (room.phase !== 'discussion' || !room.discussion || room.discussion.turnId !== turnId) return;
+            completeMafiaDiscussionTurn(room, { spoke: false });
+            emitMafiaRoom(room);
+            handlePublicArenaRoomUpdate(room);
+            scheduleMafiaPhase(room);
+          });
+        }
+      } else {
+        clearMafiaDiscussionTurn(room);
+      }
+    } else {
+      clearMafiaDiscussionTurn(room);
     }
-  });
+  } else {
+    clearMafiaDiscussionTurn(room);
+  }
+
+  handlePublicArenaRoomUpdate(room);
 }
 
 
@@ -745,18 +918,48 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:action', (payload, cb) => {
-    const { roomId, playerId, type, targetId } = payload || {};
+    const { roomId, playerId, type, targetId, message, turnId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     if (!socketOwnsPlayer(room, socket.id, playerId)) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
-    const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
+    const player = room.players.find((entry) => entry.id === playerId);
+    const transcriptPhase = room.phase;
+    const transcriptDay = room.day;
+    let actionType = type;
+    let transcriptMessage = '';
+
+    if (transcriptPhase === 'discussion' && ['discussion', 'pass', 'ready'].includes(String(type || '').trim())) {
+      const normalized = normalizeDiscussionTurnAction(type, message);
+      if (normalized.error) return cb?.({ ok: false, error: normalized.error });
+      actionType = normalized.actionType;
+      transcriptMessage = normalized.transcriptMessage;
+    }
+
+    const result = mafiaGame.submitAction(mafiaRooms, {
+      roomId,
+      playerId,
+      type: actionType,
+      targetId,
+      message: transcriptMessage,
+      turnId,
+    });
     if (!result.ok) return cb?.(result);
+    if (transcriptPhase === 'discussion') {
+      if (transcriptMessage && player) {
+        appendMafiaDiscussionMessage(result.room, player, transcriptMessage, {
+          phase: transcriptPhase,
+          day: transcriptDay,
+        });
+      }
+      completeMafiaDiscussionTurn(result.room, { spoke: Boolean(transcriptMessage) });
+    }
     recordRoomWinner('mafia', result.room);
     if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
     logRoomEvent('mafia', result.room, 'ACTION_SUBMITTED', {
       actorId: playerId,
-      action: type,
+      action: actionType,
       targetId: targetId || null,
+      text: transcriptMessage || null,
       status: result.room.status,
       phase: result.room.phase,
       day: result.room.day,
@@ -769,35 +972,53 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:agent:decision', (payload, cb) => {
-    const { roomId, playerId, phase, type, targetId, message } = payload || {};
+    const { roomId, playerId, phase, type, targetId, message, turnId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
     const player = room.players.find((entry) => entry.id === playerId);
     if (!player || !player.isLiveAgent) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Player is not a live agent seat' } });
     if (player.socketId !== socket.id) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     if (phase && phase !== room.phase) return cb?.({ ok: false, error: { code: 'STALE_PHASE', message: 'Decision does not match current phase' } });
+    if (room.phase === 'discussion' && turnId && turnId !== room.discussion?.turnId) {
+      return cb?.({ ok: false, error: { code: 'STALE_TURN', message: 'Decision does not match current discussion turn' } });
+    }
 
     const transcriptPhase = room.phase;
     const transcriptDay = room.day;
-    const transcriptMessage = transcriptPhase === 'discussion'
-      && type === 'ready'
-      && room.actions?.vote?.[player.id] !== '__READY__'
-      ? sanitizeDiscussionTranscriptMessage(message)
-      : '';
-    const result = mafiaGame.submitAction(mafiaRooms, { roomId, playerId, type, targetId });
+    let actionType = type;
+    let transcriptMessage = '';
+
+    if (transcriptPhase === 'discussion' && ['discussion', 'pass', 'ready'].includes(String(type || '').trim())) {
+      const normalized = normalizeDiscussionTurnAction(type, message);
+      if (normalized.error) return cb?.({ ok: false, error: normalized.error });
+      actionType = normalized.actionType;
+      transcriptMessage = normalized.transcriptMessage;
+    }
+
+    const result = mafiaGame.submitAction(mafiaRooms, {
+      roomId,
+      playerId,
+      type: actionType,
+      targetId,
+      message: transcriptMessage,
+      turnId,
+    });
     if (!result.ok) return cb?.(result);
-    if (transcriptMessage) {
-      appendMafiaDiscussionMessage(result.room, player, transcriptMessage, {
-        phase: transcriptPhase,
-        day: transcriptDay,
-      });
+    if (transcriptPhase === 'discussion') {
+      if (transcriptMessage) {
+        appendMafiaDiscussionMessage(result.room, player, transcriptMessage, {
+          phase: transcriptPhase,
+          day: transcriptDay,
+        });
+      }
+      completeMafiaDiscussionTurn(result.room, { spoke: Boolean(transcriptMessage) });
     }
     recordRoomWinner('mafia', result.room);
     if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
     logRoomEvent('mafia', result.room, 'LIVE_AGENT_DECISION', {
       actorId: playerId,
       actorName: player.name,
-      action: type,
+      action: actionType,
       targetId: targetId || null,
       text: transcriptMessage || null,
       status: result.room.status,
@@ -1016,6 +1237,53 @@ function buildMatchRecordFromRoom(mode, roomId, room) {
   };
 }
 
+function normalizePublicArenaParticipantIds(rawAgentIds = []) {
+  const seen = new Set();
+  const next = [];
+  for (const rawAgentId of rawAgentIds) {
+    const agentId = String(rawAgentId || '').trim();
+    if (!agentId || seen.has(agentId)) continue;
+    seen.add(agentId);
+    next.push(agentId);
+  }
+  return next;
+}
+
+function rememberPublicArenaMatchParticipants(rawAgentIds = [], matchId = shortId(12)) {
+  const agentIds = normalizePublicArenaParticipantIds(rawAgentIds);
+  if (agentIds.length < 2) return;
+  const normalizedMatchId = String(matchId || '').trim() || shortId(12);
+
+  for (const agentId of agentIds) {
+    const coPlayers = agentIds.filter((otherAgentId) => otherAgentId !== agentId);
+    const priorEntries = Array.isArray(publicArenaRecentCoPlayers.get(agentId))
+      ? publicArenaRecentCoPlayers.get(agentId)
+      : [];
+    const nextEntries = priorEntries
+      .filter((entry) => String(entry?.matchId || '').trim() !== normalizedMatchId);
+    nextEntries.unshift({ matchId: normalizedMatchId, coPlayers });
+    if (nextEntries.length > PUBLIC_ARENA_RECENT_MATCH_LIMIT) {
+      nextEntries.length = PUBLIC_ARENA_RECENT_MATCH_LIMIT;
+    }
+    publicArenaRecentCoPlayers.set(agentId, nextEntries);
+  }
+}
+
+function countRecentPublicArenaCoPlayerMatches(agentId, otherAgentId) {
+  const normalizedAgentId = String(agentId || '').trim();
+  const normalizedOtherAgentId = String(otherAgentId || '').trim();
+  if (!normalizedAgentId || !normalizedOtherAgentId || normalizedAgentId === normalizedOtherAgentId) return 0;
+
+  const entries = Array.isArray(publicArenaRecentCoPlayers.get(normalizedAgentId))
+    ? publicArenaRecentCoPlayers.get(normalizedAgentId)
+    : [];
+  return entries.reduce((total, entry) => (
+    Array.isArray(entry?.coPlayers) && entry.coPlayers.includes(normalizedOtherAgentId)
+      ? total + 1
+      : total
+  ), 0);
+}
+
 function recordFirstMatchCompletion(mode, roomId) {
   const store = getLobbyStore(mode);
   const room = store?.get(roomId);
@@ -1029,6 +1297,14 @@ function recordFirstMatchCompletion(mode, roomId) {
   try {
     const matchRecord = buildMatchRecordFromRoom(mode, roomId, room);
     if (!matchRecord) return;
+    if (mode === 'mafia' && room.publicArena) {
+      const participantIds = normalizePublicArenaParticipantIds(
+        (matchRecord.players || [])
+          .filter((player) => !player?.isBot)
+          .map((player) => player.userId || null),
+      );
+      rememberPublicArenaMatchParticipants(participantIds, matchRecord.id);
+    }
     completedMatchRecords.unshift(matchRecord);
     if (completedMatchRecords.length > COMPLETED_MATCH_RECORD_CAP) completedMatchRecords.length = COMPLETED_MATCH_RECORD_CAP;
     void recordMatch({
@@ -1802,6 +2078,36 @@ function runtimeSocketForAgent(agentId) {
   return io.sockets.sockets.get(runtime.socketId) || null;
 }
 
+function runtimeConnectedAt(agentId) {
+  return Number(getAgentRuntime(agentId)?.connectedAt || 0);
+}
+
+function buildPublicArenaQueueMetrics() {
+  let connectedAgents = 0;
+  let idleAgents = 0;
+  let reservedAgents = 0;
+  let inMatchAgents = 0;
+
+  for (const agent of agentProfiles.values()) {
+    if (!isPublicRankedAgent(agent) || !agent.deployed) continue;
+    const runtime = getAgentRuntime(agent.id);
+    if (!runtime?.connected) continue;
+    connectedAgents += 1;
+    if (runtime.status === 'idle') idleAgents += 1;
+    else if (runtime.status === 'reserved') reservedAgents += 1;
+    else if (runtime.status === 'in_match') inMatchAgents += 1;
+  }
+
+  return {
+    connectedAgents,
+    idleAgents,
+    reservedAgents,
+    inMatchAgents,
+    activeMatches: activeAgentMatchRooms.size,
+    queueRunning: publicArenaQueueRunning,
+  };
+}
+
 function idleLaunchAgents() {
   return [...agentProfiles.values()]
     .filter((agent) => {
@@ -1810,10 +2116,96 @@ function idleLaunchAgents() {
       return Boolean(runtime?.connected) && runtime.status === 'idle';
     })
     .sort((a, b) => {
-      const aRuntime = getAgentRuntime(a.id);
-      const bRuntime = getAgentRuntime(b.id);
-      return Number(aRuntime?.connectedAt || 0) - Number(bRuntime?.connectedAt || 0);
+      return runtimeConnectedAt(a.id) - runtimeConnectedAt(b.id);
     });
+}
+
+function addedRecentCoPlayerPenalty(batch, candidate) {
+  const normalizedBatch = Array.isArray(batch) ? batch : [];
+  return normalizedBatch.reduce((total, player) => {
+    const leftId = String(player?.id || '').trim();
+    const rightId = String(candidate?.id || '').trim();
+    if (!leftId || !rightId || leftId === rightId) return total;
+    return total + countRecentPublicArenaCoPlayerMatches(leftId, rightId);
+  }, 0);
+}
+
+function totalRecentCoPlayerPenalty(batch) {
+  const normalizedBatch = Array.isArray(batch) ? batch : [];
+  let total = 0;
+  for (let index = 0; index < normalizedBatch.length; index += 1) {
+    for (let peerIndex = index + 1; peerIndex < normalizedBatch.length; peerIndex += 1) {
+      const leftId = String(normalizedBatch[index]?.id || '').trim();
+      const rightId = String(normalizedBatch[peerIndex]?.id || '').trim();
+      if (!leftId || !rightId || leftId === rightId) continue;
+      total += countRecentPublicArenaCoPlayerMatches(leftId, rightId);
+    }
+  }
+  return total;
+}
+
+function canFillBatchWithoutRecentRepeats(seedAgent, remainingAgents) {
+  const seed = seedAgent && seedAgent.id ? seedAgent : null;
+  const candidates = Array.isArray(remainingAgents)
+    ? remainingAgents.filter((agent) => agent?.id && agent.id !== seed?.id)
+    : [];
+  if (!seed) return false;
+
+  function backtrack(currentBatch, startIndex) {
+    if (currentBatch.length >= PUBLIC_ARENA_REQUIRED_AGENTS) return true;
+    for (let index = startIndex; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      if (addedRecentCoPlayerPenalty(currentBatch, candidate) !== 0) continue;
+      currentBatch.push(candidate);
+      if (backtrack(currentBatch, index + 1)) return true;
+      currentBatch.pop();
+    }
+    return false;
+  }
+
+  return backtrack([seed], 0);
+}
+
+function selectPublicArenaBatch(idleAgents) {
+  const candidates = Array.isArray(idleAgents) ? idleAgents.filter((agent) => agent?.id) : [];
+  if (candidates.length < PUBLIC_ARENA_REQUIRED_AGENTS) return null;
+
+  const batch = [candidates[0]];
+  const remaining = candidates.slice(1);
+  while (batch.length < PUBLIC_ARENA_REQUIRED_AGENTS && remaining.length) {
+    let bestIndex = -1;
+    let bestPenalty = Number.POSITIVE_INFINITY;
+    let bestWait = Number.POSITIVE_INFINITY;
+    let bestRandom = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      const penalty = addedRecentCoPlayerPenalty(batch, candidate);
+      const waitScore = runtimeConnectedAt(candidate.id);
+      const tieBreaker = Math.random();
+      const isBetter = penalty < bestPenalty
+        || (penalty === bestPenalty && waitScore < bestWait)
+        || (penalty === bestPenalty && waitScore === bestWait && tieBreaker < bestRandom);
+      if (!isBetter) continue;
+      bestIndex = index;
+      bestPenalty = penalty;
+      bestWait = waitScore;
+      bestRandom = tieBreaker;
+    }
+
+    if (bestIndex < 0) break;
+    batch.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  if (batch.length !== PUBLIC_ARENA_REQUIRED_AGENTS) return null;
+  const totalRepeatPenaltyScore = totalRecentCoPlayerPenalty(batch);
+  return {
+    batch,
+    totalRepeatPenaltyScore,
+    repeatsUnavoidable: totalRepeatPenaltyScore > 0
+      ? !canFillBatchWithoutRecentRepeats(candidates[0], candidates.slice(1))
+      : false,
+  };
 }
 
 function markAgentProfileConnection(agentId, connected, note = null) {
@@ -1943,7 +2335,7 @@ function validatePublicArenaBatch(agents) {
   return { ok: true };
 }
 
-function createPublicArenaMafiaRoom(agents) {
+function createPublicArenaMafiaRoom(agents, options = {}) {
   const validation = validatePublicArenaBatch(agents);
   if (!validation.ok) return null;
 
@@ -1962,6 +2354,13 @@ function createPublicArenaMafiaRoom(agents) {
   room.publicArena = true;
   room.autoMatch = true;
   room.liveAgentPromptKey = null;
+  room.publicArenaMatchmaking = options?.matchmaking
+    ? {
+      agentIds: agents.map((agent) => agent.id),
+      totalRepeatPenaltyScore: Number(options.matchmaking.totalRepeatPenaltyScore || 0),
+      repeatsUnavoidable: Boolean(options.matchmaking.repeatsUnavoidable),
+    }
+    : null;
   attachLiveAgentToMafiaSeat(room, created.player, hostAgent, hostRuntime);
   attachedAgentIds.push(hostAgent.id);
 
@@ -1995,6 +2394,8 @@ function createPublicArenaMafiaRoom(agents) {
     phase: room.phase,
     publicArena: true,
     agents: agents.map((agent) => agent.id),
+    totalRepeatPenaltyScore: Number(room.publicArenaMatchmaking?.totalRepeatPenaltyScore || 0),
+    repeatsUnavoidable: Boolean(room.publicArenaMatchmaking?.repeatsUnavoidable),
   });
   emitMafiaRoom(room);
   activeAgentMatchRooms.add(room.id);
@@ -2016,9 +2417,17 @@ async function processPublicArenaQueue() {
   try {
     let idleAgents = idleLaunchAgents();
     while (idleAgents.length >= PUBLIC_ARENA_REQUIRED_AGENTS) {
-      const batch = idleAgents.slice(0, PUBLIC_ARENA_REQUIRED_AGENTS);
+      const selection = selectPublicArenaBatch(idleAgents);
+      if (!selection?.batch?.length) break;
+      const batch = selection.batch;
+      logStructured('mafia.publicArena.batch_selected', {
+        agentIds: batch.map((agent) => agent.id),
+        idleAgents: idleAgents.length,
+        totalRepeatPenaltyScore: Number(selection.totalRepeatPenaltyScore || 0),
+        repeatsUnavoidable: Boolean(selection.repeatsUnavoidable),
+      });
       batch.forEach((agent) => setAgentRuntimeStatus(agent.id, 'reserved'));
-      const room = createPublicArenaMafiaRoom(batch);
+      const room = createPublicArenaMafiaRoom(batch, { matchmaking: selection });
       if (!room) {
         logStructured('mafia.publicArena.batch_failed', {
           agentIds: batch.map((agent) => agent.id),
@@ -2522,10 +2931,11 @@ const QUICK_JOIN_MIN_PLAYERS = 4;
 const PUBLIC_ARENA_REQUIRED_AGENTS = 6;
 const PUBLIC_LAUNCH_MODE = 'mafia';
 const MAFIA_PHASE_MS = {
-  night: Number(process.env.MAFIA_NIGHT_MS || 15000),
+  night: Number(process.env.MAFIA_NIGHT_MS || 10000),
   discussion: Number(process.env.MAFIA_DISCUSSION_MS || 30000),
-  voting: Number(process.env.MAFIA_VOTING_MS || 15000),
+  voting: Number(process.env.MAFIA_VOTING_MS || 10000),
 };
+const MAFIA_DISCUSSION_TURN_MS = Number(process.env.MAFIA_DISCUSSION_TURN_MS || 3000);
 
 function requiredPlayersForMode(mode, room = null) {
   if (mode === 'mafia') {
@@ -3173,6 +3583,7 @@ app.get('/health', async (_req, res) => {
   const scheduler = roomScheduler.stats();
   const eventQueueDepth = roomEvents.pending();
   const eventQueueByMode = roomEvents.pendingByMode();
+  const publicArena = buildPublicArenaQueueMetrics();
 
   const dbHealth = await getDatabaseHealth();
   const dbStatus = dbHealth.status || 'unavailable';
@@ -3195,6 +3606,7 @@ app.get('/health', async (_req, res) => {
       mafia: mafiaRooms.size,
     },
     agents: agentProfiles.size,
+    publicArena,
     schedulerTimers: scheduler,
     eventQueueDepth,
     eventQueueByMode,
@@ -3253,6 +3665,8 @@ function resetAgentArenaRuntime() {
   activeAgentMatchRooms.clear();
   completedMatchRooms.clear();
   completedMatchRecords.length = 0;
+  publicArenaRecentCoPlayers.clear();
+  publicArenaQueueRunning = false;
 }
 
 if (require.main === module) {
@@ -3310,6 +3724,9 @@ module.exports = {
   buildRuntimeConfigScript,
   processPublicArenaQueue,
   createPublicArenaMafiaRoom,
+  rememberPublicArenaMatchParticipants,
+  recordFirstMatchCompletion,
+  releasePublicArenaRoom,
   buildMatchBaseline,
   clearAllGameTimers,
   resetPlayTelemetry,

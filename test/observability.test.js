@@ -40,6 +40,12 @@ test('health exposes scheduler + queue metrics and correlation id header', async
     assert.equal(typeof health.eventQueueByMode, 'object');
     assert.equal(typeof health.schedulerTimers.total, 'number');
     assert.equal(typeof health.schedulerTimers.byNamespace, 'object');
+    assert.equal(typeof health.publicArena.connectedAgents, 'number');
+    assert.equal(typeof health.publicArena.idleAgents, 'number');
+    assert.equal(typeof health.publicArena.reservedAgents, 'number');
+    assert.equal(typeof health.publicArena.inMatchAgents, 'number');
+    assert.equal(typeof health.publicArena.activeMatches, 'number');
+    assert.equal(typeof health.publicArena.queueRunning, 'boolean');
 
     const opsRes = await fetch(`${url}/api/ops/events`);
     const ops = await opsRes.json();

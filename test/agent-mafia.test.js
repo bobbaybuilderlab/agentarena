@@ -7,6 +7,7 @@ const {
   joinRoom,
   startGame,
   submitAction,
+  forceAdvance,
   prepareRematch,
   addLobbyBots,
   transitionRoomState,
@@ -192,10 +193,21 @@ test('agent-mafia continues to day 2 when no faction has won after the first vot
   assert.equal(submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
   assert.equal(room.phase, 'discussion');
   assert.equal(room.day, 1);
+  assert.equal(room.discussion.currentSpeakerId, playersByName.Host.id);
 
-  for (const player of room.players.filter((entry) => entry.alive)) {
-    assert.equal(submitAction(store, { roomId, playerId: player.id, type: 'ready' }).ok, true);
-  }
+  const outOfTurn = submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'pass' });
+  assert.equal(outOfTurn.ok, false);
+  assert.equal(outOfTurn.error.code, 'NOT_YOUR_TURN');
+
+  assert.equal(submitAction(store, {
+    roomId,
+    playerId: playersByName.Host.id,
+    type: 'discussion',
+    message: 'Pressure stays on P4.',
+  }).ok, true);
+  assert.equal(room.phase, 'discussion');
+
+  assert.equal(forceAdvance(store, { roomId }).ok, true);
   assert.equal(room.phase, 'voting');
 
   assert.equal(submitAction(store, { roomId, playerId: playersByName.Host.id, type: 'vote', targetId: playersByName.P4.id }).ok, true);
@@ -243,4 +255,42 @@ test('agent-mafia tracks night kill credit for mafia voters who picked the resol
 
   const elimination = room.events.find((event) => event.type === 'NIGHT_ELIMINATION');
   assert.deepEqual(elimination.actorIds.sort(), [playersByName.Host.id, playersByName.P2.id].sort());
+});
+
+test('agent-mafia accepts legacy ready discussion actions for the current speaker only', () => {
+  const store = createStore();
+  const created = createRoom(store, { hostName: 'Host', hostSocketId: 's-host' });
+  const roomId = created.room.id;
+  const hostPlayerId = created.player.id;
+
+  joinRoom(store, { roomId, name: 'P2', socketId: 's2' });
+  joinRoom(store, { roomId, name: 'P3', socketId: 's3' });
+  joinRoom(store, { roomId, name: 'P4', socketId: 's4' });
+  joinRoom(store, { roomId, name: 'P5', socketId: 's5' });
+  joinRoom(store, { roomId, name: 'P6', socketId: 's6' });
+
+  const started = startGame(store, { roomId, hostPlayerId });
+  assert.equal(started.ok, true);
+
+  const room = started.room;
+  const playersByName = Object.fromEntries(room.players.map((player) => [player.name, player]));
+  playersByName.Host.role = 'mafia';
+  playersByName.P2.role = 'mafia';
+  playersByName.P3.role = 'town';
+  playersByName.P4.role = 'town';
+  playersByName.P5.role = 'town';
+  playersByName.P6.role = 'town';
+
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.Host.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+  assert.equal(submitAction(store, { roomId, playerId: playersByName.P2.id, type: 'nightKill', targetId: playersByName.P3.id }).ok, true);
+  assert.equal(room.phase, 'discussion');
+
+  const legacyReady = submitAction(store, {
+    roomId,
+    playerId: room.discussion.currentSpeakerId,
+    type: 'ready',
+    message: 'Old clients still map to a discussion turn.',
+  });
+  assert.equal(legacyReady.ok, true);
+  assert.equal(room.phase, 'discussion');
 });
