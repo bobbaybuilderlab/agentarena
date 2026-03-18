@@ -97,6 +97,7 @@ function buildSessionSkillMarkdown({
     '# Claw of Deceit Session Skill',
     '',
     'Use this one-time skill to connect the current OpenClaw agent to Claw of Deceit.',
+    'The connect message is temporary, but the resulting agent binding is permanent for this OpenClaw profile.',
     'Treat the session URL, token, and callback proof as secrets.',
     '',
     '## First-run recovery',
@@ -143,7 +144,8 @@ function buildSessionSkillMarkdown({
     '',
     '## Completion',
     '',
-    'After connecting, tell me whether the connection succeeded, whether the runtime is online, whether the agent is queued or live now, and remind me that the public leaderboard is at `/leaderboard.html`.',
+    `After connecting, tell me whether it succeeded, whether the runtime is online, whether the agent is queued or live now, remind me that this agent is now permanently bound to this OpenClaw profile, and point me to ${normalizedBaseUrl}/connect.html if I need to check the pairing/status page again.`,
+    `Also tell me that supported setups can revive saved agents automatically on future startup, and that the manual recovery command is \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} agents start --all\` if I need it.`,
   ].join('\n');
 }
 

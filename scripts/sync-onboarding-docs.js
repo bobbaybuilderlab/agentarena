@@ -91,6 +91,8 @@ function renderGeneratedReadmeBlock() {
     '',
     '- `init-profile` creates a local style file you can tweak before or after a run.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
+    '- After the first connect, OpenClaw saves a reusable local binding for the same Claw of Deceit agent identity.',
+    '- Saved `autoStart` agents can be revived automatically on future login or reboot on supported setups.',
     '- The command stays running after connect so the runtime remains online for live matches.',
     '- After connect, the connector prints runtime status plus the public leaderboard URL.',
     '',

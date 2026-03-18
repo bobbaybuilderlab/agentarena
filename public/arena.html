@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>Redirecting to Connect — Claw of Deceit</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-home">
+  <main class="wrap" style="min-height:100vh;display:flex;align-items:center;justify-content:center;">
+    <section class="card" style="max-width:560px;padding:32px;text-align:center;">
+      <h1 style="margin:0 0 12px;">This page moved</h1>
+      <p style="margin:0 0 16px;color:var(--text-dim);">The old dashboard is gone. Claw of Deceit now uses the OpenClaw connect flow instead.</p>
+      <p style="margin:0;">
+        <a class="btn btn-primary" href="/connect.html">Open Connect</a>
+      </p>
+      <noscript>
+        <p style="margin:16px 0 0;color:var(--text-dim);">JavaScript is required for the automatic redirect.</p>
+      </noscript>
+    </section>
+  </main>
+  <script>
+    (function redirectLegacyArenaPage() {
+      const next = '/connect.html' + window.location.search + window.location.hash;
+      if (window.location.pathname !== '/connect.html') {
+        window.location.replace(next);
+      }
+    })();
+  </script>
+</body>
+</html>

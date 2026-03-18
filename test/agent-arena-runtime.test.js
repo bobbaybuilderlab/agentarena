@@ -7,6 +7,7 @@ process.env.MAFIA_DISCUSSION_MS = '80';
 process.env.MAFIA_VOTING_MS = '80';
 process.env.MAFIA_DISCUSSION_TURN_MS = '30';
 process.env.AUTH_RATE_LIMIT_MAX = '20';
+process.env.OPS_RATE_LIMIT_MAX = '50';
 
 const {
   server,
@@ -185,6 +186,9 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   return {
     socket,
     agentId: callbackData.agent.id,
+    legacyToken: connect.id,
+    legacyProof: callbackProof,
+    runtimeCredential: callbackData.runtimeCredential || null,
     getAssignedRoomId: () => assignedRoomId,
     getPlayerId: () => playerId,
   };
@@ -283,6 +287,47 @@ test('same-phase actions keep hard deadlines stable and discussion waits for its
   });
 });
 
+test('runtime secret can reconnect after the onboarding connect session expires', async () => {
+  await withServer(async (url) => {
+    const authRes = await fetch(`${url}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const authData = await authRes.json();
+    assert.equal(authData.ok, true);
+
+    const agent = await createRuntimeAgent(url, 'ReconnectBot', {
+      sessionToken: authData.session.token,
+    });
+
+    try {
+      assert.ok(agent.runtimeCredential?.runtimeSecret, 'expected runtime credential from connect callback');
+      const storedConnect = connectSessions.get(agent.legacyToken);
+      assert.ok(storedConnect, 'expected legacy connect session to exist');
+      storedConnect.expiresAt = Date.now() - 1;
+
+      agent.socket.disconnect();
+
+      const socket = ioc(url, { reconnection: false, autoUnref: true });
+      await once(socket, 'connect');
+
+      const register = await new Promise((resolve) => {
+        socket.emit('agent:runtime:register', {
+          agentId: agent.agentId,
+          runtimeSecret: agent.runtimeCredential.runtimeSecret,
+        }, resolve);
+      });
+
+      assert.equal(register.ok, true);
+      assert.equal(register.agent.id, agent.agentId);
+      socket.disconnect();
+    } finally {
+      agent.socket.disconnect();
+    }
+  });
+});
+
 test('public arena queue avoids recent co-players when fresh opponents are available', async () => {
   await withServer(async (url) => {
     void url;
@@ -299,12 +344,12 @@ test('public arena queue avoids recent co-players when fresh opponents are avail
     const room = [...mafiaRooms.values()][0];
     const selectedAgentIds = new Set(room.players.map((player) => player.agentId));
 
-    assert.equal(selectedAgentIds.has(repeatGroup[0].id), true);
+    assert.equal(selectedAgentIds.has(repeatGroup[0].id), true, 'expected the oldest idle agent to seed the batch');
     for (const agent of repeatGroup.slice(1)) {
-      assert.equal(selectedAgentIds.has(agent.id), false);
+      assert.equal(selectedAgentIds.has(agent.id), false, `expected ${agent.name} to be avoided when fresh opponents exist`);
     }
     for (const agent of freshGroup) {
-      assert.equal(selectedAgentIds.has(agent.id), true);
+      assert.equal(selectedAgentIds.has(agent.id), true, `expected ${agent.name} to be selected as a fresh opponent`);
     }
     assert.equal(room.publicArenaMatchmaking.totalRepeatPenaltyScore, 0);
     assert.equal(room.publicArenaMatchmaking.repeatsUnavoidable, false);
@@ -350,15 +395,15 @@ test('public arena match completion updates recency and changes the next batch',
 
     const nextRoom = await waitFor(() => [...mafiaRooms.values()]
       .find((room) => room.id !== firstRoom.id && room.publicArena && room.status === 'in_progress') || null, 500, 10);
-    assert.ok(nextRoom);
+    assert.ok(nextRoom, 'expected a fresh public arena room after releasing the finished match');
 
     const nextAgentIds = new Set(nextRoom.players.map((player) => player.agentId));
     assert.equal(nextAgentIds.has(repeatGroup[0].id), true);
     for (const agent of repeatGroup.slice(1)) {
-      assert.equal(nextAgentIds.has(agent.id), false);
+      assert.equal(nextAgentIds.has(agent.id), false, `expected ${agent.name} to be skipped after the completed match updated recency`);
     }
     for (const agent of freshGroup) {
-      assert.equal(nextAgentIds.has(agent.id), true);
+      assert.equal(nextAgentIds.has(agent.id), true, `expected ${agent.name} to join the remixed batch`);
     }
   });
 });
@@ -408,10 +453,25 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       }, 4000, 25);
       assert.ok(seatedRoomId, 'expected all six agents to receive a room assignment');
 
-      const watchRes = await fetch(`${url}/api/play/watch`);
-      const watchData = await watchRes.json();
-      assert.equal(watchRes.status, 410);
-      assert.equal(watchData.ok, false);
+      const watchData = await waitFor(async () => {
+        const res = await fetch(`${url}/api/play/watch`);
+        const data = await res.json();
+        return data?.ok && data.liveMatchActive ? data : null;
+      }, 4000, 25);
+      assert.ok(watchData, 'expected the status-only live match endpoint to report an active match');
+      assert.equal(watchData.watchUrl, null);
+      assert.equal(Number(watchData.activeMatches || 0) >= 1, true);
+      assert.equal('roomId' in watchData, false);
+
+      const liveHealthRes = await fetch(`${url}/health`);
+      const liveHealth = await liveHealthRes.json();
+      assert.equal(liveHealth.ok, true);
+      assert.equal(liveHealth.publicArena.connectedAgents, 6);
+      assert.equal(liveHealth.publicArena.idleAgents, 0);
+      assert.equal(liveHealth.publicArena.inMatchAgents, 6);
+      assert.equal(Number(liveHealth.publicArena.activeMatches || 0) >= 1, true);
+      assert.equal(typeof liveHealth.publicArena.reservedAgents, 'number');
+      assert.equal(typeof liveHealth.publicArena.queueRunning, 'boolean');
 
       const liveHealthRes = await fetch(`${url}/health`);
       const liveHealth = await liveHealthRes.json();
@@ -463,7 +523,8 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal('isProvisional' in leaderboardData.topAgents[0], true);
       assert.equal('queueStatus' in leaderboardData.topAgents[0], true);
       assert.equal('isLive' in leaderboardData.topAgents[0], true);
-      assert.equal('watchUrl' in leaderboardData.topAgents[0], true);
+      assert.equal('arenaUrl' in leaderboardData.topAgents[0], true);
+      assert.equal(leaderboardData.topAgents[0].watchUrl, null);
 
       const ratingsHealthRes = await fetch(`${url}/api/ops/ratings/health?mode=mafia`);
       const ratingsHealthData = await ratingsHealthRes.json();
@@ -498,6 +559,37 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Number(statsData.uniqueAgents || 0) >= 6, true);
       assert.equal(typeof statsData.mafiasCaught, 'number');
 
+      const mineRes = await fetch(`${url}/api/agents/mine`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const mineData = await mineRes.json();
+      assert.equal(mineData.ok, true);
+      assert.equal(mineData.session.agentId, agents[5].agentId);
+      assert.equal(mineData.session.primaryAgentId, agents[5].agentId);
+      assert.equal(Array.isArray(mineData.agents), true);
+      assert.equal(mineData.agents.length, 6);
+      assert.equal(mineData.selectedAgentId, agents[5].agentId);
+      assert.equal(mineData.agent.id, agents[5].agentId);
+      assert.match(mineData.agent.arenaUrl, /\/connect\.html\?agentId=/);
+      assert.equal(mineData.agent.watchUrl, null);
+      assert.equal(Number(mineData.agent.mmr || 0) >= 0, true);
+      assert.equal(Number(mineData.stats.gamesPlayed || 0) >= 1, true);
+      assert.equal(Number(mineData.stats.ratedMatches || 0) >= 1, true);
+      assert.equal('peakMmr' in mineData.stats, true);
+      assert.equal('isProvisional' in mineData.stats, true);
+      assert.equal(typeof mineData.stats.nightKillCredits, 'number');
+
+      const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const mineMatchesData = await mineMatchesRes.json();
+      assert.equal(mineMatchesData.ok, true);
+      assert.equal(mineMatchesData.agentId, agents[5].agentId);
+      assert.equal(mineMatchesData.primaryAgentId, agents[5].agentId);
+      assert.equal(Array.isArray(mineMatchesData.matches), true);
+      assert.equal(mineMatchesData.matches.length >= 1, true);
+      assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
+      assert.match(mineMatchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

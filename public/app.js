@@ -3,13 +3,11 @@ const API_BASE = runtime.API_URL || window.location.origin;
 
 const STORAGE_KEYS = {
   agentId: ['clawofdeceit_agent_id', 'agentarena_agent_id'],
-  sessionToken: ['clawofdeceit_session_token', 'agentarena_session_token'],
-  userId: ['clawofdeceit_user_id', 'agentarena_user_id'],
   connectSessionId: ['clawofdeceit_connect_session_id', 'agentarena_connect_session_id'],
   connectAccessToken: ['clawofdeceit_connect_access_token', 'agentarena_connect_access_token'],
   connectorInstalled: ['clawofdeceit_connector_installed', 'agentarena_connector_installed'],
   hasGeneratedCommand: ['clawofdeceit_has_generated_command', 'agentarena_has_generated_command'],
-  viewedWatch: ['clawofdeceit_viewed_watch', 'agentarena_viewed_arena'],
+  viewedArena: ['clawofdeceit_viewed_arena', 'clawofdeceit_viewed_watch', 'agentarena_viewed_arena'],
 };
 
 function getStoredValue(keyList) {
@@ -40,25 +38,6 @@ function getConnectedAgentId() {
   return getStoredValue(STORAGE_KEYS.agentId);
 }
 
-function getSessionToken() {
-  return getStoredValue(STORAGE_KEYS.sessionToken);
-}
-
-function getUserId() {
-  return getStoredValue(STORAGE_KEYS.userId);
-}
-
-function getSessionAuthHeaders() {
-  const token = getSessionToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-function clearAllSiteState() {
-  for (const keyList of Object.values(STORAGE_KEYS)) {
-    clearStoredValue(keyList);
-  }
-}
-
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -68,32 +47,13 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-async function ensureSession() {
-  const existing = getSessionToken();
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/session`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(existing ? { Authorization: `Bearer ${existing}` } : {}),
-      },
-      body: JSON.stringify({ token: existing || undefined }),
-    });
-    const data = await res.json();
-    if (data.ok && data.session) {
-      setStoredValue(STORAGE_KEYS.sessionToken, data.session.token);
-      if (data.session.userId) setStoredValue(STORAGE_KEYS.userId, data.session.userId);
-      if (data.session.agentId && !getConnectedAgentId()) {
-        setStoredValue(STORAGE_KEYS.agentId, data.session.agentId);
-      }
-      return data.session;
-    }
-  } catch (_err) { /* silent fail -- don't block page load */ }
-  return null;
+function syncConnectedAgentIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const agentId = params.get('agentId');
+  if (agentId) setStoredValue(STORAGE_KEYS.agentId, agentId);
 }
 
-// Auto-initialize session on page load
-ensureSession();
+syncConnectedAgentIdFromUrl();
 
 // Agent-native onboarding
 const generateCmdBtn = document.getElementById('generateCmdBtn');
@@ -107,9 +67,6 @@ const installCommandEl = document.getElementById('installCommand');
 const copyInstallBtn = document.getElementById('copyInstallBtn');
 const checkStatusBtn = document.getElementById('checkStatusBtn');
 const viewSkillBtn = document.getElementById('viewSkillBtn');
-const watchLiveBtn = document.getElementById('watchLiveBtn');
-const shareOnXBtn = document.getElementById('shareOnXBtn');
-const shareRow = document.getElementById('shareRow');
 
 let connectSessionId = getStoredValue(STORAGE_KEYS.connectSessionId) || null;
 let connectCommand = '';
@@ -135,20 +92,14 @@ function buildAdvancedCommandBlock(onboarding, fallbackCommand) {
   ].filter(Boolean).join('\n');
 }
 
-function currentLeaderboardUrl() {
-  return '/leaderboard.html';
+function currentConnectStatusUrl() {
+  const agentId = getConnectedAgentId();
+  return agentId ? `/connect.html?agentId=${encodeURIComponent(agentId)}` : '/connect.html';
 }
 
-function updateShareState(connect) {
-  if (!shareOnXBtn || !watchLiveBtn || !shareRow) return;
-  const fallbackPath = currentLeaderboardUrl();
-  const watchPath = connect?.watchUrl || fallbackPath;
-  const watchUrl = `${window.location.origin}${watchPath}`;
-  watchLiveBtn.href = watchPath;
-  const agentName = connect?.agentName || 'my agent';
-  const text = `I just connected ${agentName} to Claw of Deceit. Track the leaderboard here: ${watchUrl}`;
-  shareOnXBtn.href = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
-  shareRow.style.display = connect?.status === 'connected' ? 'flex' : 'none';
+function resolveConnectStatusUrl(entity) {
+  const arenaUrl = String(entity?.arenaUrl || '').trim();
+  return arenaUrl || currentConnectStatusUrl();
 }
 
 async function loadPublicOnboarding() {
@@ -190,12 +141,10 @@ generateCmdBtn?.addEventListener('click', async () => {
   try {
     generateCmdBtn.disabled = true;
     statusEl.textContent = 'Preparing your one-time connect message...';
-    await ensureSession();
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...getSessionAuthHeaders(),
       },
       body: JSON.stringify({}),
     });
@@ -263,7 +212,7 @@ async function checkConnectionStatus() {
       syncArenaEntryButton();
       refreshFirstWinChecklist();
       const safeAgentName = escapeHtml(data.connect.agentName || 'Your agent');
-      updateShareState(data.connect);
+      const connectPath = resolveConnectStatusUrl(data.connect);
 
       // Celebratory connect moment
       const celebEl = document.createElement('div');
@@ -275,14 +224,14 @@ async function checkConnectionStatus() {
       }
 
       if (data.connect.arena?.runtimeConnected && data.connect.arena?.activeRoomId) {
-        statusEl.textContent = `${safeAgentName} is live now. Check the leaderboard while the match runs.`;
+        statusEl.innerHTML = `${safeAgentName} is currently in a Mafia match. <a href="${escapeHtml(connectPath)}">Open Connect</a>`;
         return;
       }
       if (data.connect.arena?.runtimeConnected) {
-        statusEl.textContent = `${safeAgentName} is online and waiting for enough agents to open the next table.`;
+        statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(connectPath)}">Open Connect</a>`;
         return;
       }
-      statusEl.textContent = `${safeAgentName} is registered. Waiting for the runtime to come online.`;
+      statusEl.textContent = `${safeAgentName} is registered and permanently bound to this OpenClaw profile. Waiting for the runtime to come online.`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
@@ -290,7 +239,6 @@ async function checkConnectionStatus() {
       statusEl.textContent = 'Session expired. Generate a new one-time message.';
       return;
     }
-    updateShareState(data.connect);
     statusEl.textContent = 'Waiting for OpenClaw to connect...';
   } catch {
     // keep silent during polling jitter
@@ -347,8 +295,8 @@ function renderBadges(badges = []) {
 }
 
 function renderLeaderboardStatus(agent) {
-  if (agent.watchUrl && agent.activeRoomId) {
-    return `<p class="text-xs text-muted mt-8">${agent.id === getConnectedAgentId() ? 'Your agent is live now' : `Live in ${escapeHtml(agent.activeRoomId)}`}</p>`;
+  if (agent.activeRoomId) {
+    return `<p class="text-xs text-muted mt-8">${agent.id === getConnectedAgentId() ? 'Your agent is currently in a match' : 'Currently in a match'}</p>`;
   }
   return `<p class="text-xs text-muted mt-8">Queue: ${escapeHtml(String(agent.queueStatus || 'offline').replaceAll('_', ' '))}</p>`;
 }
@@ -565,13 +513,13 @@ function renderLeaderboardEntries(agents, connectedAgentId) {
 function refreshFirstWinChecklist() {
   const stepInstall = document.getElementById('stepInstall');
   const stepMessage = document.getElementById('stepMessage');
-  const stepWatch = document.getElementById('stepWatch');
-  if (!stepInstall && !stepMessage && !stepWatch) return;
+  const stepArena = document.getElementById('stepWatch');
+  if (!stepInstall && !stepMessage && !stepArena) return;
 
   const hasGenerated = Boolean(connectSessionId || getStoredValue(STORAGE_KEYS.hasGeneratedCommand) === '1');
   const hasInstalled = getStoredValue(STORAGE_KEYS.connectorInstalled) === '1' || Boolean(getConnectedAgentId());
   const hasConnected = Boolean(getConnectedAgentId());
-  const hasViewedArena = hasConnected || getStoredValue(STORAGE_KEYS.viewedWatch) === '1';
+  const hasViewedArena = getStoredValue(STORAGE_KEYS.viewedArena) === '1' || hasConnected;
 
   function mark(el, done, label) {
     if (!el) return;
@@ -580,7 +528,7 @@ function refreshFirstWinChecklist() {
   }
   mark(stepInstall, hasInstalled, 'Prepare this OpenClaw once');
   mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time connect message');
-  mark(stepWatch, hasViewedArena, 'Check the leaderboard');
+  mark(stepArena, hasViewedArena, 'Open Connect');
 }
 
 async function loadLeaderboard(windowKey = currentLeaderboardWindow) {
@@ -619,11 +567,6 @@ function roomModeLabel(mode) {
   return 'Agent Mafia';
 }
 
-function roomArenaUrl(room) {
-  void room;
-  return '/leaderboard.html';
-}
-
 function pickRandomRoom(rooms) {
   if (!Array.isArray(rooms) || !rooms.length) return null;
   return rooms[Math.floor(Math.random() * rooms.length)];
@@ -631,7 +574,7 @@ function pickRandomRoom(rooms) {
 
 function syncArenaEntryButton() {
   if (!startArenaBtn) return;
-  startArenaBtn.textContent = getConnectedAgentId() ? 'Deploy another agent' : 'Deploy an agent';
+  startArenaBtn.textContent = getConnectedAgentId() ? 'Open Connect' : 'Send in your agent';
 }
 
 function setArenaEntryStatus(message) {
@@ -642,6 +585,19 @@ function setArenaEntryStatus(message) {
 
 function publicArenaRequiredAgents(summary) {
   return Number(summary?.arena?.requiredAgents || 6);
+}
+
+function publicStatusAction() {
+  if (getConnectedAgentId()) {
+    return {
+      href: currentConnectStatusUrl(),
+      text: 'Open Connect',
+    };
+  }
+  return {
+    href: '/connect.html',
+    text: 'Connect your OpenClaw',
+  };
 }
 
 leaderboardWindowControls?.addEventListener('click', async (event) => {
@@ -684,9 +640,10 @@ async function loadLiveRooms() {
       liveRoomsSummary.style.display = 'block';
     }
 
+    const statusAction = publicStatusAction();
     if (randomLiveRoomBtn) {
-      randomLiveRoomBtn.href = '/leaderboard.html';
-      randomLiveRoomBtn.textContent = 'Open leaderboard';
+      randomLiveRoomBtn.href = statusAction.href;
+      randomLiveRoomBtn.textContent = statusAction.text;
     }
 
     if (pulseMission) {
@@ -694,10 +651,10 @@ async function loadLiveRooms() {
       if (randomRoom) {
         const hostReady = randomRoom.launchReadiness?.hostConnected ? 'Host is online.' : 'Host reconnecting soon.';
         pulseMission.style.display = 'block';
-        if (pulseTitle) pulseTitle.textContent = `Room ${randomRoom.roomId} is live right now`;
-        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Use the leaderboard to track the active ecosystem.`;
-        if (pulseJoinBtn) pulseJoinBtn.href = roomArenaUrl(randomRoom);
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Open leaderboard';
+        if (pulseTitle) pulseTitle.textContent = 'A live Mafia table is in progress';
+        if (pulseCopy) pulseCopy.textContent = `${hostReady} ${Number(randomRoom.players || 0)}/${requiredAgents} seats are active. Public transcript access is disabled, but you can still check your own agent status.`;
+        if (pulseJoinBtn) pulseJoinBtn.href = statusAction.href;
+        if (pulseJoinBtn) pulseJoinBtn.textContent = statusAction.text;
         if (pulseMeta) pulseMeta.textContent = `${randomRoom.players}/${requiredAgents} agents · ${randomRoom.hotLobby ? 'Hot lobby 🔥' : escapeHtml(randomRoom.phase || 'Live now')}`;
       } else {
         const arena = data.summary?.arena || {};
@@ -706,8 +663,8 @@ async function loadLiveRooms() {
         if (pulseCopy) pulseCopy.textContent = arena.connectedAgents
           ? `There are ${Number(arena.connectedAgents || 0)} connected agents online. Connect ${Number(arena.missingAgents || 0)} more to open the next ${requiredAgents}-agent table.`
           : 'No connected agents are online yet. Connect an OpenClaw agent to help open the first table.';
-        if (pulseJoinBtn) pulseJoinBtn.href = '/connect.html';
-        if (pulseJoinBtn) pulseJoinBtn.textContent = 'Deploy an agent';
+        if (pulseJoinBtn) pulseJoinBtn.href = statusAction.href;
+        if (pulseJoinBtn) pulseJoinBtn.textContent = statusAction.text;
         if (pulseMeta) pulseMeta.textContent = 'Agent-only launch · no guest seats · no simulated bots';
       }
     }
@@ -717,16 +674,12 @@ async function loadLiveRooms() {
       const launchLine = launch.hostConnected
         ? 'Host online'
         : 'Host reconnecting';
-      void room.mode;
-      void room.roomId;
       return `
       <article>
-        <h3>${escapeHtml(roomModeLabel(room.mode))} · ${escapeHtml(room.roomId)}${room.hotLobby ? ' 🔥' : ''}</h3>
+        <h3>${escapeHtml(roomModeLabel(room.mode))}${room.hotLobby ? ' 🔥' : ''}</h3>
         <p>${Number(room.players || 0)}/${publicArenaRequiredAgents(data.summary || {})} agents · ${escapeHtml(room.phase || 'lobby')} phase</p>
         <p>${launchLine}${room.hotLobby ? ' · players are actively cycling rematches' : ''}</p>
-        <div class="cta-row">
-          <a class="btn btn-primary" href="/leaderboard.html">Open leaderboard</a>
-        </div>
+        <p class="text-sm text-muted">Status only. Public transcript access is disabled.</p>
       </article>
     `;
     }).join('') || '<p>No live agent-only Mafia rooms yet. Connect more OpenClaw agents to open the first table.</p>';
@@ -740,27 +693,20 @@ refreshLiveRoomsBtn?.addEventListener('click', async () => {
   await loadLiveRooms();
 });
 
-liveRoomsList?.addEventListener('click', (e) => {
-  const link = e.target.closest('a[href="/leaderboard.html"]');
-  if (!link) return;
-  setStoredValue(STORAGE_KEYS.viewedWatch, '1');
-  refreshFirstWinChecklist();
-});
-
 pulseJoinBtn?.addEventListener('click', () => {
   setStoredValue(STORAGE_KEYS.viewedWatch, '1');
   refreshFirstWinChecklist();
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back here to connect another agent.');
+  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back to Connect.');
   window.location.href = '/connect.html';
 });
 
 refreshFirstWinChecklist();
 
-if (document.body.classList.contains('page-watch-owner')) {
-  setStoredValue(STORAGE_KEYS.viewedWatch, '1');
+if (document.body.classList.contains('page-connect') && getConnectedAgentId()) {
+  setStoredValue(STORAGE_KEYS.viewedArena, '1');
   refreshFirstWinChecklist();
 }
 
@@ -805,6 +751,7 @@ if (document.body.classList.contains('page-home')) {
   fetch(`${API_BASE}/api/stats`).then(r => r.json()).then(data => {
     if (!data.ok) return;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('heroAgentCount', data.uniqueAgents || 0);
     set('statAgents', data.uniqueAgents || 0);
     set('statGames', data.totalGames || 0);
     set('statClawsKilled', data.mafiasCaught || 0);

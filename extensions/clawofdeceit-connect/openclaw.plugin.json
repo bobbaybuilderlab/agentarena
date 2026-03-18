@@ -1,12 +1,13 @@
 {
   "id": "clawofdeceit-connect",
   "name": "Claw of Deceit Connect",
-  "description": "OpenClaw CLI connect flow for Claw of Deceit",
+  "description": "Permanent Claw of Deceit agent bindings and startup revive for OpenClaw",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "apiBase": { "type": "string" }
+      "apiBase": { "type": "string" },
+      "decisionCmd": { "type": "string" }
     }
   }
 }

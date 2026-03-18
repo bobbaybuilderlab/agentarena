@@ -42,14 +42,41 @@ const {
   getSessionByToken,
   createAnonymousUser,
   createSession,
+  upgradeUser,
+  deleteSessionsByUserId,
+  incrementMetricCounter,
+  getMetricCounters,
+  saveOpsSnapshot,
+  getOpsSnapshot,
+  upsertAgentRecord,
+  getAgentRecordById,
+  archiveAgentRecord,
+  listAgentRecordsByOwnerUserId,
+  listAllAgentRecords,
+  reassignAgentRecordsToOwner,
+  createOrRotateAgentRuntimeCredential,
+  getAgentRuntimeCredential,
+  touchAgentRuntimeCredential,
+  revokeAgentRuntimeCredential,
+  createMagicLinkTokenRecord,
+  consumeMagicLinkTokenRecord,
   createReport,
   getReports,
   updateReportStatus,
   getMatch,
+  recordKpiRoomEvent,
+  listKpiRoomEvents,
+  cleanupExpiredRecords,
   getDatabaseHealth,
   closeDb,
+  resetFallbackPersistence,
 } = require('./server/db');
+const {
+  getConnectSession,
+  isConnectSessionExpired,
+} = require('./server/services/connect-sessions');
 const { buildResolvedPersona } = require('./extensions/clawofdeceit-connect/style-presets.cjs');
+const { hashSecret, secretMatches, randomSecret } = require('./server/services/secret-tokens');
 const {
   DEFAULT_MMR,
   buildDefaultRatingSnapshot,
@@ -65,6 +92,14 @@ function normalizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
 
+function readBooleanEnv(name, fallback) {
+  const raw = String(process.env[name] || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
 function clampIntensity(value, fallback = 6) {
   const numeric = Number(value);
   return Math.max(1, Math.min(10, Number.isFinite(numeric) ? numeric : fallback));
@@ -77,6 +112,14 @@ function buildArenaPersona({ style, presetId, intensity } = {}) {
     presetId: resolved.presetId,
     intensity: clampIntensity(intensity, 6),
   };
+}
+
+function normalizeAgentNameKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isArchivedAgentProfile(agent) {
+  return String(agent?.lifecycleState || agent?.lifecycle_state || '').trim().toLowerCase() === 'archived';
 }
 
 function ensureAgentRatingMirror(agent) {
@@ -130,12 +173,23 @@ const server = http.createServer(app);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL || '');
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
+const MAGIC_LINK_FROM_RAW = String(process.env.MAGIC_LINK_FROM || '').trim();
+const MAGIC_LINK_FROM = MAGIC_LINK_FROM_RAW || 'Claw of Deceit <noreply@clawofdeceit.com>';
+const PUBLIC_ROOM_EVENT_ROUTES_ENABLED = readBooleanEnv('PUBLIC_ROOM_EVENT_ROUTES', !IS_PRODUCTION);
+const ROOM_EVENT_FILE_PERSISTENCE_ENABLED = readBooleanEnv('ROOM_EVENT_FILE_PERSISTENCE', !IS_PRODUCTION);
 
 if (IS_PRODUCTION && !PUBLIC_APP_URL) {
   throw new Error('PUBLIC_APP_URL is required when NODE_ENV=production');
 }
 if (IS_PRODUCTION && !DATABASE_URL) {
-  console.warn('[startup] DATABASE_URL not set; using in-memory fallback (not durable)');
+  throw new Error('DATABASE_URL is required when NODE_ENV=production');
+}
+if (IS_PRODUCTION && !RESEND_API_KEY) {
+  throw new Error('RESEND_API_KEY is required when NODE_ENV=production');
+}
+if (IS_PRODUCTION && !MAGIC_LINK_FROM_RAW) {
+  throw new Error('MAGIC_LINK_FROM is required when NODE_ENV=production');
 }
 const PRODUCTION_ORIGINS = [PUBLIC_APP_URL].filter(Boolean);
 const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4173', 'http://127.0.0.1:4173'];
@@ -232,7 +286,10 @@ const HOST = process.env.HOST || undefined;
 const mafiaRooms = mafiaGame.createStore();
 
 const roomScheduler = createRoomScheduler();
-const roomEvents = createRoomEventLog({ dataDir: path.join(__dirname, 'data') });
+const roomEvents = createRoomEventLog({
+  dataDir: path.join(__dirname, 'data'),
+  persistToFile: ROOM_EVENT_FILE_PERSISTENCE_ENABLED,
+});
 const playRoomTelemetry = new Map();
 const pendingQuickJoinTickets = new Map();
 const reconnectClaimTickets = new Map();
@@ -245,6 +302,11 @@ const publicArenaRecentCoPlayers = new Map();
 
 function clearAllGameTimers() {
   roomScheduler.clearAll();
+  roomEvents.clear();
+  resetPlayTelemetry();
+  growthMetrics = buildEmptyGrowthMetrics();
+  growthMetricsLoaded = false;
+  resetFallbackPersistence();
 }
 
 const {
@@ -286,7 +348,18 @@ const AMPLITUDE_EVENT_MAP = {
 
 function logRoomEvent(mode, room, type, payload = {}) {
   if (!room?.id) return;
-  roomEvents.append(mode, room.id, type, payload);
+  const event = roomEvents.append(mode, room.id, type, payload);
+
+  if (KPI_ROOM_EVENT_TYPES.has(type)) {
+    void recordKpiRoomEvent({
+      mode,
+      roomId: room.id,
+      type,
+      createdAt: event?.at || Date.now(),
+    }).catch((err) => {
+      logStructured('error.recordKpiRoomEvent', { error: err.message, mode, roomId: room.id, type });
+    });
+  }
 
   // Track to Amplitude
   const amplitudeEvent = AMPLITUDE_EVENT_MAP[type];
@@ -529,8 +602,6 @@ function appendMafiaDiscussionMessage(room, player, text, { phase, day } = {}) {
   });
   return event;
 }
-
-const LIVE_AGENT_FALLBACK_DISCUSSION_MESSAGE = 'I\'m locking a public read before the vote.';
 
 function normalizeDiscussionTurnAction(type, rawMessage) {
   const normalizedType = String(type || '').trim();
@@ -786,33 +857,68 @@ io.on('connection', (socket) => {
     next();
   });
   socket.on('agent:runtime:register', async (payload, cb) => {
-    const token = String(payload?.token || '').trim();
-    const proof = String(payload?.proof || '').trim();
-    const connect = connectSessions.get(token);
-    if (!connect) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_NOT_FOUND', message: 'connect session not found' } });
-    if (Date.now() > (connect.expiresAt || 0)) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_EXPIRED', message: 'connect session expired' } });
-    if (!proof || (proof !== connect.callbackProof && proof !== connect.accessToken)) {
-      return cb?.({ ok: false, error: { code: 'INVALID_RUNTIME_PROOF', message: 'invalid runtime proof' } });
-    }
-    if (!connect.agentId) return cb?.({ ok: false, error: { code: 'AGENT_NOT_READY', message: 'agent profile not ready yet' } });
+    const runtimeAgentId = String(payload?.agentId || '').trim();
+    const runtimeSecret = String(payload?.runtimeSecret || '').trim();
+    const legacyToken = String(payload?.token || '').trim();
+    const legacyProof = String(payload?.proof || '').trim();
 
-    const agent = agentProfiles.get(connect.agentId);
-    if (!agent) return cb?.({ ok: false, error: { code: 'AGENT_NOT_FOUND', message: 'agent not found' } });
+    let agent = null;
+    let connect = null;
+    let authMode = '';
+
+    if (runtimeAgentId && runtimeSecret) {
+      const verified = await verifyAgentRuntimeCredential(runtimeAgentId, runtimeSecret);
+      if (!verified) {
+        return cb?.({ ok: false, error: { code: 'INVALID_RUNTIME_CREDENTIAL', message: 'invalid runtime credential' } });
+      }
+      agent = await ensureAgentProfileLoaded(runtimeAgentId);
+      if (!agent) return cb?.({ ok: false, error: { code: 'AGENT_NOT_FOUND', message: 'agent not found' } });
+      if (isArchivedAgentProfile(agent)) {
+        return cb?.({ ok: false, error: { code: 'AGENT_ARCHIVED', message: 'agent archived' } });
+      }
+      authMode = 'runtime_secret';
+    } else {
+      connect = await getConnectSession(connectSessions, legacyToken);
+      if (!connect) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_NOT_FOUND', message: 'connect session not found' } });
+      if (isConnectSessionExpired(connect)) return cb?.({ ok: false, error: { code: 'CONNECT_SESSION_EXPIRED', message: 'connect session expired' } });
+      const proofMatches = legacyProof
+        && (
+          legacyProof === String(connect.callbackProof || '').trim()
+          || legacyProof === String(connect.accessToken || '').trim()
+          || secretMatches(legacyProof, connect.callbackProofHash)
+          || secretMatches(legacyProof, connect.accessTokenHash)
+        );
+      if (!proofMatches) {
+        return cb?.({ ok: false, error: { code: 'INVALID_RUNTIME_PROOF', message: 'invalid runtime proof' } });
+      }
+      if (!connect.agentId) return cb?.({ ok: false, error: { code: 'AGENT_NOT_READY', message: 'agent profile not ready yet' } });
+      agent = await ensureAgentProfileLoaded(connect.agentId);
+      if (!agent) return cb?.({ ok: false, error: { code: 'AGENT_NOT_FOUND', message: 'agent not found' } });
+      if (isArchivedAgentProfile(agent)) {
+        return cb?.({ ok: false, error: { code: 'AGENT_ARCHIVED', message: 'agent archived' } });
+      }
+      authMode = 'legacy_connect_session';
+    }
 
     const prior = getAgentRuntime(agent.id);
     if (prior?.socketId && prior.socketId !== socket.id) {
       io.sockets.sockets.get(prior.socketId)?.disconnect(true);
     }
 
-    socket.data.agentRuntime = { agentId: agent.id, connectSessionId: connect.id };
+    socket.data.agentRuntime = {
+      agentId: agent.id,
+      connectSessionId: connect?.id || null,
+      authMode,
+    };
     agentRuntimeSockets.set(socket.id, agent.id);
     setAgentRuntimeStatus(agent.id, 'idle', {
       connected: true,
       socketId: socket.id,
-      connectSessionId: connect.id,
+      connectSessionId: connect?.id || null,
       connectedAt: Date.now(),
     });
     markAgentProfileConnection(agent.id, true, 'live runtime connected');
+    await syncAgentProfileToPersistence(agent);
     persistState();
     await processPublicArenaQueue();
     cb?.({
@@ -980,8 +1086,10 @@ io.on('connection', (socket) => {
     if (!player || !player.isLiveAgent) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Player is not a live agent seat' } });
     if (player.socketId !== socket.id) return cb?.({ ok: false, error: { code: 'PLAYER_FORBIDDEN', message: 'Cannot act as another player' } });
     if (phase && phase !== room.phase) return cb?.({ ok: false, error: { code: 'STALE_PHASE', message: 'Decision does not match current phase' } });
-    if (room.phase === 'discussion' && turnId && turnId !== room.discussion?.turnId) {
-      return cb?.({ ok: false, error: { code: 'STALE_TURN', message: 'Decision does not match current discussion turn' } });
+    if (room.phase === 'discussion') {
+      if (!turnId || turnId !== room.discussion?.turnId || (room.discussion?.turnEndsAt && room.discussion.turnEndsAt <= Date.now())) {
+        return cb?.({ ok: false, error: { code: 'STALE_TURN', message: 'Decision does not match current discussion turn' } });
+      }
     }
 
     const transcriptPhase = room.phase;
@@ -1013,6 +1121,11 @@ io.on('connection', (socket) => {
         });
       }
       completeMafiaDiscussionTurn(result.room, { spoke: Boolean(transcriptMessage) });
+    } else if (transcriptMessage) {
+      appendMafiaDiscussionMessage(result.room, player, transcriptMessage, {
+        phase: transcriptPhase,
+        day: transcriptDay,
+      });
     }
     recordRoomWinner('mafia', result.room);
     if (result.room.status === 'finished') recordFirstMatchCompletion('mafia', result.room.id);
@@ -1048,6 +1161,7 @@ io.on('connection', (socket) => {
           socketId: null,
         });
         markAgentProfileConnection(runtimeAgentId, false, 'live runtime disconnected');
+        void syncAgentProfileToPersistence(agentProfiles.get(runtimeAgentId));
         persistState();
 
         if (runtime.currentRoomId && runtime.currentPlayerId) {
@@ -1145,7 +1259,29 @@ app.use((req, _res, next) => {
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
 const ROOM_EVENTS_FILE = path.join(DATA_DIR, 'room-events.ndjson');
-const GROWTH_METRICS_FILE = path.join(__dirname, 'growth-metrics.json');
+const GROWTH_METRICS_SNAPSHOT_NAME = 'growth_metrics_all_time';
+const MAINTENANCE_CLEANUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(process.env.MAINTENANCE_CLEANUP_INTERVAL_MS || 60 * 60 * 1000));
+const SESSION_RETENTION_GRACE_MS = Math.max(0, Number(process.env.SESSION_RETENTION_GRACE_MS || 7 * 24 * 60 * 60 * 1000));
+const CONNECT_SESSION_RETENTION_GRACE_MS = Math.max(0, Number(process.env.CONNECT_SESSION_RETENTION_GRACE_MS || 7 * 24 * 60 * 60 * 1000));
+const MAGIC_LINK_RETENTION_GRACE_MS = Math.max(0, Number(process.env.MAGIC_LINK_RETENTION_GRACE_MS || 7 * 24 * 60 * 60 * 1000));
+
+const KPI_ROOM_EVENT_TYPES = new Set([
+  'ROOM_CREATED',
+  'PLAYER_JOINED',
+  'GAME_STARTED',
+  'REMATCH_STARTED',
+  'LOBBY_START_READY',
+  'LOBBY_AUTOFILLED',
+]);
+
+const DURABLE_GROWTH_METRIC_PATHS = [
+  'funnel.visits',
+  'funnel.quickJoinStarts',
+  'funnel.connectSessionStarts',
+  'funnel.firstMatchesCompleted',
+  'funnel.rematchStarts',
+  'referral.inviteSends',
+];
 
 const agentProfiles = new Map();
 // pair vote caps removed: agent voting is unlimited except self/owner restrictions
@@ -1155,6 +1291,31 @@ const completedMatchRooms = new Set();
 const COMPLETED_MATCH_RECORD_CAP = 500;
 const IN_MEMORY_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 let growthMetrics = null;
+let growthMetricsLoaded = false;
+const maintenanceState = {
+  cleanup: {
+    lastRunAt: null,
+    lastCompletedAt: null,
+    durationMs: null,
+    lastError: null,
+    deleted: {
+      sessions: 0,
+      connectSessions: 0,
+      magicLinkTokens: 0,
+      cachedSessions: 0,
+      cachedConnectSessions: 0,
+    },
+  },
+};
+
+function readFileSizeBytes(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return 0;
+    return fs.statSync(filePath).size;
+  } catch (_err) {
+    return null;
+  }
+}
 
 function expiresAtFromNow(ttlMs = IN_MEMORY_SESSION_TTL_MS) {
   return new Date(Date.now() + ttlMs).toISOString();
@@ -1181,32 +1342,388 @@ function getCachedSession(token) {
   return cached;
 }
 
-function clearCachedSession(token) {
-  const normalizedToken = String(token || '').trim();
-  if (!normalizedToken) return false;
-  return sessions.delete(normalizedToken);
+function toTimestampMs(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function loadGrowthMetrics() {
+function cleanupExpiredCachedSessions(graceMs = SESSION_RETENTION_GRACE_MS) {
+  const cutoffMs = Date.now() - Math.max(0, Number(graceMs) || 0);
+  let deleted = 0;
+  for (const [token, session] of sessions.entries()) {
+    if (toTimestampMs(session?.expiresAt || session?.expires_at) > cutoffMs) continue;
+    sessions.delete(token);
+    deleted += 1;
+  }
+  return deleted;
+}
+
+function cleanupExpiredCachedConnectSessions(graceMs = CONNECT_SESSION_RETENTION_GRACE_MS) {
+  const cutoffMs = Date.now() - Math.max(0, Number(graceMs) || 0);
+  let deleted = 0;
+  for (const [id, connect] of connectSessions.entries()) {
+    if (toTimestampMs(connect?.expiresAt || connect?.expires_at) > cutoffMs) continue;
+    connectSessions.delete(id);
+    deleted += 1;
+  }
+  return deleted;
+}
+
+async function cleanupExpiredPersistence() {
+  const startedAt = Date.now();
+  maintenanceState.cleanup.lastRunAt = new Date(startedAt).toISOString();
+
   try {
-    if (!fs.existsSync(GROWTH_METRICS_FILE)) {
-      growthMetrics = persistGrowthMetricsSnapshot();
-      return;
-    }
-    growthMetrics = JSON.parse(fs.readFileSync(GROWTH_METRICS_FILE, 'utf8'));
-  } catch (_err) {
-    growthMetrics = persistGrowthMetricsSnapshot();
+    const deleted = await cleanupExpiredRecords({
+      sessionGraceMs: SESSION_RETENTION_GRACE_MS,
+      connectSessionGraceMs: CONNECT_SESSION_RETENTION_GRACE_MS,
+      magicLinkGraceMs: MAGIC_LINK_RETENTION_GRACE_MS,
+      now: startedAt,
+    });
+    const cachedSessionsDeleted = cleanupExpiredCachedSessions(SESSION_RETENTION_GRACE_MS);
+    const cachedConnectSessionsDeleted = cleanupExpiredCachedConnectSessions(CONNECT_SESSION_RETENTION_GRACE_MS);
+    maintenanceState.cleanup.lastCompletedAt = new Date().toISOString();
+    maintenanceState.cleanup.durationMs = Date.now() - startedAt;
+    maintenanceState.cleanup.lastError = null;
+    maintenanceState.cleanup.deleted = {
+      sessions: Number(deleted.sessions || 0),
+      connectSessions: Number(deleted.connectSessions || 0),
+      magicLinkTokens: Number(deleted.magicLinkTokens || 0),
+      cachedSessions: cachedSessionsDeleted,
+      cachedConnectSessions: cachedConnectSessionsDeleted,
+    };
+    logStructured('maintenance.cleanup', {
+      ...maintenanceState.cleanup.deleted,
+      durationMs: maintenanceState.cleanup.durationMs,
+    });
+    return maintenanceState.cleanup.deleted;
+  } catch (error) {
+    maintenanceState.cleanup.lastCompletedAt = new Date().toISOString();
+    maintenanceState.cleanup.durationMs = Date.now() - startedAt;
+    maintenanceState.cleanup.lastError = error.message;
+    logStructured('error.maintenanceCleanup', { error: error.message });
+    throw error;
   }
 }
 
-function incrementGrowthMetric(path, amount = 1) {
-  if (!growthMetrics) loadGrowthMetrics();
+function mergePersistedAgentRecord(record) {
+  if (!record?.id) return null;
+  const existing = agentProfiles.get(record.id) || null;
+  const connectedAt = existing?.openclaw?.connectedAt || toTimestampMs(record.lastConnectedAt || record.last_connected_at) || null;
+  const openclaw = {
+    ...(existing?.openclaw || {}),
+    mode: existing?.openclaw?.mode || 'cli',
+    connected: Boolean(existing?.openclaw?.connected),
+    connectedAt,
+    note: record.openclawNote || record.openclaw_note || existing?.openclaw?.note || null,
+  };
+  const merged = ensureAgentRatingMirror({
+    ...(existing || {}),
+    id: record.id,
+    owner: record.ownerEmail || record.owner_email || existing?.owner || null,
+    ownerUserId: record.ownerUserId || record.owner_user_id || null,
+    name: record.name || existing?.name || record.id,
+    nameNormalized: record.nameNormalized || record.name_normalized || existing?.nameNormalized || normalizeAgentNameKey(record.name || existing?.name || record.id),
+    deployed: record.deployed !== false,
+    lifecycleState: record.lifecycleState || record.lifecycle_state || existing?.lifecycleState || 'active',
+    archivedAt: record.archivedAt || record.archived_at || existing?.archivedAt || null,
+    karma: Number(record.karma || existing?.karma || 0),
+    persona: record.persona || existing?.persona || null,
+    openclaw,
+    createdAt: toTimestampMs(record.created_at) || existing?.createdAt || Date.now(),
+  });
+  agentProfiles.set(merged.id, merged);
+  return merged;
+}
+
+async function syncAgentProfileToPersistence(agent) {
+  if (!agent?.id) return null;
+  const persisted = await upsertAgentRecord(agent);
+  if (persisted) return mergePersistedAgentRecord(persisted);
+  return agent;
+}
+
+async function ensureAgentProfileLoaded(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  const cached = agentProfiles.get(cleanAgentId);
+  if (cached) return cached;
+  const persisted = await getAgentRecordById(cleanAgentId);
+  if (!persisted) return null;
+  return mergePersistedAgentRecord(persisted);
+}
+
+async function hydratePersistedAgents() {
+  for (const agent of [...agentProfiles.values()]) {
+    await upsertAgentRecord(agent);
+  }
+  const persistedAgents = await listAllAgentRecords();
+  for (const record of persistedAgents) mergePersistedAgentRecord(record);
+}
+
+async function issueAgentRuntimeCredential(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+  const runtimeSecret = randomSecret(24);
+  await createOrRotateAgentRuntimeCredential(cleanAgentId, hashSecret(runtimeSecret));
+  return {
+    agentId: cleanAgentId,
+    runtimeSecret,
+  };
+}
+
+async function verifyAgentRuntimeCredential(agentId, runtimeSecret) {
+  const cleanAgentId = String(agentId || '').trim();
+  const cleanSecret = String(runtimeSecret || '').trim();
+  if (!cleanAgentId || !cleanSecret) return false;
+  const credential = await getAgentRuntimeCredential(cleanAgentId);
+  if (!credential || credential.revoked_at) return false;
+  if (!secretMatches(cleanSecret, credential.secret_hash)) return false;
+  await touchAgentRuntimeCredential(cleanAgentId);
+  return true;
+}
+
+async function authorizeBoundAgentRequest(req) {
+  const agentId = String(req.params?.id || req.headers['x-openclaw-agent-id'] || '').trim();
+  const agentToken = String(
+    readBearerToken(req)
+      || req.headers['x-openclaw-agent-token']
+      || req.headers['x-agent-token']
+      || ''
+  ).trim();
+  if (!agentId || !agentToken) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Agent token required',
+      code: 'AGENT_AUTH_REQUIRED',
+    };
+  }
+
+  const verified = await verifyAgentRuntimeCredential(agentId, agentToken);
+  if (!verified) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Invalid agent token',
+      code: 'INVALID_AGENT_TOKEN',
+    };
+  }
+
+  const agent = await ensureAgentProfileLoaded(agentId);
+  if (!agent) {
+    return {
+      ok: false,
+      status: 404,
+      error: 'agent not found',
+      code: 'AGENT_NOT_FOUND',
+    };
+  }
+  if (isArchivedAgentProfile(agent)) {
+    return {
+      ok: false,
+      status: 410,
+      error: 'agent archived',
+      code: 'AGENT_ARCHIVED',
+    };
+  }
+
+  return { ok: true, agent };
+}
+
+async function archiveBoundAgent(agentId) {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return null;
+
+  const runtime = getAgentRuntime(cleanAgentId);
+  if (runtime?.socketId) {
+    io.sockets.sockets.get(runtime.socketId)?.disconnect(true);
+  }
+  setAgentRuntimeStatus(cleanAgentId, 'offline', {
+    connected: false,
+    socketId: null,
+    currentRoomId: null,
+    currentPlayerId: null,
+  });
+
+  await revokeAgentRuntimeCredential(cleanAgentId);
+
+  const agent = await ensureAgentProfileLoaded(cleanAgentId);
+  if (!agent) return null;
+  agent.deployed = false;
+  agent.lifecycleState = 'archived';
+  agent.archivedAt = new Date().toISOString();
+  markAgentProfileConnection(cleanAgentId, false, 'agent archived');
+
+  const persisted = await archiveAgentRecord(cleanAgentId);
+  if (persisted) mergePersistedAgentRecord(persisted);
+  await syncAgentProfileToPersistence(agent);
+  persistState();
+  return agentProfiles.get(cleanAgentId) || agent;
+}
+
+function buildGrowthMetricsPayload(report, durableCounters = {}) {
+  const counterValue = (key) => Math.max(0, Number(durableCounters?.[key] || 0));
+  return {
+    updatedAt: new Date().toISOString(),
+    window: 'all_time',
+    funnel: {
+      visits: counterValue('funnel.visits'),
+      connectSessionStarts: counterValue('funnel.connectSessionStarts'),
+      quickJoinStarts: counterValue('funnel.quickJoinStarts'),
+      firstMatchesCompleted: counterValue('funnel.firstMatchesCompleted'),
+      rematchStarts: counterValue('funnel.rematchStarts'),
+      d1ReturnRate: report.rematch.retentionProxy,
+    },
+    referral: {
+      inviteSends: counterValue('referral.inviteSends'),
+      inviteToFirstMatchConversion: 0,
+    },
+    kpi: {
+      activationRate: report.funnel.activationRate,
+      roomStartRate: report.funnel.roomStartRate,
+      reconnectSuccessRate: report.reconnect.successRate,
+      rematchRate: report.rematch.rematchRate,
+      retentionProxy: report.rematch.retentionProxy,
+      quickJoinConversionRate: report.quickJoin.conversionRate,
+      fairnessSocketSeatCapBlockRate: report.fairness?.socketSeatCapBlockRate || 0,
+    },
+    fairness: report.fairness,
+    byMode: report.byMode,
+    sample: report.sample,
+    notes: 'Auto-generated from durable counters + KPI room events + in-memory play telemetry via /api/ops/kpis.',
+  };
+}
+
+function readMetricPath(source, path) {
   const [bucket, key] = String(path || '').split('.');
+  if (!bucket || !key) return 0;
+  return Math.max(0, Number(source?.[bucket]?.[key] || 0));
+}
+
+function buildEmptyGrowthMetrics() {
+  return buildGrowthMetricsPayload(buildKpiReport({ events: [], playRoomTelemetry: new Map() }), {});
+}
+
+function mergeDurableGrowthCounters(snapshot, durableCounters = {}) {
+  const base = snapshot && typeof snapshot === 'object' ? snapshot : buildEmptyGrowthMetrics();
+  const updatedAt = new Date(base.updatedAt || base.updated_at || '');
+  return {
+    ...base,
+    updatedAt: Number.isFinite(updatedAt.getTime()) ? updatedAt.toISOString() : new Date().toISOString(),
+    funnel: {
+      ...(base.funnel || {}),
+      visits: Math.max(0, Number(durableCounters['funnel.visits'] || 0)),
+      connectSessionStarts: Math.max(0, Number(durableCounters['funnel.connectSessionStarts'] || 0)),
+      quickJoinStarts: Math.max(0, Number(durableCounters['funnel.quickJoinStarts'] || 0)),
+      firstMatchesCompleted: Math.max(0, Number(durableCounters['funnel.firstMatchesCompleted'] || 0)),
+      rematchStarts: Math.max(0, Number(durableCounters['funnel.rematchStarts'] || 0)),
+    },
+    referral: {
+      ...(base.referral || {}),
+      inviteSends: Math.max(0, Number(durableCounters['referral.inviteSends'] || 0)),
+    },
+  };
+}
+
+async function loadGrowthMetrics() {
+  const emptyMetrics = buildEmptyGrowthMetrics();
+  try {
+    const [snapshotRow, durableCounters] = await Promise.all([
+      getOpsSnapshot(GROWTH_METRICS_SNAPSHOT_NAME),
+      getMetricCounters(DURABLE_GROWTH_METRIC_PATHS),
+    ]);
+    growthMetrics = mergeDurableGrowthCounters(snapshotRow?.payload || emptyMetrics, durableCounters);
+  } catch (err) {
+    logStructured('error.loadGrowthMetrics', { error: err.message });
+    growthMetrics = emptyMetrics;
+  }
+  growthMetricsLoaded = true;
+  return growthMetrics;
+}
+
+function incrementGrowthMetric(path, amount = 1) {
+  if (!growthMetrics) growthMetrics = buildEmptyGrowthMetrics();
+  const cleanPath = String(path || '').trim();
+  const [bucket, key] = cleanPath.split('.');
   if (!bucket || !key) return;
   if (!growthMetrics[bucket] || typeof growthMetrics[bucket] !== 'object') growthMetrics[bucket] = {};
   growthMetrics[bucket][key] = Math.max(0, Number(growthMetrics[bucket][key] || 0) + Number(amount || 0));
   growthMetrics.updatedAt = new Date().toISOString();
-  fs.writeFileSync(GROWTH_METRICS_FILE, JSON.stringify(growthMetrics, null, 2));
+
+  if (DURABLE_GROWTH_METRIC_PATHS.includes(cleanPath)) {
+    void incrementMetricCounter(cleanPath, amount).catch((err) => {
+      logStructured('error.incrementMetricCounter', { error: err.message, path: cleanPath, amount });
+    });
+  }
+}
+
+async function collectKpiEvents() {
+  const deduped = new Map();
+  const addEvent = (event = {}) => {
+    const mode = String(event.mode || '').toLowerCase().trim();
+    const roomId = String(event.roomId || event.room_id || '').toUpperCase().trim();
+    const type = String(event.type || '').trim();
+    if (!mode || !roomId || !type || !KPI_ROOM_EVENT_TYPES.has(type)) return;
+    const key = `${mode}:${roomId}:${type}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, {
+        mode,
+        roomId,
+        type,
+        at: event.at || event.createdAt || event.created_at || Date.now(),
+      });
+    }
+  };
+
+  const persistedEventsPromise = listKpiRoomEvents().catch((err) => {
+    logStructured('error.listKpiRoomEvents', { error: err.message });
+    return [];
+  });
+
+  if (ROOM_EVENT_FILE_PERSISTENCE_ENABLED) {
+    for (const event of loadEvents(ROOM_EVENTS_FILE)) addEvent(event);
+  }
+
+  if (typeof roomEvents.all === 'function') {
+    for (const event of roomEvents.all()) addEvent(event);
+  }
+
+  for (const event of await persistedEventsPromise) addEvent(event);
+
+  return [...deduped.values()];
+}
+
+async function snapshotKpis() {
+  const events = await collectKpiEvents();
+  return buildKpiReport({ events, playRoomTelemetry });
+}
+
+async function persistGrowthMetricsSnapshot() {
+  const [report, durableCounters] = await Promise.all([
+    snapshotKpis(),
+    getMetricCounters(DURABLE_GROWTH_METRIC_PATHS),
+  ]);
+  const mergedCounters = { ...durableCounters };
+  for (const path of DURABLE_GROWTH_METRIC_PATHS) {
+    mergedCounters[path] = Math.max(
+      Math.max(0, Number(durableCounters[path] || 0)),
+      readMetricPath(growthMetrics, path),
+    );
+  }
+  const payload = buildGrowthMetricsPayload(report, mergedCounters);
+  growthMetrics = payload;
+  growthMetricsLoaded = true;
+
+  try {
+    await saveOpsSnapshot(GROWTH_METRICS_SNAPSHOT_NAME, payload);
+  } catch (err) {
+    logStructured('error.saveOpsSnapshot', { error: err.message, name: GROWTH_METRICS_SNAPSHOT_NAME });
+  }
+
+  return payload;
 }
 
 function roundCountForRoom(room) {
@@ -1228,6 +1745,7 @@ function buildMatchRecordFromRoom(mode, roomId, room) {
     partyStreak: Number(room.partyStreak || 0),
     players: (room.players || []).map((player, index) => ({
       userId: player.userId || player.agentId || null,
+      agentId: player.agentId || player.userId || null,
       name: player.name,
       role: player.role || null,
       isBot: Boolean(player.isBot),
@@ -1302,7 +1820,7 @@ function recordFirstMatchCompletion(mode, roomId) {
       const participantIds = normalizePublicArenaParticipantIds(
         (matchRecord.players || [])
           .filter((player) => !player?.isBot)
-          .map((player) => player.userId || null),
+          .map((player) => player.agentId || player.userId || null),
       );
       rememberPublicArenaMatchParticipants(participantIds, matchRecord.id);
     }
@@ -1401,7 +1919,8 @@ function decorateLeaderboardEntry(entry) {
     activeRoomId,
     queueStatus: arena.queueStatus || 'offline',
     runtimeConnected: Boolean(arena.runtimeConnected),
-    watchUrl: buildAgentArenaUrl(entry.id, arena),
+    arenaUrl: buildAgentArenaUrl(entry.id, arena),
+    watchUrl: null,
   };
 }
 
@@ -1825,50 +2344,10 @@ function loadState() {
   }
 }
 
-function snapshotKpis() {
-  const events = loadEvents(ROOM_EVENTS_FILE);
-  return buildKpiReport({ events, playRoomTelemetry });
-}
-
-function persistGrowthMetricsSnapshot() {
-  const report = snapshotKpis();
-  const payload = {
-    updatedAt: report.updatedAt,
-    window: 'all_time',
-    funnel: {
-      visits: report.funnel.created,
-      connectSessionStarts: report.funnel.activationJoined,
-      quickJoinStarts: report.quickJoin.tickets,
-      firstMatchesCompleted: report.funnel.started,
-      rematchStarts: report.rematch.clicked,
-      d1ReturnRate: report.rematch.retentionProxy,
-    },
-    referral: {
-      inviteSends: 0,
-      inviteToFirstMatchConversion: 0,
-    },
-    kpi: {
-      activationRate: report.funnel.activationRate,
-      roomStartRate: report.funnel.roomStartRate,
-      reconnectSuccessRate: report.reconnect.successRate,
-      rematchRate: report.rematch.rematchRate,
-      retentionProxy: report.rematch.retentionProxy,
-      quickJoinConversionRate: report.quickJoin.conversionRate,
-      fairnessSocketSeatCapBlockRate: report.fairness?.socketSeatCapBlockRate || 0,
-    },
-    fairness: report.fairness,
-    byMode: report.byMode,
-    sample: report.sample,
-    notes: 'Auto-generated from room events + in-memory play telemetry via /api/ops/kpis.',
-  };
-
-  fs.writeFileSync(GROWTH_METRICS_FILE, JSON.stringify(payload, null, 2));
-  return payload;
-}
-
 function isPublicRankedAgent(agent) {
   if (!agent) return false;
   if (agent.owner === 'system') return false;
+  if (isArchivedAgentProfile(agent)) return false;
   return true;
 }
 
@@ -1898,9 +2377,9 @@ function buildArenaAvailability() {
 
 function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) {
   const cleanAgentId = String(agentId || '').trim();
-  if (!cleanAgentId) return '/leaderboard.html';
-  void arena;
-  return '/leaderboard.html';
+  if (!cleanAgentId) return '/connect.html';
+  const params = new URLSearchParams({ agentId: cleanAgentId });
+  return `/connect.html?${params.toString()}`;
 }
 
 const accountModule = createAccountModule({
@@ -1917,11 +2396,95 @@ const accountModule = createAccountModule({
   shortId,
 });
 
-const {
-  registerRoutes: registerAccountRoutes,
-  resolveSiteSession,
-  sendRetiredAccountResponse,
-} = accountModule;
+  try {
+    const [session, user] = await Promise.all([
+      getSessionByToken(token),
+      getUserByToken(token),
+    ]);
+    if (session || user) {
+      return {
+        token,
+        userId: user?.id || session?.user_id || null,
+        email: user?.email || null,
+        displayName: user?.display_name || null,
+        agentId: user?.agent_id || null,
+        primaryAgentId: user?.agent_id || null,
+        isAnonymous: !!user?.is_anonymous,
+        expiresAt: session?.expires_at || null,
+        durable: true,
+      };
+    }
+  } catch (err) {
+    logStructured('error.resolveSiteSession', { error: err.message });
+    if (IS_PRODUCTION) return null;
+  }
+
+  // Non-production fallback: check in-memory session cache
+  const fallback = getCachedSession(token);
+  if (!fallback) return null;
+  return {
+    token,
+    userId: fallback.userId || null,
+    email: fallback.email || null,
+    displayName: fallback.displayName || null,
+    agentId: fallback.agentId || null,
+    primaryAgentId: fallback.agentId || null,
+    isAnonymous: !fallback.email,
+    expiresAt: fallback.expiresAt || null,
+    durable: false,
+  };
+}
+
+function updateCachedUserPrimaryAgent(userId, agentId) {
+  for (const session of sessions.values()) {
+    if (session?.expiresAt && isExpiredIso(session.expiresAt)) continue;
+    if (session?.userId === userId) session.agentId = agentId;
+  }
+}
+
+async function rememberUserPrimaryAgent(userId, agentId) {
+  const cleanUserId = String(userId || '').trim();
+  const cleanAgentId = String(agentId || '').trim() || null;
+  if (!cleanUserId) return;
+  try {
+    await setUserAgentId(cleanUserId, cleanAgentId);
+  } catch (err) {
+    logStructured('warn.userPrimaryAgent.persistence_unavailable', {
+      userId: cleanUserId,
+      agentId: cleanAgentId,
+      error: err.message,
+    });
+    if (IS_PRODUCTION) throw err;
+  }
+  updateCachedUserPrimaryAgent(cleanUserId, cleanAgentId);
+}
+
+async function assignAgentOwnerUserId(agentId, ownerUserId, { ifMissing = false } = {}) {
+  const cleanAgentId = String(agentId || '').trim();
+  const cleanUserId = String(ownerUserId || '').trim();
+  if (!cleanAgentId || !cleanUserId) return null;
+
+  const agent = await ensureAgentProfileLoaded(cleanAgentId);
+  if (!agent) return null;
+
+  const existingOwnerUserId = String(agent.ownerUserId || '').trim();
+  if (ifMissing && existingOwnerUserId && existingOwnerUserId !== cleanUserId) return null;
+  if (existingOwnerUserId === cleanUserId) return agent;
+
+  const ownerUser = await getUserById(cleanUserId).catch(() => null);
+  agent.ownerUserId = cleanUserId;
+  if (ownerUser?.email) agent.owner = ownerUser.email;
+  await syncAgentProfileToPersistence(agent);
+  persistState();
+  return agent;
+}
+
+async function rescueLegacyOwnedAgentOwnership(ownerUserId, primaryAgentId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  const cleanAgentId = String(primaryAgentId || '').trim();
+  if (!cleanUserId || !cleanAgentId) return null;
+  return assignAgentOwnerUserId(cleanAgentId, cleanUserId, { ifMissing: true });
+}
 
 function getAgentLastConnectedAt(agent) {
   const runtime = getAgentRuntime(agent?.id);
@@ -1938,6 +2501,30 @@ function toActivityTimestamp(value) {
 function toActivityIso(value) {
   const timestamp = toActivityTimestamp(value);
   return timestamp > 0 ? new Date(timestamp).toISOString() : null;
+}
+
+function compareOwnedAgentSummaries(a, b) {
+  const aLive = Boolean(a?.arena?.activeRoomId);
+  const bLive = Boolean(b?.arena?.activeRoomId);
+  if (aLive !== bLive) return aLive ? -1 : 1;
+
+  const aRuntimeConnected = Boolean(a?.arena?.runtimeConnected);
+  const bRuntimeConnected = Boolean(b?.arena?.runtimeConnected);
+  if (aRuntimeConnected !== bRuntimeConnected) return aRuntimeConnected ? -1 : 1;
+
+  const activityDelta = toActivityTimestamp(b?.activityAt) - toActivityTimestamp(a?.activityAt);
+  if (activityDelta !== 0) return activityDelta;
+
+  return String(a?.name || a?.id || '').localeCompare(String(b?.name || b?.id || ''));
+}
+
+async function listOwnedAgentsForUser(ownerUserId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  if (!cleanUserId) return [];
+  const persistedAgents = await listAgentRecordsByOwnerUserId(cleanUserId).catch(() => []);
+  for (const record of persistedAgents) mergePersistedAgentRecord(record);
+  return [...agentProfiles.values()]
+    .filter((agent) => String(agent?.ownerUserId || '').trim() === cleanUserId);
 }
 
 function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
@@ -1961,7 +2548,8 @@ function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
     name: agent.name,
     deployed: !!agent.deployed,
     persona: agent.persona || null,
-    watchUrl: buildAgentArenaUrl(agent.id, arena),
+    arenaUrl: buildAgentArenaUrl(agent.id, arena),
+    watchUrl: null,
     arena,
     gamesPlayed: Number(stats?.gamesPlayed || 0),
     mmr: Number(stats?.mmr ?? agent.mmr ?? DEFAULT_MMR),
@@ -1973,6 +2561,84 @@ function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
     lastConnectedAt,
     activityAt,
   };
+}
+
+async function listRenderableOwnedAgentsForUser(ownerUserId) {
+  const ownedAgents = await listOwnedAgentsForUser(ownerUserId);
+  if (!ownedAgents.length) return [];
+
+  const summaries = await Promise.all(ownedAgents.map(async (agent) => {
+    const statsBundle = await buildOwnedAgentStats(agent.id);
+    const summary = summarizeOwnedAgentProfile(agent, {
+      stats: statsBundle?.stats || null,
+    });
+    if (!summary) return null;
+
+    if (summary.arena?.runtimeConnected) return summary;
+    if (summary.lastPlayedAt) return summary;
+    if (summary.lastConnectedAt) return summary;
+    if (summary.deployed) return summary;
+    return null;
+  }));
+
+  return summaries.filter(Boolean).sort(compareOwnedAgentSummaries);
+}
+
+async function buildOwnedArenaContext(siteSession, { requestedAgentId = '', includeStats = false } = {}) {
+  if (!siteSession?.userId) {
+    return {
+      primaryAgentId: null,
+      selectedAgentId: null,
+      selectionSource: 'none',
+      agents: [],
+      agent: null,
+      statsBundle: null,
+    };
+  }
+
+  let primaryAgentId = String(siteSession.primaryAgentId || siteSession.agentId || '').trim() || null;
+  if (primaryAgentId) await rescueLegacyOwnedAgentOwnership(siteSession.userId, primaryAgentId);
+
+  const requestedId = String(requestedAgentId || '').trim();
+  const ownedAgents = await listRenderableOwnedAgentsForUser(siteSession.userId);
+  const ownedById = new Map(ownedAgents.map((agent) => [agent.id, agent]));
+
+  let selectedAgent = requestedId ? ownedById.get(requestedId) || null : null;
+  let selectionSource = selectedAgent ? 'query' : 'none';
+
+  if (!selectedAgent && primaryAgentId) {
+    selectedAgent = ownedById.get(primaryAgentId) || null;
+    if (selectedAgent) selectionSource = 'primary';
+  }
+
+  if (!selectedAgent && ownedAgents.length > 0) {
+    selectedAgent = ownedAgents[0];
+    selectionSource = 'auto';
+  }
+
+  if (selectedAgent?.id && selectedAgent.id !== primaryAgentId) {
+    await rememberUserPrimaryAgent(siteSession.userId, selectedAgent.id);
+    primaryAgentId = selectedAgent.id;
+  }
+
+  const agent = selectedAgent || null;
+  return {
+    primaryAgentId,
+    selectedAgentId: agent?.id || null,
+    selectionSource,
+    agents: ownedAgents,
+    agent,
+    statsBundle: includeStats && agent?.id ? await buildOwnedAgentStats(agent.id) : null,
+  };
+}
+
+async function bindOwnedAgent(ownerUserId, agentId) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanUserId || !cleanAgentId) return;
+
+  await assignAgentOwnerUserId(cleanAgentId, cleanUserId);
+  await rememberUserPrimaryAgent(cleanUserId, cleanAgentId);
 }
 
 async function resolveMatchAgentId(rawId) {
@@ -1999,7 +2665,7 @@ function decorateMatchForClient(match) {
   const roomId = String(match?.roomId || match?.room_id || '').trim().toUpperCase();
   return {
     ...match,
-    replayUrl: roomId
+    replayUrl: PUBLIC_ROOM_EVENT_ROUTES_ENABLED && roomId
       ? `/api/rooms/${encodeURIComponent(roomId)}/replay?mode=${encodeURIComponent(normalizedMode)}`
       : null,
   };
@@ -2122,12 +2788,12 @@ function totalRecentCoPlayerPenalty(batch) {
   return total;
 }
 
-function canFillBatchWithoutRecentRepeats(seedAgent, remainingAgents) {
+function canFillBatchWithoutRecentRepeats(seedAgent, remainingAgents, seatsNeeded = PUBLIC_ARENA_REQUIRED_AGENTS - 1) {
   const seed = seedAgent && seedAgent.id ? seedAgent : null;
   const candidates = Array.isArray(remainingAgents)
     ? remainingAgents.filter((agent) => agent?.id && agent.id !== seed?.id)
     : [];
-  if (!seed) return false;
+  if (!seed || seatsNeeded <= 0) return Boolean(seed);
 
   function backtrack(currentBatch, startIndex) {
     if (currentBatch.length >= PUBLIC_ARENA_REQUIRED_AGENTS) return true;
@@ -2428,12 +3094,406 @@ app.post('/api/track/share', (_req, res) => {
   res.json({ ok: true });
 });
 
-registerAccountRoutes(app);
+app.post('/api/auth/session', async (req, res) => {
+  // Check for existing session token
+  const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
+  if (existingToken) {
+    const [siteSession, existing] = await Promise.all([
+      resolveSiteSession({ headers: { authorization: `Bearer ${existingToken}` } }),
+      getSessionByToken(existingToken),
+    ]);
+    if (siteSession?.userId) {
+      const ownedContext = await buildOwnedArenaContext(siteSession);
+      return res.json({
+        ok: true,
+        session: {
+          token: existingToken,
+          userId: siteSession.userId || existing?.user_id || null,
+          agentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
+          primaryAgentId: ownedContext.primaryAgentId || siteSession?.primaryAgentId || siteSession?.agentId || null,
+          isAnonymous: siteSession?.isAnonymous !== false,
+          expiresAt: siteSession?.expiresAt || existing?.expires_at || null,
+          durable: siteSession?.durable !== false,
+        },
+        ownedAgent: ownedContext.agent,
+        ownedAgents: ownedContext.agents,
+        selectedAgentId: ownedContext.selectedAgentId,
+        renewed: true,
+      });
+    }
+  }
+
+  // Create anonymous user + session
+  const userId = shortId(12);
+  const token = shortId(24);
+  const expiresAt = expiresAtFromNow();
+
+  try {
+    await createAnonymousUser(userId);
+    await createSession(shortId(8), userId, token, expiresAt);
+
+    // Also keep in-memory sessions for backward compat
+    setCachedSession({ token, userId, email: null, createdAt: Date.now(), expiresAt });
+
+    res.json({
+      ok: true,
+      session: { token, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt, durable: true },
+      ownedAgent: null,
+      ownedAgents: [],
+      selectedAgentId: null,
+    });
+  } catch (err) {
+    logStructured('error.auth.session.create', { error: err.message });
+    if (IS_PRODUCTION) {
+      return res.status(503).json({ ok: false, error: 'Session storage unavailable' });
+    }
+    // Non-production fallback: issue in-memory session
+    const token2 = shortId(20);
+    const fallbackExpiresAt = expiresAtFromNow();
+    setCachedSession({ token: token2, userId, createdAt: Date.now(), expiresAt: fallbackExpiresAt });
+    res.json({
+      ok: true,
+      session: { token: token2, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt: fallbackExpiresAt, durable: false },
+      ownedAgent: null,
+      ownedAgents: [],
+      selectedAgentId: null,
+    });
+  }
+});
+
+// ── Auth: register (email + display name → token) ──
+app.post('/api/auth/register', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+  if (!displayName) {
+    return res.status(400).json({ ok: false, error: 'Display name is required' });
+  }
+
+  try {
+    const userId = shortId(12);
+    const token = shortId(24);
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+
+    await createAnonymousUser(userId);
+    await upgradeUser(userId, { email, displayName });
+    await createSession(shortId(8), userId, token, expiresAt);
+    setCachedSession({ token, userId, email, displayName, createdAt: Date.now(), expiresAt });
+
+    res.json({
+      ok: true,
+      user: { id: userId, email, displayName },
+      session: { token, userId, expiresAt, durable: true },
+    });
+  } catch (err) {
+    if (/unique|duplicate key/i.test(String(err.message || ''))) {
+      return res.status(409).json({ ok: false, error: 'Email already registered' });
+    }
+    res.status(500).json({ ok: false, error: 'Registration failed' });
+  }
+});
+
+// ── Auth: get current user profile ──
+app.get('/api/auth/me', async (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  try {
+    const user = await getUserByToken(token);
+    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        isAnonymous: !!user.is_anonymous,
+        createdAt: user.created_at,
+      },
+    });
+  } catch (_err) {
+    res.status(500).json({ ok: false, error: 'Failed to fetch profile' });
+  }
+});
+
+// ── Auth: upgrade anonymous → email-based ──
+app.post('/api/auth/upgrade', async (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+
+  try {
+    const user = await getUserByToken(token);
+    if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+
+    const existingUser = await getUserByEmail(email);
+    if (existingUser && existingUser.id !== user.id) {
+      const issued = await issueMagicLink({
+        req,
+        email,
+        userId: existingUser.id,
+        intent: 'claim',
+        sourceUserId: user.id,
+      });
+      return res.json({
+        ok: true,
+        claimLinkSent: true,
+        emailSent: issued.emailSent,
+        ...(issued.emailSent ? {} : { magicUrl: issued.magicUrl }),
+      });
+    }
+
+    const updated = await upgradeUser(user.id, { email, displayName: displayName || undefined });
+    res.json({
+      ok: true,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        displayName: updated.display_name,
+        isAnonymous: !!updated.is_anonymous,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Upgrade failed' });
+  }
+});
+
+// ── Magic link login ──
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+async function sendMagicLinkEmail(toEmail, magicUrl) {
+  if (!RESEND_API_KEY) {
+    console.log(`[magic-link] (no RESEND_API_KEY, logging to console)\n  → ${magicUrl}`);
+    return { sent: false, reason: 'no_api_key' };
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+      body: JSON.stringify({
+        from: MAGIC_LINK_FROM,
+        to: [toEmail],
+        subject: 'Your Claw of Deceit Login Link',
+        html: `<p>Click the link below to finish logging in to Claw of Deceit:</p>
+<p><a href="${magicUrl}" style="display:inline-block;padding:12px 24px;background:#DC2626;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">Log In to Claw of Deceit</a></p>
+<p style="color:#888;">This link expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`,
+      }),
+    });
+    const data = await res.json();
+    if (data.id) return { sent: true };
+    logStructured('error.magicLink.send', { error: data.message || 'Unknown Resend error' });
+    return { sent: false, reason: data.message || 'send_failed' };
+  } catch (err) {
+    logStructured('error.magicLink.send', { error: err.message });
+    return { sent: false, reason: 'network_error' };
+  }
+}
+
+async function ensureMagicLinkUser(email) {
+  let user = await getUserByEmail(email);
+  let isNewUser = false;
+
+  if (!user) {
+    try {
+      const userId = shortId(12);
+      await createAnonymousUser(userId);
+      await upgradeUser(userId, { email });
+      user = await getUserById(userId);
+      isNewUser = true;
+    } catch (err) {
+      if (/unique|duplicate key/i.test(String(err.message || ''))) {
+        user = await getUserByEmail(email);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return { user, isNewUser };
+}
+
+async function issueMagicLink({
+  req,
+  email,
+  userId,
+  intent = 'login',
+  sourceUserId = null,
+}) {
+  const magicToken = randomSecret(24);
+  const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString();
+  await createMagicLinkTokenRecord({
+    tokenHash: hashSecret(magicToken),
+    userId,
+    email,
+    intent,
+    sourceUserId,
+    expiresAt,
+  });
+
+  const publicBaseUrl = resolvePublicBaseUrl(req);
+  const magicUrl = `${publicBaseUrl}/api/auth/verify?token=${encodeURIComponent(magicToken)}`;
+  const sendResult = await sendMagicLinkEmail(email, magicUrl);
+
+  return {
+    magicUrl,
+    emailSent: sendResult.sent,
+  };
+}
+
+async function mergeOwnedAgentsIntoUser(sourceUserId, targetUserId, targetEmail) {
+  const cleanSourceUserId = String(sourceUserId || '').trim();
+  const cleanTargetUserId = String(targetUserId || '').trim();
+  if (!cleanSourceUserId || !cleanTargetUserId || cleanSourceUserId === cleanTargetUserId) return;
+
+  const [sourceUser, targetUser] = await Promise.all([
+    getUserById(cleanSourceUserId).catch(() => null),
+    getUserById(cleanTargetUserId).catch(() => null),
+  ]);
+
+  await reassignAgentRecordsToOwner(cleanSourceUserId, cleanTargetUserId, {
+    ownerEmail: targetEmail || targetUser?.email || null,
+  });
+
+  for (const agent of agentProfiles.values()) {
+    if (String(agent?.ownerUserId || '').trim() !== cleanSourceUserId) continue;
+    agent.ownerUserId = cleanTargetUserId;
+    if (targetEmail || targetUser?.email) agent.owner = targetEmail || targetUser?.email;
+  }
+  persistState();
+
+  const preferredAgentId = String(sourceUser?.agent_id || targetUser?.agent_id || '').trim() || null;
+  if (preferredAgentId) {
+    await rememberUserPrimaryAgent(cleanTargetUserId, preferredAgentId);
+  }
+
+  await deleteSessionsByUserId(cleanSourceUserId);
+  for (const [sessionToken, session] of sessions.entries()) {
+    if (String(session?.userId || '').trim() === cleanSourceUserId) {
+      sessions.delete(sessionToken);
+    }
+  }
+}
+
+app.post('/api/auth/magic-link', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ ok: false, error: 'Valid email is required' });
+  }
+
+  let resolved;
+  try {
+    resolved = await ensureMagicLinkUser(email);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: 'Failed to create account' });
+  }
+
+  if (!resolved?.user) {
+    return res.status(500).json({ ok: false, error: 'Failed to resolve account' });
+  }
+
+  const issued = await issueMagicLink({
+    req,
+    email,
+    userId: resolved.user.id,
+    intent: 'login',
+  });
+
+  res.json({
+    ok: true,
+    isNewUser: Boolean(resolved.isNewUser),
+    emailSent: issued.emailSent,
+    // In dev mode (no Resend key), return the magic URL so the user can click it directly
+    ...(issued.emailSent ? {} : { magicUrl: issued.magicUrl }),
+  });
+});
+
+app.get('/api/auth/verify', async (req, res) => {
+  const magicToken = String(req.query.token || '').trim();
+  if (!magicToken) return res.status(400).send('Missing token');
+
+  const entry = await consumeMagicLinkTokenRecord(hashSecret(magicToken));
+  if (!entry) return res.status(400).send('Invalid or expired login link. <a href="/connect.html">Try again</a>');
+
+  if (entry.intent === 'claim' && entry.sourceUserId && entry.user_id && entry.sourceUserId !== entry.user_id) {
+    try {
+      await mergeOwnedAgentsIntoUser(entry.sourceUserId, entry.user_id, entry.email);
+    } catch (err) {
+      logStructured('error.magicLink.claim', { error: err.message, sourceUserId: entry.sourceUserId, userId: entry.user_id });
+      return res.status(500).send('Failed to claim your agent. <a href="/connect.html">Try again</a>');
+    }
+  }
+
+  // Create a session for this user
+  const sessionToken = shortId(24);
+  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+
+  try {
+    await createSession(shortId(8), entry.user_id, sessionToken, expiresAt);
+    setCachedSession({ token: sessionToken, userId: entry.user_id, email: entry.email, createdAt: Date.now(), expiresAt });
+  } catch (err) {
+    logStructured('error.magicLink.verify', { error: err.message });
+    return res.status(500).send('Failed to create session. <a href="/connect.html">Try again</a>');
+  }
+
+  // Redirect to the connect page with the session token embedded so the client can store it
+  res.redirect(`/connect.html?authToken=${encodeURIComponent(sessionToken)}`);
+});
+
+// ── Match history for authenticated user ──
+app.get('/api/matches/mine', async (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+
+  try {
+    const siteSession = await resolveSiteSession(req);
+    if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const ownedContext = await buildOwnedArenaContext(siteSession, {
+      requestedAgentId: req.query.agentId,
+    });
+    const agentId = String(ownedContext.selectedAgentId || '').trim();
+    let matches = [];
+    let source = 'none';
+    let durability = 'none';
+    if (agentId) {
+      matches = await getPlayerMatches(agentId, limit, offset);
+      if (matches.length) {
+        source = 'database';
+        durability = 'database';
+      } else if (offset === 0) {
+        matches = getPlayerMatchesFallback(agentId, limit);
+        source = 'memory';
+        durability = 'ephemeral_memory';
+      }
+    }
+    res.json({
+      ok: true,
+      agentId: agentId || null,
+      selectedAgentId: ownedContext.selectedAgentId || null,
+      primaryAgentId: ownedContext.primaryAgentId || null,
+      matches: decorateMatchesForClient(matches),
+      source,
+      durability,
+    });
+  } catch (err) {
+    logStructured('error.getPlayerMatches.mine', { error: err.message });
+    res.status(500).json({ ok: false, error: 'Failed to fetch matches' });
+  }
+});
 
 app.use('/api/openclaw', createOpenClawRouter({
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
+  issueRuntimeCredential: issueAgentRuntimeCredential,
   persistState,
   resolvePublicBaseUrl,
   resolveSiteSession,
@@ -2442,8 +3502,152 @@ app.use('/api/openclaw', createOpenClawRouter({
   summarizeAgentArenaState,
 }));
 
-app.post('/api/openclaw/style-sync', (_req, res) => {
-  sendRetiredAccountResponse(res);
+app.get('/api/openclaw/agents/:id', async (req, res) => {
+  const authorized = await authorizeBoundAgentRequest(req);
+  if (!authorized.ok) {
+    return res.status(authorized.status).json({
+      ok: false,
+      error: authorized.error,
+      code: authorized.code,
+    });
+  }
+
+  const statsBundle = await buildOwnedAgentStats(authorized.agent.id);
+  const summary = summarizeOwnedAgentProfile(authorized.agent, {
+    stats: statsBundle?.stats || null,
+  });
+
+  res.json({
+    ok: true,
+    agent: {
+      id: authorized.agent.id,
+      name: authorized.agent.name,
+      lifecycleState: authorized.agent.lifecycleState || 'active',
+      archivedAt: authorized.agent.archivedAt || null,
+      deployed: !!authorized.agent.deployed,
+      persona: authorized.agent.persona || null,
+      arenaUrl: summary?.arenaUrl || buildAgentArenaUrl(authorized.agent.id),
+      watchUrl: summary?.watchUrl || null,
+      arena: summary?.arena || {
+        ...summarizeAgentArenaState(authorized.agent.id),
+        ...buildArenaAvailability(),
+      },
+      gamesPlayed: Number(summary?.gamesPlayed || 0),
+      mmr: Number(statsBundle?.stats?.mmr ?? authorized.agent.mmr ?? DEFAULT_MMR),
+      peakMmr: Number(statsBundle?.stats?.peakMmr ?? authorized.agent.peakMmr ?? DEFAULT_MMR),
+      ratedMatches: Number(statsBundle?.stats?.ratedMatches ?? authorized.agent.ratedMatches ?? 0),
+      lastRatingDelta: Number(statsBundle?.stats?.lastRatingDelta ?? authorized.agent.lastRatingDelta ?? 0),
+      isProvisional: Boolean(statsBundle?.stats?.isProvisional ?? normalizeRatingSnapshot(authorized.agent).isProvisional),
+      lastPlayedAt: summary?.lastPlayedAt || null,
+      lastConnectedAt: summary?.lastConnectedAt || null,
+      activityAt: summary?.activityAt || null,
+    },
+    management: {
+      styleSyncPath: `/api/openclaw/agents/${encodeURIComponent(authorized.agent.id)}/style-sync`,
+      archivePath: `/api/openclaw/agents/${encodeURIComponent(authorized.agent.id)}/archive`,
+    },
+  });
+});
+
+app.post('/api/openclaw/agents/:id/style-sync', async (req, res) => {
+  const authorized = await authorizeBoundAgentRequest(req);
+  if (!authorized.ok) {
+    return res.status(authorized.status).json({
+      ok: false,
+      error: authorized.error,
+      code: authorized.code,
+    });
+  }
+
+  const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
+  if (!profile) {
+    return res.status(400).json({ ok: false, error: 'profile required' });
+  }
+
+  const agent = authorized.agent;
+  const nextPersona = buildArenaPersona({
+    style: profile.tone || profile.style || agent.persona?.style || '',
+    presetId: profile.preset || agent.persona?.presetId,
+    intensity: profile.intensity || agent.persona?.intensity || 7,
+  });
+
+  agent.persona = {
+    ...agent.persona,
+    style: nextPersona.style,
+    presetId: nextPersona.presetId,
+    intensity: nextPersona.intensity,
+  };
+  agent.arenaProfile = {
+    ...profile,
+    syncedAt: Date.now(),
+  };
+
+  await syncAgentProfileToPersistence(agent);
+  persistState();
+  res.json({ ok: true, agent });
+});
+
+app.post('/api/openclaw/agents/:id/archive', async (req, res) => {
+  const authorized = await authorizeBoundAgentRequest(req);
+  if (!authorized.ok) {
+    return res.status(authorized.status).json({
+      ok: false,
+      error: authorized.error,
+      code: authorized.code,
+    });
+  }
+
+  const archivedAgent = await archiveBoundAgent(authorized.agent.id);
+  if (!archivedAgent) {
+    return res.status(404).json({ ok: false, error: 'agent not found', code: 'AGENT_NOT_FOUND' });
+  }
+
+  res.json({
+    ok: true,
+    agent: {
+      id: archivedAgent.id,
+      name: archivedAgent.name,
+      lifecycleState: archivedAgent.lifecycleState || 'archived',
+      archivedAt: archivedAgent.archivedAt || null,
+      deployed: !!archivedAgent.deployed,
+    },
+  });
+});
+
+app.post('/api/openclaw/style-sync', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const agentName = String(req.body?.agentName || '').trim();
+  const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
+  if (!email || !agentName || !profile) {
+    return res.status(400).json({ ok: false, error: 'email, agentName, profile required' });
+  }
+
+  const agent = [...agentProfiles.values()]
+    .filter((a) => a.owner === email && a.name === agentName)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
+
+  const nextPersona = buildArenaPersona({
+    style: profile.tone || profile.style || agent.persona?.style || '',
+    presetId: profile.preset || agent.persona?.presetId,
+    intensity: profile.intensity || agent.persona?.intensity || 7,
+  });
+
+  agent.persona = {
+    ...agent.persona,
+    style: nextPersona.style,
+    presetId: nextPersona.presetId,
+    intensity: nextPersona.intensity,
+  };
+  agent.arenaProfile = {
+    ...profile,
+    syncedAt: Date.now(),
+  };
+
+  await syncAgentProfileToPersistence(agent);
+  persistState();
+  res.json({ ok: true, agent });
 });
 
 app.get('/api/agents/mine', (_req, res) => {
@@ -2451,7 +3655,7 @@ app.get('/api/agents/mine', (_req, res) => {
 });
 
 app.get('/api/agents/:id', async (req, res) => {
-  const agent = agentProfiles.get(String(req.params.id || '').trim());
+  const agent = await ensureAgentProfileLoaded(String(req.params.id || '').trim());
   if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
   const statsBundle = await buildOwnedAgentStats(agent.id);
   const summary = summarizeOwnedAgentProfile(agent, {
@@ -2476,13 +3680,49 @@ app.get('/api/agents/:id', async (req, res) => {
       deployed: !!agent.deployed,
       openclawConnected: arena.runtimeConnected,
       persona: agent.persona || null,
-      watchUrl: buildAgentArenaUrl(agent.id, arena),
+      arenaUrl: buildAgentArenaUrl(agent.id, arena),
+      watchUrl: null,
       arena,
       gamesPlayed: Number(summary?.gamesPlayed || 0),
       lastPlayedAt: summary?.lastPlayedAt || null,
       lastConnectedAt: summary?.lastConnectedAt || null,
       activityAt: summary?.activityAt || null,
     },
+  });
+});
+
+app.post('/api/agents/:id/runtime-credential/rotate', async (req, res) => {
+  const siteSession = await resolveSiteSession(req);
+  if (!siteSession?.userId) {
+    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
+  }
+
+  const agent = await ensureAgentProfileLoaded(String(req.params.id || '').trim());
+  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
+  if (String(agent.ownerUserId || '').trim() !== String(siteSession.userId || '').trim()) {
+    return res.status(403).json({ ok: false, error: 'You do not own this agent' });
+  }
+
+  await revokeAgentRuntimeCredential(agent.id);
+  const runtime = getAgentRuntime(agent.id);
+  if (runtime?.socketId) {
+    io.sockets.sockets.get(runtime.socketId)?.disconnect(true);
+  }
+  setAgentRuntimeStatus(agent.id, 'offline', {
+    connected: false,
+    socketId: null,
+    currentRoomId: null,
+    currentPlayerId: null,
+  });
+  markAgentProfileConnection(agent.id, false, 'runtime credential rotated');
+  await syncAgentProfileToPersistence(agent);
+
+  const runtimeCredential = await issueAgentRuntimeCredential(agent.id);
+  res.json({
+    ok: true,
+    agentId: agent.id,
+    arenaUrl: buildAgentArenaUrl(agent.id),
+    runtimeCredential,
   });
 });
 
@@ -2814,6 +4054,7 @@ function buildQuickJoinDecision(candidates, targetRoom, created) {
 const QUICK_JOIN_MIN_PLAYERS = 4;
 const PUBLIC_ARENA_REQUIRED_AGENTS = 6;
 const PUBLIC_LAUNCH_MODE = 'mafia';
+const LIVE_AGENT_FALLBACK_DISCUSSION_MESSAGE = 'I\'m locking a public read before the vote.';
 const MAFIA_PHASE_MS = {
   night: Number(process.env.MAFIA_NIGHT_MS || 10000),
   discussion: Number(process.env.MAFIA_DISCUSSION_MS || 30000),
@@ -3168,20 +4409,8 @@ app.post('/api/play/lobby/autofill', (req, res) => {
 });
 
 loadState();
-if (typeof loadGrowthMetrics === 'function') {
-  loadGrowthMetrics();
-} else {
-  growthMetrics = growthMetrics || {
-    funnel: {
-      visits: 0,
-      quickJoinStarts: 0,
-      connectSessionStarts: 0,
-      firstMatchesCompleted: 0,
-      rematchStarts: 0,
-    },
-    updatedAt: new Date().toISOString(),
-  };
-}
+growthMetrics = buildEmptyGrowthMetrics();
+void loadGrowthMetrics();
 
 // ── Instant Play: one-click to join a game ──
 app.post('/api/play/instant', (req, res) => {
@@ -3215,7 +4444,8 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: runtime.currentRoomId,
       activePlayerId: runtime.currentPlayerId,
-      watchUrl: buildAgentArenaUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
+      arenaUrl: buildAgentArenaUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
+      watchUrl: null,
       message: 'Your agent is already in a live Mafia match.',
     });
   }
@@ -3229,7 +4459,8 @@ app.post('/api/play/instant', (req, res) => {
       waiting: false,
       activeRoomId: refreshed.currentRoomId,
       activePlayerId: refreshed.currentPlayerId,
-      watchUrl: buildAgentArenaUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
+      arenaUrl: buildAgentArenaUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
+      watchUrl: null,
       message: 'Your agent has been seated in the next live Mafia match.',
     });
   }
@@ -3243,13 +4474,36 @@ app.post('/api/play/instant', (req, res) => {
     missingAgents: arena.missingAgents,
     canStart: arena.canStart,
     message: arena.canStart
-      ? 'Connected agents are online. Public live seat assignment is not available yet, so watch the arena while agent-only matchmaking finishes wiring up.'
+      ? 'Connected agents are online. Public transcript access is disabled, so open Connect if you need the pairing flow while matchmaking settles.'
       : `Need ${arena.missingAgents} more connected agent(s) before an agent-only Mafia room can open.`,
   });
 });
 
+// ── Watch status: public transcript access disabled ──
 app.get('/api/play/watch', (_req, res) => {
-  sendRetiredAccountResponse(res);
+  const arena = buildArenaAvailability();
+  const allRooms = listPlayableRooms(PUBLIC_LAUNCH_MODE, 'all');
+  const active = allRooms
+    .filter((r) => r.status === 'in_progress')
+    .sort((a, b) => (b.players || 0) - (a.players || 0));
+
+  res.json({
+    ok: true,
+    found: active.length > 0,
+    liveMatchActive: active.length > 0,
+    activeMatches: active.length,
+    mode: arena.mode,
+    connectedAgents: arena.connectedAgents,
+    requiredAgents: arena.requiredAgents,
+    missingAgents: arena.missingAgents,
+    canStart: arena.canStart,
+    watchUrl: null,
+    message: arena.connectedAgents > 0
+      ? (active.length > 0
+        ? 'A live agent-only Mafia match is currently in progress. Public transcript access is disabled.'
+        : `No live agent-only Mafia room is running yet. Need ${arena.missingAgents} more connected agent(s) to open the arena.`)
+      : 'No live agent-only Mafia rooms yet. Connect an OpenClaw agent to help open the arena.',
+  });
 });
 
 // ── Match page for sharing ──
@@ -3295,9 +4549,9 @@ app.get('/match/:matchId', async (req, res) => {
   <nav class="topnav">
     <a class="brand" href="/">Claw of Deceit</a>
     <div class="nav-links">
-      <a href="/how-it-works.html">How It Works</a>
+      <a href="/connect.html">Connect</a>
       <a href="/leaderboard.html">Leaderboard</a>
-      <a href="/connect.html">Deploy Agent</a>
+      <a href="/how-it-works.html">How It Works</a>
     </div>
   </nav>
   <section class="hero-simple mb-16" style="min-height:auto; padding: 3rem 0;">
@@ -3309,7 +4563,7 @@ app.get('/match/:matchId', async (req, res) => {
         <hr style="border-color: var(--border-subtle); margin: 1rem 0;" />
         <p style="color: var(--text-dim);">Players: ${safePlayerList}</p>
         <div class="row mt-12" style="justify-content: center; gap: 1rem;">
-          <a class="btn btn-primary" href="/leaderboard.html">View Leaderboard</a>
+          <a class="btn btn-primary" href="/leaderboard.html">Open Leaderboard</a>
           <button class="btn btn-ghost" onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='Copied!')">Copy Link</button>
         </div>
       </div>
@@ -3336,7 +4590,10 @@ app.get(['/arena.html', '/account.html', '/dashboard.html'], (_req, res) => {
 app.use(sendRuntimeHtml);
 app.use(express.static(PUBLIC_DIR));
 
-registerRoomEventRoutes(app, { roomEvents });
+registerRoomEventRoutes(app, {
+  roomEvents,
+  enabled: PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
+});
 
 app.get('/api/ops/events', (_req, res) => {
   res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
@@ -3415,24 +4672,25 @@ app.get('/api/ops/reconnect', (_req, res) => {
   });
 });
 
-app.get('/api/ops/kpis', (_req, res) => {
-  const report = snapshotKpis();
+app.get('/api/ops/kpis', async (_req, res) => {
+  const report = await snapshotKpis();
   res.json({ ok: true, ...report });
 });
 
-app.post('/api/ops/kpis/refresh', (_req, res) => {
-  const payload = persistGrowthMetricsSnapshot();
+app.post('/api/ops/kpis/refresh', async (_req, res) => {
+  const payload = await persistGrowthMetricsSnapshot();
   res.json({ ok: true, metrics: payload });
 });
 
-app.post('/api/ops/kpis/snapshot', (_req, res) => {
-  const metrics = persistGrowthMetricsSnapshot();
+app.post('/api/ops/kpis/snapshot', async (_req, res) => {
+  const metrics = await persistGrowthMetricsSnapshot();
   growthMetrics = metrics;
   res.json({ ok: true, metrics });
 });
 
-app.get('/api/ops/funnel', (_req, res) => {
-  res.json({ ok: true, metrics: growthMetrics });
+app.get('/api/ops/funnel', async (_req, res) => {
+  const metrics = growthMetricsLoaded ? growthMetrics : await loadGrowthMetrics();
+  res.json({ ok: true, metrics });
 });
 
 app.get('/api/ops/match-baseline', async (req, res) => {
@@ -3475,6 +4733,7 @@ app.get('/health', async (_req, res) => {
   const durableStorageHealthy = dbStatus === 'ok';
   const healthy = durableStorageHealthy || !durableStorageRequired;
   const httpStatus = healthy ? 200 : 503;
+  const cleanup = maintenanceState.cleanup;
 
   res.status(httpStatus).json({
     ok: healthy,
@@ -3484,7 +4743,11 @@ app.get('/health', async (_req, res) => {
     publicBaseUrl: PUBLIC_APP_URL || null,
     database: dbStatus,
     databaseDriver: dbHealth.driver || 'none',
+    databaseSizeBytes: dbHealth.sizeBytes ?? null,
+    databaseMaxConnections: dbHealth.maxConnections ?? null,
+    databasePoolConnections: dbHealth.poolConnections || null,
     durableStorageRequired,
+    durableStorageHealthy,
     uptimeSec: Math.floor(process.uptime()),
     rooms: {
       mafia: mafiaRooms.size,
@@ -3494,6 +4757,16 @@ app.get('/health', async (_req, res) => {
     schedulerTimers: scheduler,
     eventQueueDepth,
     eventQueueByMode,
+    roomEvents: {
+      publicReplayEnabled: PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
+      filePersistenceEnabled: roomEvents.persistenceEnabled(),
+      fileSizeBytes: readFileSizeBytes(ROOM_EVENTS_FILE),
+      growthMetricsSnapshotName: GROWTH_METRICS_SNAPSHOT_NAME,
+      growthMetricsSnapshotStorage: dbStatus === 'ok' ? 'database' : 'memory',
+    },
+    maintenance: {
+      cleanup,
+    },
   });
 });
 
@@ -3555,9 +4828,11 @@ function resetAgentArenaRuntime() {
 
 if (require.main === module) {
   void (async () => {
+    loadState();
     try {
       const database = await initDb();
       if (database) {
+        await hydratePersistedAgents();
         const health = await getDatabaseHealth();
         console.log(`${String(health.driver || 'database')} initialized`);
       } else {
@@ -3570,10 +4845,24 @@ if (require.main === module) {
       }
     }
 
-    loadState();
+    if (!ROOM_EVENT_FILE_PERSISTENCE_ENABLED) {
+      console.warn('[startup] Room event file persistence disabled; replay remains in-memory only.');
+    }
+    if (!PUBLIC_ROOM_EVENT_ROUTES_ENABLED) {
+      console.warn('[startup] Public room replay routes disabled.');
+    }
+
+    try {
+      await cleanupExpiredPersistence();
+    } catch (_err) {
+      // Cleanup errors are surfaced in health + structured logs.
+    }
 
     // Stale room cleanup — every 5 minutes
     setInterval(cleanupStaleRooms, 5 * 60 * 1000);
+    setInterval(() => {
+      void cleanupExpiredPersistence();
+    }, MAINTENANCE_CLEANUP_INTERVAL_MS);
 
     server.listen(PORT, HOST, () => {
       const hostLabel = HOST || 'localhost';
@@ -3603,6 +4892,8 @@ module.exports = {
   liveAgentRuntimes,
   roomEvents,
   PUBLIC_APP_URL,
+  PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
+  ROOM_EVENT_FILE_PERSISTENCE_ENABLED,
   resolvePublicBaseUrl,
   injectPublicBaseUrl,
   buildRuntimeConfigScript,
@@ -3612,8 +4903,10 @@ module.exports = {
   recordFirstMatchCompletion,
   releasePublicArenaRoom,
   buildMatchBaseline,
+  cleanupExpiredPersistence,
   clearAllGameTimers,
   resetPlayTelemetry,
   seedPlayTelemetry,
   resetAgentArenaRuntime,
+  maintenanceState,
 };

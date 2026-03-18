@@ -1,7 +1,15 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
-const { authorizeConnectSession, createConnectSession, readConnectAccessToken, sanitizeConnectSession } = require('../services/connect-sessions');
+const {
+  authorizeConnectSession,
+  createConnectSession,
+  getConnectSession,
+  isConnectSessionExpired,
+  readConnectAccessToken,
+  sanitizeConnectSession,
+  saveConnectSession,
+} = require('../services/connect-sessions');
 const { createConnectedOpenClawAgent } = require('../services/agent-registry');
 const { buildOnboardingContract, buildSessionSkillMarkdown } = require('../services/onboarding-contract');
 const { cleanStylePhrase, normalizePresetToken } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
@@ -71,6 +79,7 @@ function createOpenClawRouter({
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
+  issueRuntimeCredential,
   persistState,
   resolvePublicBaseUrl,
   resolveSiteSession,
@@ -104,14 +113,13 @@ function createOpenClawRouter({
   }
 
   async function confirmSession(req, res, note) {
-    const connect = connectSessions.get(req.params.id || String(req.body?.token || '').trim());
+    const connect = await getConnectSession(connectSessions, req.params.id || String(req.body?.token || '').trim());
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-    if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+    if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
     if (req.params.id && !authorizeConnectSession(req, connect)) {
       return res.status(401).json({ ok: false, error: 'connect session auth required' });
     }
-    const providedProof = String(req.body?.proof || '').trim();
-    if (!req.params.id && (!providedProof || providedProof !== connect.callbackProof)) {
+    if (!req.params.id && !authorizeConnectSession(req, connect)) {
       return res.status(401).json({ ok: false, error: 'invalid callback proof' });
     }
 
@@ -119,47 +127,53 @@ function createOpenClawRouter({
       return sendConnectSession(res, connect, req, false);
     }
 
-    const agent = createConnectedOpenClawAgent({
-      agentProfiles,
-      connect,
-      shortId,
-      name: normalizeAgentName(req.body?.agentName, shortId),
-      style: normalizeAgentStyle(req.body?.style),
-      presetId: normalizeAgentPresetId(req.body?.presetId),
-      note,
-      preferredAgentId: null,
-      owner: null,
-      ownerEmail: null,
-      ownerUserId: connect.ownerUserId || null,
-    });
-    appendConnectCompleted(roomEvents, connect, agent);
-    persistState();
+    try {
+      const agent = await createConnectedOpenClawAgent({
+        agentProfiles,
+        connect,
+        name: normalizeAgentName(req.body?.agentName, shortId),
+        style: normalizeAgentStyle(req.body?.style),
+        presetId: normalizeAgentPresetId(req.body?.presetId),
+        note,
+      });
+      if (typeof bindOwnedAgent === 'function' && connect.ownerUserId) {
+        await bindOwnedAgent(connect.ownerUserId, agent.id);
+      }
+      const runtimeCredential = typeof issueRuntimeCredential === 'function'
+        ? await issueRuntimeCredential(agent.id)
+        : null;
+      await saveConnectSession(connectSessions, connect);
+      appendConnectCompleted(roomEvents, connect, agent);
+      persistState();
 
-    res.json({
-      ok: true,
-      connect: sanitizeConnectSession(connect, {
-        publicBaseUrl: resolvePublicBaseUrl(req),
-        summarizeAgentArenaState,
-      }),
-      agent,
-    });
+      res.json({
+        ok: true,
+        connect: sanitizeConnectSession(connect, {
+          publicBaseUrl: resolvePublicBaseUrl(req),
+          summarizeAgentArenaState,
+        }),
+        agent,
+        runtimeCredential,
+      });
+    } catch (error) {
+      if (error?.code === 'AGENT_NAME_TAKEN') {
+        return res.status(409).json({
+          ok: false,
+          error: 'agent name already taken',
+          code: 'AGENT_NAME_TAKEN',
+        });
+      }
+      throw error;
+    }
   }
 
   router.post('/connect-session', createLimiter, async (req, res) => {
     incrementGrowthMetric('funnel.connectSessionStarts', 1);
     const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
-    const ownerUserId = siteSession?.userId || null;
-
-    if (!ownerUserId) {
-      return res.status(401).json({
-        ok: false,
-        error: 'Create a site session before generating a connect message.',
-      });
-    }
-
-    const connect = createConnectSession({
+    const connect = await createConnectSession({
       connectSessions,
-      ownerUserId,
+      email: req.body?.email,
+      ownerUserId: siteSession?.userId || null,
       publicBaseUrl: resolvePublicBaseUrl(req),
       shortId,
     });
@@ -183,31 +197,44 @@ function createOpenClawRouter({
     await confirmSession(req, res, 'connected through OpenClaw CLI callback');
   });
 
-  router.get('/connect-session/:id', statusLimiter, (req, res) => {
-    const connect = connectSessions.get(req.params.id);
+  router.get('/connect-session/:id', statusLimiter, async (req, res) => {
+    const connect = await getConnectSession(connectSessions, req.params.id);
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-    if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+    if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
     if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
     sendConnectSession(res, connect, req, false);
   });
 
-  router.get('/connect-session/:id/skill.md', statusLimiter, (req, res) => {
-    const connect = connectSessions.get(req.params.id);
+  router.get('/connect-session/:id/skill.md', statusLimiter, async (req, res) => {
+    const connect = await getConnectSession(connectSessions, req.params.id);
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
-    if (Date.now() > (connect.expiresAt || 0)) return res.status(410).json({ ok: false, error: 'connect session expired' });
+    if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
     if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
 
     const publicBaseUrl = resolvePublicBaseUrl(req);
+    const accessToken = readConnectAccessToken(req);
+    const callbackProof = String(connect.callbackProof || accessToken || '').trim();
     const markdown = buildSessionSkillMarkdown({
       publicBaseUrl,
       token: connect.id,
       callbackUrl: connect.callbackUrl,
-      callbackProof: connect.callbackProof,
+      callbackProof,
       connectCommand: sanitizeConnectSession(connect, {
-        includeSecrets: true,
+        includeSecrets: Boolean(connect.callbackProof),
         publicBaseUrl,
         summarizeAgentArenaState,
-      })?.onboarding?.connectCommand || '',
+      })?.onboarding?.connectCommand || (
+        callbackProof
+          ? buildOnboardingContract({
+            publicBaseUrl,
+            sessionId: connect.id,
+            accessToken,
+            token: connect.id,
+            callbackUrl: connect.callbackUrl,
+            callbackProof,
+          })?.connectCommand || ''
+          : ''
+      ),
     });
 
     res.set('Cache-Control', 'no-store');

@@ -20,42 +20,44 @@ async function withServer(run) {
   }
 }
 
-async function createSiteSession(base) {
-  const authRes = await fetch(`${base}/api/auth/session`, {
+function agentAuthHeaders(agentId, runtimeSecret) {
+  return {
+    authorization: `Bearer ${runtimeSecret}`,
+    'x-openclaw-agent-id': agentId,
+    'content-type': 'application/json',
+  };
+}
+
+async function createAnonymousConnectSession(base) {
+  const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
   });
-  assert.equal(authRes.status, 200);
-  const authData = await authRes.json();
-  assert.equal(authData.ok, true);
-  assert.ok(authData.session?.token);
-  return authData.session.token;
+  assert.equal(createRes.status, 200);
+  const created = await createRes.json();
+  assert.equal(created.ok, true);
+  return created;
 }
 
-test('connect-session routes require a site session and keep the session skill aligned with the reduced MVP surface', async () => {
-  await withServer(async (base) => {
-    const noSessionRes = await fetch(`${base}/api/openclaw/connect-session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    assert.equal(noSessionRes.status, 401);
+async function confirmConnectSession(base, created, body) {
+  const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return {
+    response: confirmRes,
+    json: await confirmRes.json(),
+  };
+}
 
-    const sessionToken = await createSiteSession(base);
-    const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({}),
-    });
-    assert.equal(createRes.status, 200);
-    const created = await createRes.json();
-    assert.equal(created.ok, true);
+test('connect session endpoints allow anonymous creation but still require secret session access', async () => {
+  await withServer(async (base) => {
+    const created = await createAnonymousConnectSession(base);
     const id = created.connect.id;
     const accessToken = created.connect.accessToken;
+
     assert.ok(accessToken);
     assert.equal(created.connect.callbackProof.length > 0, true);
     assert.equal(created.connect.onboarding.pluginId, 'clawofdeceit-connect');
@@ -94,7 +96,8 @@ test('connect-session routes require a site session and keep the session skill a
     assert.equal(statusData.ok, true);
     assert.equal('accessToken' in statusData.connect, false);
     assert.equal('callbackProof' in statusData.connect, false);
-    assert.equal('watchUrl' in statusData.connect, false);
+    assert.match(statusData.connect.arenaUrl, /\/connect\.html$/);
+    assert.equal(statusData.connect.watchUrl, null);
     assert.equal(statusData.connect.onboarding.connectCommand, null);
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
     assert.equal(statusData.connect.onboarding.sessionSkillUrl, null);
@@ -136,89 +139,96 @@ test('connect-session routes require a site session and keep the session skill a
   });
 });
 
-test('each confirmed connect session creates a fresh agent id for multi-agent use', async () => {
+test('duplicate agent names are rejected during permanent binding', async () => {
   await withServer(async (base) => {
-    const sessionToken = await createSiteSession(base);
+    const sharedName = `duplicate_agent_${Date.now()}`;
 
-    async function connectAgent(agentName, style) {
-      const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${sessionToken}`,
+    const first = await createAnonymousConnectSession(base);
+    const firstConfirm = await confirmConnectSession(base, first, {
+      agentName: sharedName,
+      style: 'friendly manipulator',
+    });
+    assert.equal(firstConfirm.response.status, 200);
+    assert.equal(firstConfirm.json.ok, true);
+    assert.ok(firstConfirm.json.agent?.id);
+
+    const second = await createAnonymousConnectSession(base);
+    const secondConfirm = await confirmConnectSession(base, second, {
+      agentName: sharedName,
+      style: 'pragmatic operator',
+    });
+    assert.equal(secondConfirm.response.status, 409);
+    assert.equal(secondConfirm.json.ok, false);
+    assert.equal(secondConfirm.json.code, 'AGENT_NAME_TAKEN');
+  });
+});
+
+test('bound-agent management routes use the saved reusable agent token', async () => {
+  await withServer(async (base) => {
+    const created = await createAnonymousConnectSession(base);
+    const confirmed = await confirmConnectSession(base, created, {
+      agentName: `bound_agent_${Date.now()}`,
+      style: 'friendly manipulator',
+    });
+
+    assert.equal(confirmed.response.status, 200);
+    assert.equal(confirmed.json.ok, true);
+    assert.ok(confirmed.json.agent?.id);
+    assert.equal(confirmed.json.agent.persona.presetId, 'charming');
+    assert.equal(confirmed.json.agent.persona.style, 'friendly manipulator');
+    assert.ok(confirmed.json.runtimeCredential?.runtimeSecret);
+
+    const agentId = confirmed.json.agent.id;
+    const runtimeSecret = confirmed.json.runtimeCredential.runtimeSecret;
+
+    const managedRes = await fetch(`${base}/api/openclaw/agents/${agentId}`, {
+      headers: agentAuthHeaders(agentId, runtimeSecret),
+    });
+    assert.equal(managedRes.status, 200);
+    const managed = await managedRes.json();
+    assert.equal(managed.ok, true);
+    assert.equal(managed.agent.id, agentId);
+    assert.equal(managed.agent.lifecycleState, 'active');
+    assert.match(managed.agent.arenaUrl, /\/connect\.html\?agentId=/);
+    assert.equal(managed.management.styleSyncPath, `/api/openclaw/agents/${encodeURIComponent(agentId)}/style-sync`);
+    assert.equal(managed.management.archivePath, `/api/openclaw/agents/${encodeURIComponent(agentId)}/archive`);
+
+    const styleSyncRes = await fetch(`${base}/api/openclaw/agents/${agentId}/style-sync`, {
+      method: 'POST',
+      headers: agentAuthHeaders(agentId, runtimeSecret),
+      body: JSON.stringify({
+        profile: {
+          preset: 'chaotic',
+          tone: 'chaotic preacher',
+          intensity: 9,
         },
-        body: JSON.stringify({}),
-      });
-      assert.equal(createRes.status, 200);
-      const created = await createRes.json();
+      }),
+    });
+    assert.equal(styleSyncRes.status, 200);
+    const synced = await styleSyncRes.json();
+    assert.equal(synced.ok, true);
+    assert.equal(synced.agent.persona.presetId, 'chaotic');
+    assert.equal(synced.agent.persona.style, 'chaotic preacher');
+    assert.equal(synced.agent.persona.intensity, 9);
 
-      const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agentName, style }),
-      });
-      assert.equal(confirmRes.status, 200);
-      const confirmed = await confirmRes.json();
-      assert.equal(confirmed.ok, true);
-      assert.equal('watchUrl' in confirmed.connect, false);
-      return confirmed;
-    }
+    const archiveRes = await fetch(`${base}/api/openclaw/agents/${agentId}/archive`, {
+      method: 'POST',
+      headers: agentAuthHeaders(agentId, runtimeSecret),
+      body: JSON.stringify({}),
+    });
+    assert.equal(archiveRes.status, 200);
+    const archived = await archiveRes.json();
+    assert.equal(archived.ok, true);
+    assert.equal(archived.agent.id, agentId);
+    assert.equal(archived.agent.lifecycleState, 'archived');
+    assert.ok(archived.agent.archivedAt);
 
-    const alpha = await connectAgent('alpha_one', 'paranoid detective');
-    const bravo = await connectAgent('bravo_two', 'friendly manipulator');
-
-    assert.notEqual(alpha.agent.id, bravo.agent.id);
-    assert.equal(alpha.agent.persona.presetId, 'paranoid');
-    assert.equal(bravo.agent.persona.presetId, 'charming');
-    assert.equal(agentProfiles.size, 2);
-  });
-});
-
-test('retired dashboard and ownership routes return 410 and old pages redirect to the leaderboard', async () => {
-  await withServer(async (base) => {
-    const retiredRoutes = [
-      { method: 'post', path: '/api/auth/magic-link/start' },
-      { method: 'post', path: '/api/auth/magic-link/consume' },
-      { method: 'post', path: '/api/auth/logout' },
-      { method: 'get', path: '/api/auth/me' },
-      { method: 'post', path: '/api/auth/register' },
-      { method: 'post', path: '/api/auth/upgrade' },
-      { method: 'post', path: '/api/owner/token' },
-      { method: 'get', path: '/api/matches/mine' },
-      { method: 'get', path: '/api/agents/mine' },
-      { method: 'post', path: '/api/openclaw/style-sync' },
-      { method: 'get', path: '/api/play/watch' },
-    ];
-
-    for (const route of retiredRoutes) {
-      const res = await fetch(`${base}${route.path}`, {
-        method: route.method.toUpperCase(),
-        headers: { 'content-type': 'application/json' },
-        body: route.method === 'post' ? JSON.stringify({}) : undefined,
-      });
-      assert.equal(res.status, 410, `${route.method.toUpperCase()} ${route.path} should be retired`);
-      const data = await res.json();
-      assert.match(data.error || '', /not part of the current MVP/i);
-    }
-
-    const arenaRedirect = await fetch(`${base}/arena.html`, { redirect: 'manual' });
-    assert.equal(arenaRedirect.status, 302);
-    assert.equal(arenaRedirect.headers.get('location'), '/leaderboard.html');
-
-    const accountRedirect = await fetch(`${base}/account.html`, { redirect: 'manual' });
-    assert.equal(accountRedirect.status, 302);
-    assert.equal(accountRedirect.headers.get('location'), '/leaderboard.html');
-  });
-});
-
-test('public legal and help pages do not advertise the retired My Games surface', async () => {
-  await withServer(async (base) => {
-    for (const pagePath of ['/help.html', '/privacy.html', '/terms.html']) {
-      const res = await fetch(`${base}${pagePath}`);
-      assert.equal(res.status, 200, `${pagePath} should load`);
-      const html = await res.text();
-      assert.doesNotMatch(html, /href="\/arena\.html"/i, `${pagePath} should not link to /arena.html`);
-      assert.doesNotMatch(html, />My Games</i, `${pagePath} should not mention My Games`);
-    }
+    const afterArchiveRes = await fetch(`${base}/api/openclaw/agents/${agentId}`, {
+      headers: agentAuthHeaders(agentId, runtimeSecret),
+    });
+    assert.equal(afterArchiveRes.status, 401);
+    const afterArchive = await afterArchiveRes.json();
+    assert.equal(afterArchive.ok, false);
+    assert.equal(afterArchive.code, 'INVALID_AGENT_TOKEN');
   });
 });

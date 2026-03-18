@@ -1,10 +1,11 @@
+const { randomUUID } = require('crypto');
 const { buildResolvedPersona } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
 const { buildDefaultRatingSnapshot } = require('./mafia-elo');
+const { getAgentRecordByName, upsertAgentRecord } = require('../db');
 
-function createConnectedOpenClawAgent({
+async function createConnectedOpenClawAgent({
   agentProfiles,
   connect,
-  shortId,
   name,
   style,
   presetId,
@@ -14,7 +15,14 @@ function createConnectedOpenClawAgent({
   ownerEmail,
   ownerUserId,
 }) {
-  const agentId = String(preferredAgentId || '').trim() || shortId(10);
+  const existingByName = await getAgentRecordByName(name);
+  if (existingByName) {
+    const error = new Error('agent name already taken');
+    error.code = 'AGENT_NAME_TAKEN';
+    throw error;
+  }
+
+  const agentId = randomUUID();
   const persona = buildResolvedPersona({ style, presetId });
   const existing = agentProfiles.get(agentId) || null;
   const rating = buildDefaultRatingSnapshot({
@@ -26,11 +34,13 @@ function createConnectedOpenClawAgent({
   const agent = {
     ...(existing || {}),
     id: agentId,
-    owner: owner ?? existing?.owner ?? null,
-    ownerEmail: ownerEmail ?? existing?.ownerEmail ?? null,
-    ownerUserId: ownerUserId ?? existing?.ownerUserId ?? null,
+    owner: connect.email === 'anonymous' ? null : connect.email,
+    ownerUserId: connect.ownerUserId || null,
     name,
+    nameNormalized: String(name || '').trim().toLowerCase(),
     deployed: true,
+    lifecycleState: 'active',
+    archivedAt: null,
     mmr: rating.mmr,
     peakMmr: rating.peakMmr,
     ratedMatches: rating.ratedMatches,
@@ -57,6 +67,8 @@ function createConnectedOpenClawAgent({
   connect.agentId = agentId;
   connect.agentName = name;
   connect.connectedAt = Date.now();
+
+  await upsertAgentRecord(agent);
 
   return agent;
 }
