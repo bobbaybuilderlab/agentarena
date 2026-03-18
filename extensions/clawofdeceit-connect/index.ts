@@ -19,6 +19,15 @@ const {
     preset: { id: string; label: string; starterPrompt: string };
   };
 };
+const {
+  resolveOpenClawConfigPath,
+  resolveOpenClawProfilePath,
+  resolveOpenClawStateDir,
+} = require("./state-paths.cjs") as {
+  resolveOpenClawConfigPath: () => string;
+  resolveOpenClawProfilePath: (fileName: string) => string;
+  resolveOpenClawStateDir: () => string;
+};
 
 type ConnectSession = {
   id: string;
@@ -64,11 +73,21 @@ type DecisionResponsePayload = {
 const DEFAULT_API_BASE = process.env.CLAWOFDECEIT_API_BASE?.trim()
   || process.env.AGENTARENA_API_BASE?.trim()
   || "http://127.0.0.1:3000";
-const DEFAULT_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "CLAWOFDECEIT.md");
-const LEGACY_PROFILE_PATH = path.join(os.homedir(), ".openclaw", "AGENTARENA.md");
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
 const FALLBACK_DISCUSSION_MESSAGE = "I'm locking a public read before the vote.";
+
+function resolveDefaultArenaProfilePath() {
+  return resolveOpenClawProfilePath("CLAWOFDECEIT.md");
+}
+
+function resolveLegacyArenaProfilePath() {
+  return resolveOpenClawProfilePath("AGENTARENA.md");
+}
+
+function resolveArenaProfilePath(filePath?: string) {
+  return path.resolve(filePath || resolveDefaultArenaProfilePath());
+}
 
 function parseArenaProfile(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -89,13 +108,16 @@ function parseArenaProfile(raw: string): Record<string, unknown> {
   return out;
 }
 
-function loadArenaProfile(profilePath: string): Record<string, unknown> {
+function loadArenaProfile(profilePath?: string): Record<string, unknown> {
   try {
-    const resolvedPath = fs.existsSync(profilePath)
-      ? profilePath
-      : profilePath === DEFAULT_PROFILE_PATH && fs.existsSync(LEGACY_PROFILE_PATH)
-        ? LEGACY_PROFILE_PATH
-        : profilePath;
+    const defaultProfilePath = resolveArenaProfilePath();
+    const legacyProfilePath = resolveLegacyArenaProfilePath();
+    const requestedPath = resolveArenaProfilePath(profilePath);
+    const resolvedPath = fs.existsSync(requestedPath)
+      ? requestedPath
+      : requestedPath === defaultProfilePath && fs.existsSync(legacyProfilePath)
+        ? legacyProfilePath
+        : requestedPath;
     if (!fs.existsSync(resolvedPath)) return {};
     return parseArenaProfile(fs.readFileSync(resolvedPath, "utf8"));
   } catch {
@@ -311,7 +333,7 @@ function resolveCurrentProfileName() {
 }
 
 function getRegistryDir(profileName: string) {
-  return path.join(os.homedir(), ".openclaw", "clawofdeceit", "profiles", sanitizeBindingName(profileName) || "main");
+  return path.join(resolveOpenClawStateDir(), "clawofdeceit", "profiles", sanitizeBindingName(profileName) || "main");
 }
 
 function getRegistryPath(profileName: string) {
@@ -328,12 +350,16 @@ function getLaunchAgentsDir() {
 }
 
 function sanitizeLaunchLabelComponent(value: unknown) {
-  const normalized = String(value || "").trim().replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
+  const normalized = String(value || "").trim().replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "");
   return normalized || "main";
 }
 
+function getLaunchStateScope() {
+  return sanitizeLaunchLabelComponent(path.basename(resolveOpenClawStateDir()));
+}
+
 function getLaunchAgentLabel(profileName: string) {
-  return `com.clawofdeceit.openclaw.${sanitizeLaunchLabelComponent(profileName)}`;
+  return `com.clawofdeceit.openclaw.${getLaunchStateScope()}.${sanitizeLaunchLabelComponent(profileName)}`;
 }
 
 function getLaunchAgentPath(profileName: string) {
@@ -552,6 +578,15 @@ function xmlEscape(value: string) {
     .replace(/'/g, "&apos;");
 }
 
+function buildAutoBootEnvironment(profileName: string) {
+  return {
+    OPENCLAW_STATE_DIR: resolveOpenClawStateDir(),
+    OPENCLAW_CONFIG_PATH: resolveOpenClawConfigPath(),
+    OPENCLAW_PROFILE: profileName,
+    PATH: String(process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"),
+  };
+}
+
 function resolveOpenClawBinary() {
   const envBinary = String(process.env.OPENCLAW_BIN || "").trim();
   if (envBinary) return envBinary;
@@ -590,6 +625,13 @@ function renderAutoBootLaunchAgent(args: {
     programArguments.push("--api", args.apiBase);
   }
   const renderStringList = (values: string[]) => values.map((value) => `      <string>${xmlEscape(value)}</string>`).join("\n");
+  const renderEnvDict = (values: Record<string, string>) => Object.entries(values)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .flatMap(([key, value]) => [
+      `    <key>${xmlEscape(key)}</key>`,
+      `    <string>${xmlEscape(value)}</string>`,
+    ])
+    .join("\n");
 
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
@@ -608,8 +650,7 @@ function renderAutoBootLaunchAgent(args: {
     `  <string>${xmlEscape(os.homedir())}</string>`,
     `  <key>EnvironmentVariables</key>`,
     `  <dict>`,
-    `    <key>PATH</key>`,
-    `    <string>${xmlEscape(String(process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"))}</string>`,
+    renderEnvDict(buildAutoBootEnvironment(args.profileName)),
     `  </dict>`,
     `  <key>StandardOutPath</key>`,
     `  <string>${xmlEscape(getLaunchAgentLogPath(args.profileName, "out"))}</string>`,
@@ -1090,7 +1131,7 @@ const plugin = {
           const apiBase = urls.apiBase;
           const webBase = urls.webBase;
           const profileName = resolveCurrentProfileName();
-          const profile = loadArenaProfile(path.resolve(opts.path || DEFAULT_PROFILE_PATH));
+          const profile = loadArenaProfile(opts.path);
           const persona = resolveArenaPersona({
             profile,
             presetId: opts.preset,
@@ -1170,7 +1211,7 @@ const plugin = {
           .option("--token <token>", "Pre-issued connect token from Claw of Deceit")
           .option("--proof <proof>", "Connect proof from Claw of Deceit")
           .option("--callback <url>", "Callback URL from Claw of Deceit")
-          .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
+          .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
           .option("--no-auto-start", "Save this agent but exclude it from future `agents start --all` runs")
@@ -1212,9 +1253,9 @@ const plugin = {
         root
           .command("init-profile")
           .description("Create a local CLAWOFDECEIT.md style profile")
-          .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
-          .action((opts: { path: string }) => {
-            const target = path.resolve(opts.path || DEFAULT_PROFILE_PATH);
+          .option("--path <file>", "Profile file path")
+          .action((opts: { path?: string }) => {
+            const target = resolveArenaProfilePath(opts.path);
             if (!fs.existsSync(path.dirname(target))) fs.mkdirSync(path.dirname(target), { recursive: true });
             if (fs.existsSync(target)) {
               console.log(`Profile already exists: ${target}`);
@@ -1242,10 +1283,10 @@ const plugin = {
           .command("sync-style")
           .description("Sync local CLAWOFDECEIT.md style profile to a saved permanent agent binding")
           .option("--agent <name>", "Saved local agent name (defaults to the profile default)")
-          .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
+          .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
-          .action(async (opts: { agent?: string; path: string; api?: string }) => {
-            const file = path.resolve(opts.path || DEFAULT_PROFILE_PATH);
+          .action(async (opts: { agent?: string; path?: string; api?: string }) => {
+            const file = resolveArenaProfilePath(opts.path);
             const profileName = resolveCurrentProfileName();
             const registry = readBindingRegistry(profileName, opts.api || cfg.apiBase || DEFAULT_API_BASE);
             const selected = findBindingEntry(registry, opts.agent || registry.defaultAgent || "");
@@ -1318,7 +1359,7 @@ const plugin = {
           .requiredOption("--token <token>", "One-time pairing token from clawofdeceit.com/connect.html")
           .requiredOption("--proof <proof>", "One-time pairing proof from clawofdeceit.com/connect.html")
           .option("--callback <url>", "Callback URL from Claw of Deceit")
-          .option("--path <file>", "Profile file path", DEFAULT_PROFILE_PATH)
+          .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
           .option("--no-auto-start", "Save this agent but exclude it from future `agents start --all` runs")
@@ -1436,6 +1477,8 @@ const plugin = {
             const profileName = resolveCurrentProfileName();
             const status = readAutoBootStatus(profileName, opts.api || cfg.apiBase || DEFAULT_API_BASE);
             console.log(`Profile: ${status.profileName}`);
+            console.log(`State dir: ${resolveOpenClawStateDir()}`);
+            console.log(`Config: ${resolveOpenClawConfigPath()}`);
             console.log(`Automatic startup: ${status.enabled ? "enabled" : "disabled"}`);
             console.log(`Saved auto-start agents: ${status.autoStartCount}`);
             if (status.activePid) console.log(`Current shared host: pid ${status.activePid}`);

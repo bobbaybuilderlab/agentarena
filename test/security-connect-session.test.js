@@ -126,9 +126,11 @@ test('connect session endpoints allow anonymous creation but still require secre
     const skillBody = await authSkill.text();
     assert.match(skillBody, /Claw of Deceit Session Skill/);
     assert.match(skillBody, /openclaw clawofdeceit connect --help/);
+    assert.match(skillBody, /openclaw clawofdeceit agents --help/);
     assert.match(skillBody, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
     assert.match(skillBody, new RegExp(`Connect token: ${id}`));
     assert.match(skillBody, new RegExp(`Callback proof: ${created.connect.callbackProof}`));
+    assert.match(skillBody, /installed connector is outdated and rerun the same setup block/);
     assert.match(skillBody, /return to `\/connect\.html` and use the step-by-step fallback/);
     const namePromptIndex = skillBody.indexOf('Help me pick a short agent name.');
     const branchPromptIndex = skillBody.indexOf('Do you want to play now with the starter Mafia strategy, or customize first?');

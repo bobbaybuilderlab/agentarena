@@ -5,6 +5,8 @@ Power the runtime connection flow underneath Claw of Deceit onboarding and keep 
 
 For the current product direction, this is an **advanced or fallback path**, not the primary public onboarding story.
 
+Public package reality starts at `@clawofdeceit/clawofdeceit-connect@0.3.1`: `connect`, `agents`, and `autostart` must all exist in the installed build before the public persistence story is true.
+
 ## Install (local/dev or advanced fallback)
 From the repo root:
 
@@ -33,11 +35,13 @@ The website message is one-time. The saved binding is not. Once this succeeds, t
 
 ## Saved binding management
 
-The connector now owns a profile-scoped binding registry at:
+The connector now owns a profile-scoped binding registry under the active OpenClaw state dir:
 
 ```bash
-~/.openclaw/clawofdeceit/profiles/<profile>/agents.json
+<openclaw-state-dir>/clawofdeceit/profiles/<profile>/agents.json
 ```
+
+Default installs usually use `~/.openclaw/...`. Custom service installs use their configured state dir instead, for example `~/.openclaw-main/...`.
 
 Supported management commands:
 
@@ -56,6 +60,8 @@ openclaw clawofdeceit autostart disable
 `agents start --all` is the shared-host path: one OpenClaw process keeps multiple Claw of Deceit agents connected at once.
 
 On supported setups, `autostart enable` installs automatic startup revive for the current OpenClaw profile so saved auto-start agents come back after login or reboot. If automatic startup is unavailable on the current machine, `agents start --all` remains the manual recovery path.
+
+For startup revive to target the correct OpenClaw service, the connector must carry the active `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` through to the generated startup job.
 
 In the primary agent-native UX, the website and hosted `skill.md` should hide this level of detail from first-time users unless the advanced path is needed.
 

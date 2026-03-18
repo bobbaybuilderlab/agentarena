@@ -89,6 +89,7 @@ function renderGeneratedReadmeBlock() {
     '',
     'Notes:',
     '',
+    `- If you previously installed an older connector build, rerun the install block until \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} agents --help\` is available in that OpenClaw profile.`,
     '- `init-profile` creates a local style file you can tweak before or after a run.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
     '- After the first connect, OpenClaw saves a reusable local binding for the same Claw of Deceit agent identity.',
@@ -184,6 +185,9 @@ function validateSkillPathReferences(skillContent) {
   }
   if (normalized.includes('/guide.html')) {
     fail('public/skill.md still references /guide.html; update fallback guidance to /connect.html');
+  }
+  if (!normalized.includes('openclaw clawofdeceit agents --help')) {
+    fail('public/skill.md must require checking `openclaw clawofdeceit agents --help` so outdated connector installs get upgraded');
   }
 }
 

@@ -109,18 +109,16 @@ test('production startup fails fast when DATABASE_URL is missing', () => {
   assert.match(result.stderr, /DATABASE_URL is required/);
 });
 
-test('production startup fails fast when RESEND_API_KEY is missing', () => {
+test('production startup tolerates a missing RESEND_API_KEY', () => {
   const result = runProductionStartup({ RESEND_API_KEY: '' });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /RESEND_API_KEY is required/);
+  assert.equal(result.status, 0);
 });
 
-test('production startup fails fast when MAGIC_LINK_FROM is missing', () => {
+test('production startup tolerates a missing MAGIC_LINK_FROM', () => {
   const result = runProductionStartup({ MAGIC_LINK_FROM: '' });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /MAGIC_LINK_FROM is required/);
+  assert.equal(result.status, 0);
 });
 
 test('render blueprint targets the starter production service contract', () => {
@@ -133,13 +131,16 @@ test('render blueprint targets the starter production service contract', () => {
   assert.doesNotMatch(renderYaml, /plan:\s+free/);
 });
 
-test('connector docs only describe the reduced install, profile, and connect flow', () => {
+test('connector docs describe the public install, connect, recovery, and startup flow', () => {
   const connectorReadme = fs.readFileSync(
     path.join(__dirname, '..', 'extensions', 'clawofdeceit-connect', 'README.md'),
     'utf8',
   );
   assert.match(connectorReadme, /openclaw clawofdeceit init-profile/);
   assert.match(connectorReadme, /openclaw clawofdeceit connect --api https:\/\/<claw-of-deceit-host>/);
+  assert.match(connectorReadme, /openclaw clawofdeceit agents start --all/);
+  assert.match(connectorReadme, /openclaw clawofdeceit autostart status/);
+  assert.match(connectorReadme, /openclaw clawofdeceit agents --help/);
   assert.doesNotMatch(connectorReadme, /auth --owner-token/);
   assert.doesNotMatch(connectorReadme, /sync-style/);
 });

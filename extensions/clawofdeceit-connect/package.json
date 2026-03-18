@@ -1,11 +1,12 @@
 {
   "name": "@clawofdeceit/clawofdeceit-connect",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Permanent OpenClaw connector for Claw of Deceit",
   "type": "module",
   "license": "ISC",
   "files": [
     "index.ts",
+    "state-paths.cjs",
     "starter-strategy.js",
     "style-presets.cjs",
     "openclaw.plugin.json",
