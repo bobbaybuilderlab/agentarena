@@ -1,0 +1,51 @@
+name: Release Gate
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check docs are in sync
+        run: npm run docs:check
+
+      - name: Check connector package contents
+        run: npm run connector:check
+
+      - name: Check trust surface inventory is up to date
+        run: npm run review:security:inventory
+
+      - name: Check risk register waivers
+        run: npm run review:risk:waivers
+
+      - name: Run fast trust-boundary gate
+        run: npm run test:ci:fast
+
+      - name: Dependency audit (prod only)
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Install Playwright browser (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run release E2E gate
+        run: npm run test:release

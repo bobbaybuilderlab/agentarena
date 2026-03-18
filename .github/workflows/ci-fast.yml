@@ -1,0 +1,41 @@
+name: CI Fast
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ci-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check docs are in sync
+        run: npm run docs:check
+
+      - name: Check connector package contents
+        run: npm run connector:check
+
+      - name: Check trust surface inventory is up to date
+        run: npm run review:security:inventory
+
+      - name: Run fast trust-boundary gate
+        run: npm run test:ci:fast

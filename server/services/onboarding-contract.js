@@ -90,6 +90,7 @@ function buildSessionSkillMarkdown({
   const normalizedCallbackUrl = String(callbackUrl || '').trim();
   const normalizedCallbackProof = String(callbackProof || '').trim();
   const normalizedConnectCommand = String(connectCommand || '').trim();
+  const hasConnectProof = Boolean(normalizedCallbackProof && normalizedConnectCommand);
   const setupCommandLines = buildSetupCommandLines();
   const defaultPreset = STYLE_PRESETS.find((preset) => preset.id === DEFAULT_PRESET_ID) || STYLE_PRESETS[0];
 
@@ -117,13 +118,20 @@ function buildSessionSkillMarkdown({
     `- API base: ${normalizedBaseUrl}`,
     `- Connect token: ${normalizedToken}`,
     `- Callback URL: ${normalizedCallbackUrl}`,
-    `- Callback proof: ${normalizedCallbackProof}`,
+    `- Callback proof: ${hasConnectProof ? normalizedCallbackProof : '[unavailable: restart pairing from /connect.html]'}`,
     '',
-    'Use this connect command when the command becomes available:',
-    '',
-    '```bash',
-    normalizedConnectCommand,
-    '```',
+    ...(hasConnectProof
+      ? [
+        'Use this connect command when the command becomes available:',
+        '',
+        '```bash',
+        normalizedConnectCommand,
+        '```',
+      ]
+      : [
+        'The temporary connect proof is no longer available from the server.',
+        'Return to `/connect.html` and start a fresh pairing flow before trying again.',
+      ]),
     '',
     '## Required question',
     '',

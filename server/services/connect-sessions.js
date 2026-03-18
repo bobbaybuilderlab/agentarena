@@ -170,30 +170,55 @@ function sanitizeConnectSession(connect, {
   return base;
 }
 
-function readConnectAccessToken(req) {
+function readConnectAccessToken(req, {
+  allowQuery = false,
+  allowBody = false,
+} = {}) {
   return String(
-    req.query?.accessToken
-      || req.headers['x-connect-access-token']
-      || req.body?.accessToken
-      || req.body?.proof
+    req.headers['x-connect-access-token']
+      || (allowQuery ? req.query?.accessToken : '')
+      || (allowBody ? req.body?.accessToken : '')
       || ''
   ).trim();
 }
 
-function doesConnectSecretMatch(connect, token) {
-  const normalizedToken = String(token || '').trim();
-  if (!normalizedToken || !connect) return false;
-  if (normalizedToken === String(connect.accessToken || '').trim()) return true;
-  if (normalizedToken === String(connect.callbackProof || '').trim()) return true;
-  return secretMatches(normalizedToken, connect.accessTokenHash)
-    || secretMatches(normalizedToken, connect.callbackProofHash);
+function readConnectCallbackProof(req, { allowQuery = false } = {}) {
+  return String(
+    req.headers['x-openclaw-callback-proof']
+      || req.headers['x-connect-callback-proof']
+      || req.body?.proof
+      || req.body?.callbackProof
+      || (allowQuery ? (req.query?.proof || req.query?.callbackProof) : '')
+      || ''
+  ).trim();
 }
 
-function authorizeConnectSession(req, connect) {
+function doesConnectSecretMatch(connect, token, {
+  allowAccessToken = true,
+  allowCallbackProof = true,
+} = {}) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken || !connect) return false;
+  if (allowAccessToken && normalizedToken === String(connect.accessToken || '').trim()) return true;
+  if (allowCallbackProof && normalizedToken === String(connect.callbackProof || '').trim()) return true;
+  return (allowAccessToken && secretMatches(normalizedToken, connect.accessTokenHash))
+    || (allowCallbackProof && secretMatches(normalizedToken, connect.callbackProofHash));
+}
+
+function authorizeConnectSessionRead(req, connect, { allowQuery = false } = {}) {
   if (!connect) return false;
-  const token = readConnectAccessToken(req);
-  if (!token) return false;
-  return doesConnectSecretMatch(connect, token);
+  const accessToken = readConnectAccessToken(req, { allowQuery });
+  const callbackProof = readConnectCallbackProof(req);
+  if (!accessToken && !callbackProof) return false;
+  return doesConnectSecretMatch(connect, accessToken, { allowCallbackProof: false })
+    || doesConnectSecretMatch(connect, callbackProof, { allowAccessToken: false });
+}
+
+function authorizeConnectSessionWrite(req, connect) {
+  if (!connect) return false;
+  const callbackProof = readConnectCallbackProof(req);
+  if (!callbackProof) return false;
+  return doesConnectSecretMatch(connect, callbackProof, { allowAccessToken: false });
 }
 
 function isConnectSessionExpired(connect) {
@@ -202,13 +227,15 @@ function isConnectSessionExpired(connect) {
 
 module.exports = {
   CONNECT_SESSION_TTL_MS,
-  authorizeConnectSession,
+  authorizeConnectSessionRead,
+  authorizeConnectSessionWrite,
   createConnectSession,
   getConnectSession,
   getConnectArenaUrl,
   hydrateConnectSession,
   isConnectSessionExpired,
   readConnectAccessToken,
+  readConnectCallbackProof,
   saveConnectSession,
   sanitizeConnectSession,
 };

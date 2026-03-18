@@ -49,6 +49,8 @@ test('play rooms API lists mafia rooms and open-room filtering', async () => {
       assert.equal(roomsData.summary.openRooms, 1);
       assert.equal(roomsData.rooms[0].mode, 'mafia');
       assert.equal(roomsData.rooms[0].canJoin, true);
+      assert.equal(roomsData.rooms[0].hostPlayerId, null);
+      assert.equal('disconnectedHumans' in (roomsData.rooms[0].launchReadiness || {}), false);
 
       await emitAck(guestA, 'mafia:room:join', { roomId: created.roomId, name: 'GuestA' });
       await emitAck(guestB, 'mafia:room:join', { roomId: created.roomId, name: 'GuestB' });
@@ -106,6 +108,7 @@ test('quick-join picks the highest-quality mafia lobby and returns a join ticket
       assert.equal(typeof quickJoinData.quickJoinDecision?.code, 'string');
       assert.match(quickJoinData.joinTicket.joinUrl, new RegExp(`room=${hotRoom.roomId}`));
       assert.match(quickJoinData.joinTicket.joinUrl, /game=mafia/);
+      assert.doesNotMatch(quickJoinData.joinTicket.joinUrl, /claimToken|reclaimName|reclaimHost/);
     } finally {
       hostA.disconnect();
       hostB.disconnect();
@@ -114,7 +117,7 @@ test('quick-join picks the highest-quality mafia lobby and returns a join ticket
   });
 });
 
-test('lobby claims expose disconnected mafia seats and reconnect telemetry is mafia-only', async () => {
+test('public lobby recovery routes are unavailable and disconnected identities are not exposed', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
     const guest = ioc(url, { reconnection: false, autoUnref: true });
@@ -128,38 +131,33 @@ test('lobby claims expose disconnected mafia seats and reconnect telemetry is ma
       guest.disconnect();
       await new Promise((resolve) => setTimeout(resolve, 25));
 
+      const roomsRes = await fetch(`${url}/api/play/rooms`);
+      const roomsData = await roomsRes.json();
+      assert.equal(roomsData.ok, true);
+      assert.equal(roomsData.rooms[0].hostPlayerId, null);
+      assert.equal(roomsData.rooms[0].launchReadiness.disconnectedCount, 1);
+      assert.equal('disconnectedHumans' in (roomsData.rooms[0].launchReadiness || {}), false);
+
       const claimsRes = await fetch(`${url}/api/play/lobby/claims?mode=mafia&roomId=${encodeURIComponent(created.roomId)}`);
-      const claims = await claimsRes.json();
-      assert.equal(claims.ok, true);
-      assert.equal(claims.claimable.length, 1);
-      assert.equal(claims.claimable[0].name, 'Guest');
+      assert.equal(claimsRes.status, 404);
 
       const telemetryRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'mafia', roomId: created.roomId, outcome: 'attempt', event: 'reclaim_clicked' }),
       });
-      const telemetry = await telemetryRes.json();
-      assert.equal(telemetry.ok, true);
-      assert.equal(telemetry.reconnectAuto.attempts, 1);
-      assert.equal(telemetry.reconnectRecoveryClicks.reclaim_clicked, 1);
-
-      const invalidModeRes = await fetch(`${url}/api/play/reconnect-telemetry`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'villa', roomId: created.roomId, outcome: 'attempt' }),
-      });
-      assert.equal(invalidModeRes.status, 400);
+      assert.equal(telemetryRes.status, 404);
     } finally {
       host.disconnect();
     }
   });
 });
 
-test('lobby autofill remains mafia-only and start-ready replaces disconnected humans before launch', async () => {
+test('disconnected player names cannot be reclaimed and public lobby autofill is unavailable', async () => {
   await withServer(async (url) => {
     const host = ioc(url, { reconnection: false, autoUnref: true });
     const guest = ioc(url, { reconnection: false, autoUnref: true });
+    const attacker = ioc(url, { reconnection: false, autoUnref: true });
 
     try {
       const created = await emitAck(host, 'mafia:room:create', { name: 'Host' });
@@ -172,10 +170,14 @@ test('lobby autofill remains mafia-only and start-ready replaces disconnected hu
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'amongus', roomId: created.roomId, minPlayers: 4 }),
       });
-      assert.equal(invalidModeRes.status, 400);
+      assert.equal(invalidModeRes.status, 404);
 
       guest.disconnect();
       await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const reclaimAttempt = await emitAck(attacker, 'mafia:room:join', { roomId: created.roomId, name: 'Guest' });
+      assert.equal(reclaimAttempt.ok, false);
+      assert.equal(reclaimAttempt.error?.code, 'NAME_RESERVED');
 
       const startReady = await emitAck(host, 'mafia:start-ready', { roomId: created.roomId, playerId: created.playerId });
       assert.equal(startReady.ok, true);
@@ -185,6 +187,7 @@ test('lobby autofill remains mafia-only and start-ready replaces disconnected hu
       assert.equal(startReady.state.players.length, 6);
     } finally {
       host.disconnect();
+      attacker.disconnect();
     }
   });
 });

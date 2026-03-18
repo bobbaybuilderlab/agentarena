@@ -2,11 +2,13 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const {
-  authorizeConnectSession,
+  authorizeConnectSessionRead,
+  authorizeConnectSessionWrite,
   createConnectSession,
   getConnectSession,
   isConnectSessionExpired,
   readConnectAccessToken,
+  readConnectCallbackProof,
   sanitizeConnectSession,
   saveConnectSession,
 } = require('../services/connect-sessions');
@@ -30,10 +32,12 @@ function createLimiterHandler(errorMessage) {
 
 function getRateLimitKey(req) {
   const sessionId = String(req.params?.id || req.body?.token || '').trim();
-  const accessToken = readConnectAccessToken(req);
-  if (sessionId && accessToken) return `session:${sessionId}:${accessToken}`;
+  const accessToken = readConnectAccessToken(req, { allowQuery: true });
+  const callbackProof = readConnectCallbackProof(req);
+  const authToken = callbackProof || accessToken;
+  if (sessionId && authToken) return `session:${sessionId}:${authToken}`;
   if (sessionId) return `session:${sessionId}`;
-  if (accessToken) return `token:${accessToken}`;
+  if (authToken) return `token:${authToken}`;
   return `ip:${ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || 'unknown')}`;
 }
 
@@ -119,10 +123,10 @@ function createOpenClawRouter({
     const connect = await getConnectSession(connectSessions, req.params.id || String(req.body?.token || '').trim());
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
     if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-    if (req.params.id && !authorizeConnectSession(req, connect)) {
+    if (req.params.id && !authorizeConnectSessionWrite(req, connect)) {
       return res.status(401).json({ ok: false, error: 'connect session auth required' });
     }
-    if (!req.params.id && !authorizeConnectSession(req, connect)) {
+    if (!req.params.id && !authorizeConnectSessionWrite(req, connect)) {
       return res.status(401).json({ ok: false, error: 'invalid callback proof' });
     }
 
@@ -204,7 +208,7 @@ function createOpenClawRouter({
     const connect = await getConnectSession(connectSessions, req.params.id);
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
     if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-    if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
+    if (!authorizeConnectSessionRead(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
     sendConnectSession(res, connect, req, false);
   });
 
@@ -212,18 +216,20 @@ function createOpenClawRouter({
     const connect = await getConnectSession(connectSessions, req.params.id);
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
     if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
-    if (!authorizeConnectSession(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
+    if (!authorizeConnectSessionRead(req, connect, { allowQuery: true })) {
+      return res.status(401).json({ ok: false, error: 'connect session auth required' });
+    }
 
     const publicBaseUrl = resolvePublicBaseUrl(req);
-    const accessToken = readConnectAccessToken(req);
-    const callbackProof = String(connect.callbackProof || accessToken || '').trim();
+    const accessToken = readConnectAccessToken(req, { allowQuery: true });
+    const callbackProof = String(connect.callbackProof || '').trim();
     const markdown = buildSessionSkillMarkdown({
       publicBaseUrl,
       token: connect.id,
       callbackUrl: connect.callbackUrl,
       callbackProof,
       connectCommand: sanitizeConnectSession(connect, {
-        includeSecrets: Boolean(connect.callbackProof),
+        includeSecrets: Boolean(callbackProof),
         publicBaseUrl,
         summarizeAgentArenaState,
       })?.onboarding?.connectCommand || (

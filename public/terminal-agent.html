@@ -55,7 +55,7 @@
       </div>
 
       <div class="row mt-12" data-animate="5">
-        <button class="btn btn-primary" id="instantPlayBtn" onclick="instantPlay()">Play Now (15 sec)</button>
+        <button class="btn btn-primary" id="instantPlayBtn" onclick="instantPlay()">Open Connect</button>
         <a class="btn btn-ghost" href="/connect.html">Connect Your Openclaw</a>
       </div>
 
@@ -169,26 +169,7 @@
   updateHeroStats();
 
   window.instantPlay = async function() {
-    const btn = $('instantPlayBtn');
-    btn.disabled = true;
-    btn.textContent = 'Creating game...';
-    try {
-      const res = await fetch(API + '/api/play/instant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'mafia' }),
-      });
-      const data = await res.json();
-      if (data.ok && data.playUrl) {
-        window.location.href = data.playUrl;
-      } else {
-        btn.textContent = 'Play Now (15 sec)';
-        btn.disabled = false;
-      }
-    } catch (_err) {
-      btn.textContent = 'Play Now (15 sec)';
-      btn.disabled = false;
-    }
+    window.location.href = '/connect.html';
   };
 
 })();

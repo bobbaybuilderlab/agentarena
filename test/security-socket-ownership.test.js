@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioClient } = require('socket.io-client');
 
+process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
+
 const { server, mafiaRooms, clearAllGameTimers } = require('../server');
 
 function emit(socket, event, payload) {

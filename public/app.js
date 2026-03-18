@@ -4,10 +4,12 @@ const API_BASE = runtime.API_URL || window.location.origin;
 const STORAGE_KEYS = {
   agentId: ['clawofdeceit_agent_id', 'agentarena_agent_id'],
   connectSessionId: ['clawofdeceit_connect_session_id', 'agentarena_connect_session_id'],
-  connectAccessToken: ['clawofdeceit_connect_access_token', 'agentarena_connect_access_token'],
   connectorInstalled: ['clawofdeceit_connector_installed', 'agentarena_connector_installed'],
   hasGeneratedCommand: ['clawofdeceit_has_generated_command', 'agentarena_has_generated_command'],
   viewedArena: ['clawofdeceit_viewed_arena', 'clawofdeceit_viewed_watch', 'agentarena_viewed_arena'],
+};
+const SESSION_KEYS = {
+  connectAccessToken: 'clawofdeceit_connect_access_token',
 };
 
 function getStoredValue(keyList) {
@@ -34,6 +36,26 @@ function clearStoredValue(keyList) {
   }
 }
 
+function getSessionValue(key) {
+  try {
+    return sessionStorage.getItem(key) || '';
+  } catch (_err) {
+    return '';
+  }
+}
+
+function setSessionValue(key, value) {
+  try {
+    if (value == null || value === '') {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    sessionStorage.setItem(key, String(value));
+  } catch (_err) {
+    // Ignore storage failures in locked-down browsers.
+  }
+}
+
 function getConnectedAgentId() {
   return getStoredValue(STORAGE_KEYS.agentId);
 }
@@ -51,6 +73,17 @@ function syncConnectedAgentIdFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const agentId = params.get('agentId');
   if (agentId) setStoredValue(STORAGE_KEYS.agentId, agentId);
+  let mutated = false;
+  ['authToken', 'accessToken', 'claimToken'].forEach((key) => {
+    if (!params.has(key)) return;
+    params.delete(key);
+    mutated = true;
+  });
+  if (mutated) {
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`;
+    window.history.replaceState(null, '', nextUrl);
+  }
 }
 
 syncConnectedAgentIdFromUrl();
@@ -71,7 +104,7 @@ const viewSkillBtn = document.getElementById('viewSkillBtn');
 let connectSessionId = getStoredValue(STORAGE_KEYS.connectSessionId) || null;
 let connectCommand = '';
 let connectExpiresAt = null;
-let connectAccessToken = getStoredValue(STORAGE_KEYS.connectAccessToken) || '';
+let connectAccessToken = getSessionValue(SESSION_KEYS.connectAccessToken) || '';
 let statusPoll = null;
 let publicOnboarding = null;
 
@@ -166,7 +199,7 @@ generateCmdBtn?.addEventListener('click', async () => {
     cliBox.style.display = 'block';
     setStoredValue(STORAGE_KEYS.hasGeneratedCommand, '1');
     setStoredValue(STORAGE_KEYS.connectSessionId, connectSessionId);
-    setStoredValue(STORAGE_KEYS.connectAccessToken, connectAccessToken);
+    setSessionValue(SESSION_KEYS.connectAccessToken, connectAccessToken);
     refreshFirstWinChecklist();
     generateCmdBtn.style.display = 'none';
     statusEl.textContent = 'Ready. Paste this into OpenClaw.';
@@ -197,16 +230,22 @@ copyCmdBtn?.addEventListener('click', async () => {
 async function checkConnectionStatus() {
   if (!connectSessionId) return;
   try {
-    const qs = connectAccessToken ? `?accessToken=${encodeURIComponent(connectAccessToken)}` : '';
-    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}${qs}`);
+    const headers = connectAccessToken
+      ? { 'x-connect-access-token': connectAccessToken }
+      : {};
+    const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}`, { headers });
     const data = await res.json();
     if (!data.ok) {
       if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new one-time message.';
+      connectAccessToken = '';
+      setSessionValue(SESSION_KEYS.connectAccessToken, '');
       if (statusPoll) clearInterval(statusPoll);
       return;
     }
     if (data.connect.status === 'connected') {
       if (statusPoll) clearInterval(statusPoll);
+      connectAccessToken = '';
+      setSessionValue(SESSION_KEYS.connectAccessToken, '');
       setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
       if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
       syncArenaEntryButton();
@@ -236,6 +275,8 @@ async function checkConnectionStatus() {
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
       if (statusPoll) clearInterval(statusPoll);
+      connectAccessToken = '';
+      setSessionValue(SESSION_KEYS.connectAccessToken, '');
       statusEl.textContent = 'Session expired. Generate a new one-time message.';
       return;
     }

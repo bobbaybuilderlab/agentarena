@@ -11,10 +11,17 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token TEXT NOT NULL UNIQUE,
+  token TEXT UNIQUE,
+  token_hash TEXT UNIQUE,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS token_hash TEXT;
+
+ALTER TABLE sessions
+  ALTER COLUMN token DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS metric_counters (
   metric_key TEXT PRIMARY KEY,
@@ -180,6 +187,7 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_match_results_room ON match_results(room_id);

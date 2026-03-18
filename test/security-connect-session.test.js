@@ -3,6 +3,13 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 
 const { app, agentProfiles, connectSessions, liveAgentRuntimes } = require('../server');
+const {
+  createAnonymousUser,
+  upgradeUser,
+  createMagicLinkTokenRecord,
+  getSessionByToken,
+} = require('../server/db');
+const { hashSecret } = require('../server/services/secret-tokens');
 
 async function withServer(run) {
   const server = http.createServer(app);
@@ -41,9 +48,12 @@ async function createAnonymousConnectSession(base) {
 }
 
 async function confirmConnectSession(base, created, body) {
-  const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm?accessToken=${encodeURIComponent(created.connect.accessToken)}`, {
+  const confirmRes = await fetch(`${base}/api/openclaw/connect-session/${created.connect.id}/confirm`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-openclaw-callback-proof': created.connect.callbackProof,
+    },
     body: JSON.stringify(body),
   });
   return {
@@ -90,7 +100,12 @@ test('connect session endpoints allow anonymous creation but still require secre
     });
     assert.equal(noAuthConfirm.status, 401);
 
-    const authStatus = await fetch(`${base}/api/openclaw/connect-session/${id}?accessToken=${encodeURIComponent(accessToken)}`);
+    const queryStatus = await fetch(`${base}/api/openclaw/connect-session/${id}?accessToken=${encodeURIComponent(accessToken)}`);
+    assert.equal(queryStatus.status, 401);
+
+    const authStatus = await fetch(`${base}/api/openclaw/connect-session/${id}`, {
+      headers: { 'x-connect-access-token': accessToken },
+    });
     assert.equal(authStatus.status, 200);
     const statusData = await authStatus.json();
     assert.equal(statusData.ok, true);
@@ -130,6 +145,13 @@ test('connect session endpoints allow anonymous creation but still require secre
     assert.doesNotMatch(skillBody, /sync-style/i);
     assert.doesNotMatch(skillBody, /\/guide\.html/);
 
+    const queryConfirm = await fetch(`${base}/api/openclaw/connect-session/${id}/confirm?accessToken=${encodeURIComponent(accessToken)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentName: 'query_attacker' }),
+    });
+    assert.equal(queryConfirm.status, 401);
+
     const storedConnect = connectSessions.get(id);
     assert.ok(storedConnect);
     storedConnect.expiresAt = Date.now() - 1;
@@ -160,6 +182,44 @@ test('duplicate agent names are rejected during permanent binding', async () => 
     assert.equal(secondConfirm.response.status, 409);
     assert.equal(secondConfirm.json.ok, false);
     assert.equal(secondConfirm.json.code, 'AGENT_NAME_TAKEN');
+  });
+});
+
+test('magic link verification sets a site session cookie and redirects without leaking the token in the URL', async () => {
+  await withServer(async (base) => {
+    const loginToken = 'magic-link-test-token';
+    const expiresAt = new Date(Date.now() + (5 * 60 * 1000)).toISOString();
+
+    await createAnonymousUser('magic-user');
+    await upgradeUser('magic-user', { email: 'magic@example.com', displayName: 'Magic User' });
+    await createMagicLinkTokenRecord({
+      tokenHash: hashSecret(loginToken),
+      userId: 'magic-user',
+      email: 'magic@example.com',
+      intent: 'login',
+      expiresAt,
+    });
+
+    const verifyRes = await fetch(`${base}/api/auth/verify?token=${encodeURIComponent(loginToken)}`, {
+      redirect: 'manual',
+    });
+
+    assert.equal(verifyRes.status, 302);
+    assert.equal(verifyRes.headers.get('location'), '/connect.html');
+
+    const setCookie = verifyRes.headers.get('set-cookie') || '';
+    assert.match(setCookie, /site_session=/);
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /SameSite=Lax/);
+    assert.match(setCookie, /Path=\//);
+    assert.doesNotMatch(String(verifyRes.headers.get('location') || ''), /authToken=/);
+
+    const issuedToken = decodeURIComponent((setCookie.match(/site_session=([^;]+)/) || [])[1] || '');
+    assert.ok(issuedToken);
+
+    const session = await getSessionByToken(issuedToken);
+    assert.ok(session);
+    assert.equal(session.user_id, 'magic-user');
   });
 });
 
@@ -230,5 +290,24 @@ test('bound-agent management routes use the saved reusable agent token', async (
     const afterArchive = await afterArchiveRes.json();
     assert.equal(afterArchive.ok, false);
     assert.equal(afterArchive.code, 'INVALID_AGENT_TOKEN');
+  });
+});
+
+test('legacy public openclaw style-sync route is unavailable', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/openclaw/style-sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        profile: {
+          preset: 'chaotic',
+          tone: 'intruder',
+        },
+      }),
+    });
+    assert.equal(res.status, 404);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'ROUTE_UNAVAILABLE');
   });
 });

@@ -1,12 +1,20 @@
-# Room Event Log (MVP)
+# Room Event Log (Dev / Ops)
 
 Claw of Deceit now emits a normalized append-only event stream per room for:
 - `arena`
 - `mafia`
 - `amongus`
 
-Events are buffered in memory (last 1,000 per room) and append-written to:
+Events are always buffered in memory (last 1,000 per room). File persistence is optional and append-writes to:
 - `data/room-events.ndjson`
+
+Production defaults:
+- public replay routes are disabled
+- durable room-event file persistence is disabled
+
+You can opt back in with:
+- `PUBLIC_ROOM_EVENT_ROUTES=1`
+- `ROOM_EVENT_FILE_PERSISTENCE=1`
 
 ## Normalized event shape
 
@@ -47,3 +55,5 @@ Returns reconstructed summary from the event timeline:
 - full timeline payload for debugging
 
 This replay is intentionally lightweight: it's for fast debugging, not authoritative game re-simulation.
+
+This route is intended for local debugging and ops use. It is not part of the production MVP surface by default.

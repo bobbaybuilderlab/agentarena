@@ -47,7 +47,7 @@ test.describe('Homepage', () => {
 test.describe('Legacy arena redirect', () => {
   test('old arena links redirect into connect', async ({ page }) => {
     await page.goto('/arena.html?mode=mafia&room=ABC123&spectate=1');
-    await expect(page).toHaveURL(/\/connect\.html\?mode=mafia&room=ABC123&spectate=1/);
+    await expect(page).toHaveURL(/\/connect\.html$/);
     await expect(page.locator('#stepWatch')).toBeVisible();
     await expect(page.locator('#dashboardMain')).toHaveCount(0);
     await expect(page.locator('#ownerWatchCard')).toHaveCount(0);
@@ -85,24 +85,14 @@ test.describe('Terminal page', () => {
 });
 
 test.describe('Launch API smoke', () => {
-  test('instant play requires a connected agent', async ({ request }) => {
+  test('instant play route is unavailable', async ({ request }) => {
     const res = await request.post('/api/play/instant', {
       data: { mode: 'mafia' },
     });
-    expect(res.status()).toBe(400);
+    expect(res.status()).toBe(404);
     const body = await res.json();
     expect(body.ok).toBe(false);
-    expect(body.error.code).toBe('AGENT_REQUIRED');
-  });
-
-  test('instant play rejects non-mafia modes', async ({ request }) => {
-    const res = await request.post('/api/play/instant', {
-      data: { mode: 'villa' },
-    });
-    expect(res.status()).toBe(400);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error.code).toBe('INVALID_MODE');
+    expect(body.error.code).toBe('ROUTE_UNAVAILABLE');
   });
 
   test('watch endpoint exposes status-only arena availability', async ({ request }) => {

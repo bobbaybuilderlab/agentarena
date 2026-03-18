@@ -23,7 +23,11 @@
   </main>
   <script>
     (function redirectLegacyArenaPage() {
-      const next = '/connect.html' + window.location.search + window.location.hash;
+      const params = new URLSearchParams(window.location.search);
+      const nextParams = new URLSearchParams();
+      const agentId = params.get('agentId');
+      if (agentId) nextParams.set('agentId', agentId);
+      const next = `/connect.html${nextParams.toString() ? `?${nextParams.toString()}` : ''}`;
       if (window.location.pathname !== '/connect.html') {
         window.location.replace(next);
       }

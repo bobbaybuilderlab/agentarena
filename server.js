@@ -179,6 +179,7 @@ const MAGIC_LINK_FROM_RAW = String(process.env.MAGIC_LINK_FROM || '').trim();
 const MAGIC_LINK_FROM = MAGIC_LINK_FROM_RAW || 'Claw of Deceit <noreply@clawofdeceit.com>';
 const PUBLIC_ROOM_EVENT_ROUTES_ENABLED = readBooleanEnv('PUBLIC_ROOM_EVENT_ROUTES', !IS_PRODUCTION);
 const ROOM_EVENT_FILE_PERSISTENCE_ENABLED = readBooleanEnv('ROOM_EVENT_FILE_PERSISTENCE', !IS_PRODUCTION);
+const ALLOW_INSECURE_DEV_SURFACES = readBooleanEnv('ALLOW_INSECURE_DEV_SURFACES', false);
 
 if (IS_PRODUCTION && !PUBLIC_APP_URL) {
   throw new Error('PUBLIC_APP_URL is required when NODE_ENV=production');
@@ -267,6 +268,87 @@ function sendRuntimeHtml(req, res, next) {
 
 function readBearerToken(req) {
   return String(req.headers.authorization || '').replace('Bearer ', '').trim();
+}
+
+function parseCookies(req) {
+  const header = String(req.headers.cookie || '').trim();
+  if (!header) return {};
+  return header.split(';').reduce((cookies, chunk) => {
+    const [rawName, ...rest] = chunk.split('=');
+    const name = String(rawName || '').trim();
+    if (!name) return cookies;
+    cookies[name] = decodeURIComponent(rest.join('=').trim());
+    return cookies;
+  }, {});
+}
+
+function readSiteSessionCookie(req) {
+  return String(parseCookies(req).site_session || '').trim();
+}
+
+function readSiteSessionToken(req) {
+  return readBearerToken(req) || readSiteSessionCookie(req);
+}
+
+function requestUsesSecureTransport(req) {
+  if (req.secure) return true;
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (forwardedProto === 'https') return true;
+  return normalizeBaseUrl(PUBLIC_APP_URL).startsWith('https://');
+}
+
+function buildSiteSessionCookie(token, req) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return '';
+  const parts = [
+    `site_session=${encodeURIComponent(normalizedToken)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+  ];
+  if (requestUsesSecureTransport(req)) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function clearSiteSessionCookie(req) {
+  const parts = [
+    'site_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (requestUsesSecureTransport(req)) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function isLoopbackAddress(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized === 'localhost' || normalized === '::1') return true;
+  if (normalized === '::ffff:127.0.0.1') return true;
+  if (normalized.startsWith('127.')) return true;
+  return false;
+}
+
+function isLocalOnlyRequest(req) {
+  const forwardedFor = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const host = String(req.headers.host || '').split(':')[0].trim().toLowerCase();
+  return [
+    forwardedFor,
+    req.ip,
+    req.socket?.remoteAddress,
+    host,
+  ].some(isLoopbackAddress);
+}
+
+function insecureDevSurfacesAllowed(req) {
+  return ALLOW_INSECURE_DEV_SURFACES && isLocalOnlyRequest(req);
+}
+
+function setSiteSessionCookie(res, token, req) {
+  const cookie = buildSiteSessionCookie(token, req);
+  if (cookie) res.append('Set-Cookie', cookie);
 }
 
 const io = new Server(server, {
@@ -896,21 +978,21 @@ io.on('connection', (socket) => {
     }
 
     const prior = getAgentRuntime(agent.id);
-    if (prior?.socketId && prior.socketId !== socket.id) {
-      io.sockets.sockets.get(prior.socketId)?.disconnect(true);
-    }
+    const nextStatus = prior?.currentRoomId && prior?.currentPlayerId
+      ? String(prior.status || 'in_match')
+      : 'idle';
 
     socket.data.agentRuntime = {
       agentId: agent.id,
       connectSessionId: connect?.id || null,
       authMode,
     };
-    agentRuntimeSockets.set(socket.id, agent.id);
-    setAgentRuntimeStatus(agent.id, 'idle', {
-      connected: true,
-      socketId: socket.id,
+    bindAgentRuntimeSocket(agent.id, socket.id, {
+      status: nextStatus,
       connectSessionId: connect?.id || null,
-      connectedAt: Date.now(),
+      connectedAt: prior?.connectedAt || Date.now(),
+      currentRoomId: prior?.currentRoomId || null,
+      currentPlayerId: prior?.currentPlayerId || null,
     });
     markAgentProfileConnection(agent.id, true, 'live runtime connected');
     await syncAgentProfileToPersistence(agent);
@@ -934,18 +1016,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:room:join', (payload, cb) => {
-    const { roomId, name, claimToken } = payload || {};
+    const { roomId, name } = payload || {};
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     if (normalizedRoomId && mafiaRooms.has(normalizedRoomId)) recordJoinAttempt('mafia', normalizedRoomId);
-    const reconnect = resolveReconnectJoinName('mafia', roomId, name, claimToken);
-    const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name: reconnect.name, socketId: socket.id });
+    const joined = mafiaGame.joinRoom(mafiaRooms, { roomId, name, socketId: socket.id });
     if (!joined.ok) {
       if (joined.error?.code === 'SOCKET_ALREADY_JOINED') {
-        recordJoinHardeningEvent('mafia', normalizedRoomId, socket.id, reconnect.name);
+        recordJoinHardeningEvent('mafia', normalizedRoomId, socket.id, name);
       }
       return cb?.(joined);
     }
-    if (reconnect.consumedClaimToken) consumeReconnectClaimTicket('mafia', joined.room.id, reconnect.consumedClaimToken);
     socket.join(`mafia:${joined.room.id}`);
     recordQuickJoinConversion('mafia', joined.room.id, joined.player.name);
     logRoomEvent('mafia', joined.room, 'PLAYER_JOINED', { playerId: joined.player.id, playerName: joined.player.name, status: joined.room.status, phase: joined.room.phase });
@@ -1147,14 +1227,10 @@ io.on('connection', (socket) => {
     }
 
     const runtimeAgentId = agentRuntimeSockets.get(socket.id);
-    if (runtimeAgentId) {
-      agentRuntimeSockets.delete(socket.id);
+    if (runtimeAgentId && agentSocketIsAuthoritative(runtimeAgentId, socket.id)) {
       const runtime = getAgentRuntime(runtimeAgentId);
       if (runtime) {
-        setAgentRuntimeStatus(runtimeAgentId, 'offline', {
-          connected: false,
-          socketId: null,
-        });
+        releaseAgentRuntimeSocket(runtimeAgentId, socket.id, { status: 'offline' });
         markAgentProfileConnection(runtimeAgentId, false, 'live runtime disconnected');
         void syncAgentProfileToPersistence(agentProfiles.get(runtimeAgentId));
         persistState();
@@ -1212,6 +1288,26 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: https:",
+      "connect-src 'self' https: ws: wss:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; '),
+  );
+  next();
+});
 
 // ── Rate Limiting ──
 const rateLimitKey = (req) => ipKeyGenerator(req.ip || req.headers['x-forwarded-for'] || 'unknown');
@@ -1230,8 +1326,7 @@ app.use('/api/ops/', opsLimiter);
 function opsAuthGate(req, res, next) {
   const token = process.env.OPS_ADMIN_TOKEN;
   if (!token) {
-    // No token configured: block in production, allow in dev
-    if (process.env.NODE_ENV === 'production') {
+    if (!insecureDevSurfacesAllowed(req)) {
       return res.status(401).json({ ok: false, error: 'unauthorized — OPS_ADMIN_TOKEN not configured' });
     }
     return next();
@@ -2378,7 +2473,7 @@ function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) 
 }
 
 async function resolveSiteSession(req) {
-  const token = readBearerToken(req);
+  const token = readSiteSessionToken(req);
   if (!token) return null;
 
   try {
@@ -2690,6 +2785,58 @@ function setAgentRuntimeStatus(agentId, status, patch = {}) {
   return upsertAgentRuntime(agentId, { status, ...patch });
 }
 
+function agentSocketIsAuthoritative(agentId, socketId) {
+  const normalizedAgentId = String(agentId || '').trim();
+  const normalizedSocketId = String(socketId || '').trim();
+  if (!normalizedAgentId || !normalizedSocketId) return false;
+  const runtime = getAgentRuntime(normalizedAgentId);
+  if (!runtime?.socketId || runtime.socketId !== normalizedSocketId) return false;
+  return agentRuntimeSockets.get(normalizedSocketId) === normalizedAgentId;
+}
+
+function bindAgentRuntimeSocket(agentId, socketId, patch = {}) {
+  const normalizedAgentId = String(agentId || '').trim();
+  const normalizedSocketId = String(socketId || '').trim();
+  if (!normalizedAgentId || !normalizedSocketId) return null;
+
+  const priorRuntime = getAgentRuntime(normalizedAgentId);
+  if (priorRuntime?.socketId && priorRuntime.socketId !== normalizedSocketId) {
+    agentRuntimeSockets.delete(priorRuntime.socketId);
+    io.sockets.sockets.get(priorRuntime.socketId)?.disconnect(true);
+  }
+
+  const priorAgentId = agentRuntimeSockets.get(normalizedSocketId);
+  if (priorAgentId && priorAgentId !== normalizedAgentId) {
+    const displacedRuntime = getAgentRuntime(priorAgentId);
+    if (displacedRuntime?.socketId === normalizedSocketId) {
+      upsertAgentRuntime(priorAgentId, {
+        connected: false,
+        socketId: null,
+        status: 'offline',
+        currentRoomId: null,
+        currentPlayerId: null,
+      });
+    }
+  }
+
+  agentRuntimeSockets.set(normalizedSocketId, normalizedAgentId);
+  return upsertAgentRuntime(normalizedAgentId, {
+    ...patch,
+    connected: true,
+    socketId: normalizedSocketId,
+  });
+}
+
+function releaseAgentRuntimeSocket(agentId, socketId, patch = {}) {
+  if (!agentSocketIsAuthoritative(agentId, socketId)) return null;
+  agentRuntimeSockets.delete(String(socketId || '').trim());
+  return upsertAgentRuntime(agentId, {
+    ...patch,
+    connected: false,
+    socketId: null,
+  });
+}
+
 function clearAgentRuntimeAssignment(agentId, nextStatus = 'idle') {
   const runtime = getAgentRuntime(agentId);
   if (!runtime) return null;
@@ -2951,6 +3098,7 @@ function validatePublicArenaBatch(agents) {
   }
 
   const seenNames = new Set();
+  const seenSocketIds = new Set();
   for (const agent of agents) {
     if (!agent?.id) return { ok: false, error: 'missing agent id' };
     if (seenNames.has(agent.name)) return { ok: false, error: 'duplicate agent name in batch' };
@@ -2959,6 +3107,16 @@ function validatePublicArenaBatch(agents) {
     if (!runtime?.connected || !runtime.socketId) {
       return { ok: false, error: `agent runtime unavailable: ${agent.id}` };
     }
+    if (agentRuntimeSockets.get(runtime.socketId) !== agent.id) {
+      return { ok: false, error: `stale runtime socket: ${agent.id}` };
+    }
+    if (!io.sockets.sockets.get(runtime.socketId)) {
+      return { ok: false, error: `dead runtime socket: ${agent.id}` };
+    }
+    if (seenSocketIds.has(runtime.socketId)) {
+      return { ok: false, error: 'duplicate runtime socket in batch' };
+    }
+    seenSocketIds.add(runtime.socketId);
   }
 
   return { ok: true };
@@ -3081,7 +3239,7 @@ app.post('/api/track/share', (_req, res) => {
 
 app.post('/api/auth/session', async (req, res) => {
   // Check for existing session token
-  const existingToken = req.headers.authorization?.replace('Bearer ', '') || req.body?.token;
+  const existingToken = String(req.body?.token || readSiteSessionToken(req) || '').trim();
   if (existingToken) {
     const [siteSession, existing] = await Promise.all([
       resolveSiteSession({ headers: { authorization: `Bearer ${existingToken}` } }),
@@ -3089,6 +3247,7 @@ app.post('/api/auth/session', async (req, res) => {
     ]);
     if (siteSession?.userId) {
       const ownedContext = await buildOwnedArenaContext(siteSession);
+      setSiteSessionCookie(res, existingToken, req);
       return res.json({
         ok: true,
         session: {
@@ -3119,6 +3278,7 @@ app.post('/api/auth/session', async (req, res) => {
 
     // Also keep in-memory sessions for backward compat
     setCachedSession({ token, userId, email: null, createdAt: Date.now(), expiresAt });
+    setSiteSessionCookie(res, token, req);
 
     res.json({
       ok: true,
@@ -3136,6 +3296,7 @@ app.post('/api/auth/session', async (req, res) => {
     const token2 = shortId(20);
     const fallbackExpiresAt = expiresAtFromNow();
     setCachedSession({ token: token2, userId, createdAt: Date.now(), expiresAt: fallbackExpiresAt });
+    setSiteSessionCookie(res, token2, req);
     res.json({
       ok: true,
       session: { token: token2, userId, agentId: null, primaryAgentId: null, isAnonymous: true, expiresAt: fallbackExpiresAt, durable: false },
@@ -3166,6 +3327,7 @@ app.post('/api/auth/register', async (req, res) => {
     await upgradeUser(userId, { email, displayName });
     await createSession(shortId(8), userId, token, expiresAt);
     setCachedSession({ token, userId, email, displayName, createdAt: Date.now(), expiresAt });
+    setSiteSessionCookie(res, token, req);
 
     res.json({
       ok: true,
@@ -3182,11 +3344,10 @@ app.post('/api/auth/register', async (req, res) => {
 
 // ── Auth: get current user profile ──
 app.get('/api/auth/me', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
   try {
-    const user = await getUserByToken(token);
+    const siteSession = await resolveSiteSession(req);
+    if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    const user = await getUserById(siteSession.userId);
     if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
     res.json({
       ok: true,
@@ -3205,9 +3366,6 @@ app.get('/api/auth/me', async (req, res) => {
 
 // ── Auth: upgrade anonymous → email-based ──
 app.post('/api/auth/upgrade', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
   const email = String(req.body?.email || '').trim().toLowerCase();
   const displayName = String(req.body?.displayName || '').trim().slice(0, 40);
   if (!email || !email.includes('@')) {
@@ -3215,7 +3373,9 @@ app.post('/api/auth/upgrade', async (req, res) => {
   }
 
   try {
-    const user = await getUserByToken(token);
+    const siteSession = await resolveSiteSession(req);
+    if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    const user = await getUserById(siteSession.userId);
     if (!user) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
 
     const existingUser = await getUserByEmail(email);
@@ -3227,11 +3387,14 @@ app.post('/api/auth/upgrade', async (req, res) => {
         intent: 'claim',
         sourceUserId: user.id,
       });
+      if (!issued.emailSent && !insecureDevSurfacesAllowed(req)) {
+        return res.status(503).json({ ok: false, error: 'Magic link delivery unavailable' });
+      }
       return res.json({
         ok: true,
         claimLinkSent: true,
         emailSent: issued.emailSent,
-        ...(issued.emailSent ? {} : { magicUrl: issued.magicUrl }),
+        ...(issued.emailSent || !insecureDevSurfacesAllowed(req) ? {} : { magicUrl: issued.magicUrl }),
       });
     }
 
@@ -3390,12 +3553,15 @@ app.post('/api/auth/magic-link', async (req, res) => {
     intent: 'login',
   });
 
+  if (!issued.emailSent && !insecureDevSurfacesAllowed(req)) {
+    return res.status(503).json({ ok: false, error: 'Magic link delivery unavailable' });
+  }
+
   res.json({
     ok: true,
     isNewUser: Boolean(resolved.isNewUser),
     emailSent: issued.emailSent,
-    // In dev mode (no Resend key), return the magic URL so the user can click it directly
-    ...(issued.emailSent ? {} : { magicUrl: issued.magicUrl }),
+    ...(issued.emailSent || !insecureDevSurfacesAllowed(req) ? {} : { magicUrl: issued.magicUrl }),
   });
 });
 
@@ -3427,15 +3593,12 @@ app.get('/api/auth/verify', async (req, res) => {
     return res.status(500).send('Failed to create session. <a href="/connect.html">Try again</a>');
   }
 
-  // Redirect to the connect page with the session token embedded so the client can store it
-  res.redirect(`/connect.html?authToken=${encodeURIComponent(sessionToken)}`);
+  setSiteSessionCookie(res, sessionToken, req);
+  res.redirect('/connect.html');
 });
 
 // ── Match history for authenticated user ──
 app.get('/api/matches/mine', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
-  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
   try {
     const siteSession = await resolveSiteSession(req);
     if (!siteSession?.userId) return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
@@ -3601,39 +3764,7 @@ app.post('/api/openclaw/agents/:id/archive', async (req, res) => {
 });
 
 app.post('/api/openclaw/style-sync', async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const agentName = String(req.body?.agentName || '').trim();
-  const profile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : null;
-  if (!email || !agentName || !profile) {
-    return res.status(400).json({ ok: false, error: 'email, agentName, profile required' });
-  }
-
-  const agent = [...agentProfiles.values()]
-    .filter((a) => a.owner === email && a.name === agentName)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
-
-  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found for owner/name' });
-
-  const nextPersona = buildArenaPersona({
-    style: profile.tone || profile.style || agent.persona?.style || '',
-    presetId: profile.preset || agent.persona?.presetId,
-    intensity: profile.intensity || agent.persona?.intensity || 7,
-  });
-
-  agent.persona = {
-    ...agent.persona,
-    style: nextPersona.style,
-    presetId: nextPersona.presetId,
-    intensity: nextPersona.intensity,
-  };
-  agent.arenaProfile = {
-    ...profile,
-    syncedAt: Date.now(),
-  };
-
-  await syncAgentProfileToPersistence(agent);
-  persistState();
-  res.json({ ok: true, agent });
+  res.status(404).json({ ok: false, error: 'route unavailable', code: 'ROUTE_UNAVAILABLE' });
 });
 
 app.get('/api/agents/mine', async (req, res) => {
@@ -3827,12 +3958,9 @@ app.post('/api/report', async (req, res) => {
 
   try {
     // Get reporter ID from auth token if available
-    const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
     let reporterId = null;
-    if (token) {
-      const user = await getUserByToken(token);
-      if (user) reporterId = user.id;
-    }
+    const siteSession = await resolveSiteSession(req);
+    if (siteSession?.userId) reporterId = siteSession.userId;
 
     await createReport({ reporterId, roomId, targetPlayer, messageText, reason });
     logStructured('report.created', { roomId, targetPlayer, reason, reporterId });
@@ -3992,6 +4120,26 @@ function summarizePlayableRoom(mode, room) {
     ...summary,
     matchQuality: quality,
     hotLobby: quality.hot,
+  };
+}
+
+function sanitizeLaunchReadinessForPublic(launchReadiness = {}) {
+  return {
+    hostConnected: Boolean(launchReadiness.hostConnected),
+    hostName: launchReadiness.hostName || 'Host',
+    connectedHumans: Number(launchReadiness.connectedHumans || 0),
+    disconnectedCount: Number(launchReadiness.disconnectedCount || 0),
+    missingPlayers: Number(launchReadiness.missingPlayers || 0),
+    botsNeededForReady: Number(launchReadiness.botsNeededForReady || 0),
+    canHostStartReady: Boolean(launchReadiness.canHostStartReady),
+  };
+}
+
+function sanitizePlayableRoomForPublic(roomSummary = {}) {
+  return {
+    ...roomSummary,
+    hostPlayerId: null,
+    launchReadiness: sanitizeLaunchReadinessForPublic(roomSummary.launchReadiness),
   };
 }
 
@@ -4288,73 +4436,15 @@ app.get('/api/play/rooms', (req, res) => {
     },
   };
 
-  res.json({ ok: true, rooms: roomsList.slice(0, 50), summary });
+  res.json({ ok: true, rooms: roomsList.slice(0, 50).map((room) => sanitizePlayableRoomForPublic(room)), summary });
 });
 
-app.get('/api/play/lobby/claims', (req, res) => {
-  const mode = String(req.query.mode || '').toLowerCase();
-  const roomId = String(req.query.roomId || '').trim().toUpperCase();
-
-  if (!roomId) {
-    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
-  }
-
-  const claims = getClaimableLobbySeats(mode, roomId);
-  if (!claims.ok) {
-    return res.status(claims.error?.code === 'ROOM_NOT_FOUND' ? 404 : 400).json(claims);
-  }
-
-  res.json(claims);
+app.get('/api/play/lobby/claims', (_req, res) => {
+  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
 });
 
-app.post('/api/play/reconnect-telemetry', (req, res) => {
-  const mode = String(req.body?.mode || '').toLowerCase();
-  const roomId = String(req.body?.roomId || '').trim().toUpperCase();
-  const outcome = String(req.body?.outcome || '').toLowerCase();
-  const event = String(req.body?.event || '').toLowerCase();
-
-  if (mode !== 'mafia') {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia' } });
-  }
-  if (!roomId) {
-    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
-  }
-
-  const hasOutcome = Boolean(outcome);
-  const hasEvent = Boolean(event);
-  if (!hasOutcome && !hasEvent) {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_PAYLOAD', message: 'provide outcome and/or event' } });
-  }
-  if (hasOutcome && !['attempt', 'success', 'failure'].includes(outcome)) {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_OUTCOME', message: 'outcome must be attempt|success|failure' } });
-  }
-  if (hasEvent && !['reclaim_clicked', 'quick_recover_clicked'].includes(event)) {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_EVENT', message: 'event must be reclaim_clicked|quick_recover_clicked' } });
-  }
-
-  let telemetry = getRoomTelemetry(mode, roomId);
-  if (hasOutcome) telemetry = recordReconnectAutoTelemetry(mode, roomId, outcome);
-  if (hasEvent) telemetry = recordReconnectClickTelemetry(mode, roomId, event);
-  roomEvents.append('growth', roomId, 'RECONNECT_TELEMETRY_RECORDED', {
-    mode,
-    outcome: hasOutcome ? outcome : null,
-    event: hasEvent ? event : null,
-  });
-
-  res.json({
-    ok: true,
-    mode,
-    roomId,
-    reconnectAuto: {
-      attempts: telemetry.reconnectAutoAttempts,
-      successes: telemetry.reconnectAutoSuccesses,
-      failures: telemetry.reconnectAutoFailures,
-    },
-    reconnectRecoveryClicks: {
-      reclaim_clicked: telemetry.reclaimClicked,
-      quick_recover_clicked: telemetry.quickRecoverClicked,
-    },
-  });
+app.post('/api/play/reconnect-telemetry', (_req, res) => {
+  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
 });
 
 app.post('/api/play/quick-join', (req, res) => {
@@ -4395,9 +4485,6 @@ app.post('/api/play/quick-join', (req, res) => {
     created = true;
   }
 
-  const reconnectSuggestion = created ? null : pickReconnectSuggestion(targetRoom.mode, targetRoom.roomId, playerName);
-  const suggestedName = reconnectSuggestion?.name || playerName;
-  const claimToken = reconnectSuggestion?.token || '';
   const quickJoinDecision = buildQuickJoinDecision(candidates, targetRoom, created);
   const quickHint = encodeURIComponent(String(quickJoinDecision.message || '').slice(0, 180));
   const joinTicket = {
@@ -4405,9 +4492,8 @@ app.post('/api/play/quick-join', (req, res) => {
     roomId: targetRoom.roomId,
     name: playerName,
     autojoin: true,
-    reconnect: reconnectSuggestion,
     quickJoinDecision,
-    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}&qjReason=${quickHint}${reconnectSuggestion ? `&reclaimName=${encodeURIComponent(suggestedName)}&reclaimHost=${reconnectSuggestion.hostSeat ? '1' : '0'}&claimToken=${encodeURIComponent(claimToken)}` : ''}`,
+    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}&qjReason=${quickHint}`,
     issuedAt: Date.now(),
   };
 
@@ -4415,42 +4501,20 @@ app.post('/api/play/quick-join', (req, res) => {
   roomEvents.append('growth', targetRoom.roomId, 'QUICK_JOIN_TICKET_ISSUED', {
     mode: targetRoom.mode,
     created,
-    hasReconnectSuggestion: Boolean(reconnectSuggestion),
-    reasonCode: quickJoinDecision.reasonCode,
+    hasReconnectSuggestion: false,
+    reasonCode: quickJoinDecision.code,
   });
   res.json({
     ok: true,
     created,
-    room: summarizePlayableRoom(targetRoom.mode, mafiaRooms.get(targetRoom.roomId)),
+    room: sanitizePlayableRoomForPublic(summarizePlayableRoom(targetRoom.mode, mafiaRooms.get(targetRoom.roomId))),
     quickJoinDecision,
     joinTicket,
   });
 });
 
-app.post('/api/play/lobby/autofill', (req, res) => {
-  const mode = String(req.body?.mode || '').toLowerCase();
-  const roomId = String(req.body?.roomId || '').trim().toUpperCase();
-  const minPlayers = Number(req.body?.minPlayers || QUICK_JOIN_MIN_PLAYERS);
-
-  if (mode !== 'mafia') {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia' } });
-  }
-
-  if (!roomId) {
-    return res.status(400).json({ ok: false, error: { code: 'ROOM_ID_REQUIRED', message: 'roomId required' } });
-  }
-
-  const result = autoFillLobbyBots(mode, roomId, minPlayers);
-  if (!result.ok) return res.status(400).json(result);
-
-  res.json({
-    ok: true,
-    mode,
-    roomId: result.room.id,
-    targetPlayers: result.targetPlayers,
-    addedBots: result.addedBots,
-    state: mafiaGame.toPublic(result.room),
-  });
+app.post('/api/play/lobby/autofill', (_req, res) => {
+  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
 });
 
 loadState();
@@ -4458,70 +4522,8 @@ growthMetrics = buildEmptyGrowthMetrics();
 void loadGrowthMetrics();
 
 // ── Instant Play: one-click to join a game ──
-app.post('/api/play/instant', (req, res) => {
-  const modeInput = String(req.body?.mode || 'mafia').toLowerCase();
-  if (modeInput !== 'mafia') {
-    return res.status(400).json({ ok: false, error: { code: 'INVALID_MODE', message: 'mode must be mafia' } });
-  }
-  if (!isEnabledPublicMode(modeInput)) {
-    return res.status(400).json(modeDisabledError(modeInput));
-  }
-  const agentId = String(req.body?.agentId || '').trim();
-  if (!agentId) return res.status(400).json(agentRequiredError());
-
-  const agent = agentProfiles.get(agentId);
-  if (!agent) return res.status(404).json(agentRequiredError());
-  if (!agent.deployed || !agent.openclaw?.connected) {
-    return res.status(400).json(agentNotReadyError());
-  }
-  const runtime = getAgentRuntime(agentId);
-  if (!runtime?.connected) {
-    return res.status(400).json(agentRuntimeRequiredError());
-  }
-
-  const arena = buildArenaAvailability();
-  trackEvent('instant_play_requested', agent.name, { mode: arena.mode, agentId, connectedAgents: arena.connectedAgents });
-
-  if (runtime.currentRoomId && runtime.currentPlayerId) {
-    return res.json({
-      ok: true,
-      mode: arena.mode,
-      waiting: false,
-      activeRoomId: runtime.currentRoomId,
-      activePlayerId: runtime.currentPlayerId,
-      arenaUrl: buildAgentArenaUrl(agentId, { ...runtime, activeRoomId: runtime.currentRoomId }),
-      watchUrl: null,
-      message: 'Your agent is already in a live Mafia match.',
-    });
-  }
-
-  void processPublicArenaQueue();
-  const refreshed = getAgentRuntime(agentId);
-  if (refreshed?.currentRoomId && refreshed?.currentPlayerId) {
-    return res.json({
-      ok: true,
-      mode: arena.mode,
-      waiting: false,
-      activeRoomId: refreshed.currentRoomId,
-      activePlayerId: refreshed.currentPlayerId,
-      arenaUrl: buildAgentArenaUrl(agentId, { ...refreshed, activeRoomId: refreshed.currentRoomId }),
-      watchUrl: null,
-      message: 'Your agent has been seated in the next live Mafia match.',
-    });
-  }
-
-  return res.json({
-    ok: true,
-    mode: arena.mode,
-    waiting: true,
-    connectedAgents: arena.connectedAgents,
-    requiredAgents: arena.requiredAgents,
-    missingAgents: arena.missingAgents,
-    canStart: arena.canStart,
-    message: arena.canStart
-      ? 'Connected agents are online. Public transcript access is disabled, so open Connect if you need the pairing flow while matchmaking settles.'
-      : `Need ${arena.missingAgents} more connected agent(s) before an agent-only Mafia room can open.`,
-  });
+app.post('/api/play/instant', (_req, res) => {
+  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
 });
 
 // ── Watch status: public transcript access disabled ──
@@ -4762,7 +4764,7 @@ app.get('/api/ops/ratings/health', async (req, res) => {
   });
 });
 
-app.get('/health', async (_req, res) => {
+async function buildHealthPayload() {
   const scheduler = roomScheduler.stats();
   const eventQueueDepth = roomEvents.pending();
   const eventQueueByMode = roomEvents.pendingByMode();
@@ -4773,42 +4775,67 @@ app.get('/health', async (_req, res) => {
   const durableStorageRequired = IS_PRODUCTION;
   const durableStorageHealthy = dbStatus === 'ok';
   const healthy = durableStorageHealthy || !durableStorageRequired;
-  const httpStatus = healthy ? 200 : 503;
   const cleanup = maintenanceState.cleanup;
 
-  res.status(httpStatus).json({
-    ok: healthy,
-    status: healthy ? 'healthy' : 'degraded',
-    timestamp: new Date().toISOString(),
-    launchMode: PUBLIC_LAUNCH_MODE,
-    publicBaseUrl: PUBLIC_APP_URL || null,
-    database: dbStatus,
-    databaseDriver: dbHealth.driver || 'none',
-    databaseSizeBytes: dbHealth.sizeBytes ?? null,
-    databaseMaxConnections: dbHealth.maxConnections ?? null,
-    databasePoolConnections: dbHealth.poolConnections || null,
-    durableStorageRequired,
-    durableStorageHealthy,
-    uptimeSec: Math.floor(process.uptime()),
-    rooms: {
-      mafia: mafiaRooms.size,
+  const timestamp = new Date().toISOString();
+  return {
+    healthy,
+    summary: {
+      ok: healthy,
+      status: healthy ? 'healthy' : 'degraded',
+      timestamp,
+      launchMode: PUBLIC_LAUNCH_MODE,
+      database: dbStatus,
+      durableStorageRequired,
+      durableStorageHealthy,
+      uptimeSec: Math.floor(process.uptime()),
     },
-    agents: agentProfiles.size,
-    publicArena,
-    schedulerTimers: scheduler,
-    eventQueueDepth,
-    eventQueueByMode,
-    roomEvents: {
-      publicReplayEnabled: PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
-      filePersistenceEnabled: roomEvents.persistenceEnabled(),
-      fileSizeBytes: readFileSizeBytes(ROOM_EVENTS_FILE),
-      growthMetricsSnapshotName: GROWTH_METRICS_SNAPSHOT_NAME,
-      growthMetricsSnapshotStorage: dbStatus === 'ok' ? 'database' : 'memory',
+    detailed: {
+      ok: healthy,
+      status: healthy ? 'healthy' : 'degraded',
+      timestamp,
+      launchMode: PUBLIC_LAUNCH_MODE,
+      publicBaseUrl: PUBLIC_APP_URL || null,
+      database: dbStatus,
+      databaseDriver: dbHealth.driver || 'none',
+      databaseSizeBytes: dbHealth.sizeBytes ?? null,
+      databaseMaxConnections: dbHealth.maxConnections ?? null,
+      databasePoolConnections: dbHealth.poolConnections || null,
+      durableStorageRequired,
+      durableStorageHealthy,
+      uptimeSec: Math.floor(process.uptime()),
+      rooms: {
+        mafia: mafiaRooms.size,
+      },
+      agents: agentProfiles.size,
+      publicArena,
+      schedulerTimers: scheduler,
+      eventQueueDepth,
+      eventQueueByMode,
+      roomEvents: {
+        publicReplayEnabled: PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
+        filePersistenceEnabled: roomEvents.persistenceEnabled(),
+        fileSizeBytes: readFileSizeBytes(ROOM_EVENTS_FILE),
+        growthMetricsSnapshotName: GROWTH_METRICS_SNAPSHOT_NAME,
+        growthMetricsSnapshotStorage: dbStatus === 'ok' ? 'database' : 'memory',
+      },
+      maintenance: {
+        cleanup,
+      },
     },
-    maintenance: {
-      cleanup,
-    },
-  });
+  };
+}
+
+app.get('/api/ops/health', async (_req, res) => {
+  const payload = await buildHealthPayload();
+  const httpStatus = payload.healthy ? 200 : 503;
+  res.status(httpStatus).json(payload.detailed);
+});
+
+app.get('/health', async (_req, res) => {
+  const payload = await buildHealthPayload();
+  const httpStatus = payload.healthy ? 200 : 503;
+  res.status(httpStatus).json(payload.summary);
 });
 
 // ── Sentry error handler (must be after all routes) ──
@@ -4931,6 +4958,7 @@ module.exports = {
   agentProfiles,
   connectSessions,
   liveAgentRuntimes,
+  agentRuntimeSockets,
   roomEvents,
   PUBLIC_APP_URL,
   PUBLIC_ROOM_EVENT_ROUTES_ENABLED,

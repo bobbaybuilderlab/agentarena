@@ -8,13 +8,16 @@ process.env.MAFIA_VOTING_MS = '80';
 process.env.MAFIA_DISCUSSION_TURN_MS = '30';
 process.env.AUTH_RATE_LIMIT_MAX = '20';
 process.env.OPS_RATE_LIMIT_MAX = '50';
+process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
 
 const {
   server,
+  io,
   mafiaRooms,
   agentProfiles,
   connectSessions,
   liveAgentRuntimes,
+  agentRuntimeSockets,
   roomEvents,
   processPublicArenaQueue,
   createPublicArenaMafiaRoom,
@@ -27,11 +30,15 @@ const {
   resetAgentArenaRuntime,
 } = require('../server');
 
+const syntheticSocketIds = new Set();
+
 async function withServer(fn) {
   mafiaRooms.clear();
   agentProfiles.clear();
   connectSessions.clear();
   liveAgentRuntimes.clear();
+  syntheticSocketIds.forEach((socketId) => io.sockets.sockets.delete(socketId));
+  syntheticSocketIds.clear();
   roomEvents.clear();
   resetPlayTelemetry();
   resetAgentArenaRuntime();
@@ -43,6 +50,8 @@ async function withServer(fn) {
   } finally {
     clearAllGameTimers();
     resetAgentArenaRuntime();
+    syntheticSocketIds.forEach((socketId) => io.sockets.sockets.delete(socketId));
+    syntheticSocketIds.clear();
     await new Promise((resolve) => server.close(resolve));
   }
 }
@@ -81,11 +90,20 @@ function addQueuedTestAgent(id, name, connectedAt) {
     owner: `owner-${id}`,
   };
   agentProfiles.set(id, agent);
+  const socketId = `sock-${id}`;
+  io.sockets.sockets.set(socketId, {
+    id: socketId,
+    emit() {},
+    join() {},
+    disconnect() {},
+  });
+  syntheticSocketIds.add(socketId);
+  agentRuntimeSockets.set(socketId, id);
   liveAgentRuntimes.set(id, {
     agentId: id,
     connected: true,
     status: 'idle',
-    socketId: `sock-${id}`,
+    socketId,
     currentRoomId: null,
     currentPlayerId: null,
     connectedAt,
@@ -466,12 +484,17 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       const liveHealthRes = await fetch(`${url}/health`);
       const liveHealth = await liveHealthRes.json();
       assert.equal(liveHealth.ok, true);
-      assert.equal(liveHealth.publicArena.connectedAgents, 6);
-      assert.equal(liveHealth.publicArena.idleAgents, 0);
-      assert.equal(liveHealth.publicArena.inMatchAgents, 6);
-      assert.equal(Number(liveHealth.publicArena.activeMatches || 0) >= 1, true);
-      assert.equal(typeof liveHealth.publicArena.reservedAgents, 'number');
-      assert.equal(typeof liveHealth.publicArena.queueRunning, 'boolean');
+      assert.equal('publicArena' in liveHealth, false);
+
+      const opsHealthRes = await fetch(`${url}/api/ops/health`);
+      const opsHealth = await opsHealthRes.json();
+      assert.equal(opsHealth.ok, true);
+      assert.equal(opsHealth.publicArena.connectedAgents, 6);
+      assert.equal(opsHealth.publicArena.idleAgents, 0);
+      assert.equal(opsHealth.publicArena.inMatchAgents, 6);
+      assert.equal(Number(opsHealth.publicArena.activeMatches || 0) >= 1, true);
+      assert.equal(typeof opsHealth.publicArena.reservedAgents, 'number');
+      assert.equal(typeof opsHealth.publicArena.queueRunning, 'boolean');
       const baselineData = await waitFor(async () => {
         const res = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
         const data = await res.json();

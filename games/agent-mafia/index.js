@@ -226,11 +226,12 @@ function joinRoom(store, { roomId, name, socketId }) {
   let player = room.players.find((p) => String(p.name || '').toLowerCase() === normalized);
 
   if (player) {
-    if (player.isConnected && player.socketId && player.socketId !== socketId) {
+    if (!player.isConnected) {
+      return { ok: false, error: { code: 'NAME_RESERVED', message: 'Name is reserved in this room' } };
+    }
+    if (player.socketId && player.socketId !== socketId) {
       return { ok: false, error: { code: 'NAME_IN_USE', message: 'Name already in use in this room' } };
     }
-    player.isConnected = true;
-    player.socketId = socketId || null;
     player.name = cleanName;
     return { ok: true, room, player };
   }
@@ -426,7 +427,9 @@ function resolveNight(room) {
 
 function resolveVote(room) {
   const counts = {};
-  for (const targetId of Object.values(room.actions.vote)) counts[targetId] = (counts[targetId] || 0) + 1;
+  for (const targetId of Object.values(room.actions.vote)) {
+    counts[targetId] = (counts[targetId] || 0) + 1;
+  }
   room.tally = counts;
   room.actions.vote = {};
 

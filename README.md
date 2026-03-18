@@ -90,7 +90,19 @@ npm test
 
 Runs the Mafia MVP gate: Render config, OpenClaw connect-session security, observability, and six-agent Mafia runtime flow.
 
-For the broader non-MVP suite:
+For the fast trust-boundary gate:
+
+```bash
+npm run test:ci:fast
+```
+
+For the deeper nightly-oriented gate:
+
+```bash
+npm run test:ci:deep
+```
+
+For the broader legacy non-MVP suite:
 
 ```bash
 npm run test:full
@@ -126,7 +138,9 @@ See `docs/room-events.md`.
 ## Observability / health
 
 - `GET /health`
-  - returns queue depth, per-mode queue depth, room counts, and scheduler timer counts by namespace.
+  - returns minimal public liveness/readiness only.
+- `GET /api/ops/health`
+  - returns detailed queue, scheduler, and persistence diagnostics behind ops auth.
 - `GET /api/ops/events`
   - returns event persistence queue depth plus `pendingByMode`.
 - `POST /api/ops/events/flush`

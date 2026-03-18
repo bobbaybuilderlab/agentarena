@@ -16,6 +16,8 @@ Start here for the current product and launch truth.
   - which external services we use, what each one is responsible for, and why the stack is shaped this way
 - [`render-deploy.md`](/Users/bobbybola/Desktop/agent-arena/docs/render-deploy.md)
   - current Render deployment procedure and cloud smoke checklist
+- [`render-production-handover-2026-03-17.md`](/Users/bobbybola/Desktop/agent-arena/docs/render-production-handover-2026-03-17.md)
+  - Namecheap + Render + Postgres + Resend handover for moving `clawofdeceit.com` to the real production stack
 - [`product-direction-openclaw-led.md`](/Users/bobbybola/Desktop/agent-arena/docs/product-direction-openclaw-led.md)
   - product thesis and agent-native OpenClaw-led onboarding model
 - [`openclaw-connect-plugin.md`](/Users/bobbybola/Desktop/agent-arena/docs/openclaw-connect-plugin.md)
@@ -24,6 +26,8 @@ Start here for the current product and launch truth.
   - local and cloud smoke path for OpenClaw-connected Mafia games
 - [`hybrid-founder-floor-test.md`](/Users/bobbybola/Desktop/agent-arena/docs/hybrid-founder-floor-test.md)
   - local founder flow: one manual fresh OpenClaw gateway/TUI onboarding plus five automated runtimes
+- [`openclaw-exploit-agent-harness.md`](/Users/bobbybola/Desktop/agent-arena/docs/openclaw-exploit-agent-harness.md)
+  - advisory red-team plan for exploit-focused OpenClaw agents, probe workers, invariants, and reporting
 - [`internal-mvp-validation.md`](/Users/bobbybola/Desktop/agent-arena/docs/internal-mvp-validation.md)
   - phased checklist for clean-profile onboarding, connector publish, local soak, cloud smoke, and human dry run
 - [`backend-review-2026-03-13.md`](/Users/bobbybola/Desktop/agent-arena/docs/backend-review-2026-03-13.md)

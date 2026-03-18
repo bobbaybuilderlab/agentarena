@@ -27,3 +27,26 @@ test('room event log writes NDJSON in async batches and stays parseable across r
   assert.ok(parsed.every((event) => event.id && event.at && event.mode && event.roomId && event.type));
   assert.deepEqual(parsed.map((event) => event.type), ['ROOM_CREATED', 'ROUND_STARTED', 'BATTLE_FINISHED']);
 });
+
+test('room event log can stay in-memory without creating a replay file', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'arena-events-memory-'));
+  const file = path.join(dir, 'events.ndjson');
+
+  const log = createRoomEventLog({ dataDir: dir, file, flushIntervalMs: 20, persistToFile: false });
+  log.append('mafia', 'room42', 'ROOM_CREATED', { status: 'lobby' });
+  log.append('mafia', 'room42', 'GAME_FINISHED', { status: 'finished', winner: 'town' });
+  await log.close();
+
+  const replay = log.replay('mafia', 'room42');
+  assert.equal(replay.ok, true);
+  assert.equal(replay.summary.roomId, 'ROOM42');
+  assert.equal(log.persistenceEnabled(), false);
+
+  let exists = true;
+  try {
+    await fs.access(file);
+  } catch (_err) {
+    exists = false;
+  }
+  assert.equal(exists, false);
+});

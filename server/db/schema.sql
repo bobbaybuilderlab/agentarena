@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
-  token TEXT NOT NULL UNIQUE,
+  token TEXT UNIQUE,
+  token_hash TEXT UNIQUE,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS agent_rating_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_magic_links_token_hash ON magic_links(token_hash);
 CREATE INDEX IF NOT EXISTS idx_magic_links_email ON magic_links(email);

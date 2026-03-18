@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { hashSecret } = require('../services/secret-tokens');
 const {
   MAFIA_ELO_MODE,
   DEFAULT_MMR,
@@ -91,6 +92,44 @@ function openSqliteDatabase(dbPath) {
   return { database, resolvedPath };
 }
 
+async function backfillSessionTokenHashes(adapter) {
+  if (!adapter || adapter.kind === 'none') return;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      SELECT id, token
+      FROM sessions
+      WHERE token IS NOT NULL
+        AND BTRIM(token) <> ''
+        AND COALESCE(BTRIM(token_hash), '') = ''
+    `);
+    for (const row of result.rows) {
+      await adapter.pool.query(
+        'UPDATE sessions SET token_hash = $1, token = NULL WHERE id = $2',
+        [hashSecret(row.token), row.id],
+      );
+    }
+    return;
+  }
+
+  const rows = adapter.database.prepare(`
+    SELECT id, token
+    FROM sessions
+    WHERE token IS NOT NULL
+      AND TRIM(token) <> ''
+      AND COALESCE(TRIM(token_hash), '') = ''
+  `).all();
+  if (!rows.length) return;
+
+  const update = adapter.database.prepare('UPDATE sessions SET token_hash = ?, token = NULL WHERE id = ?');
+  const transaction = adapter.database.transaction((pending) => {
+    for (const row of pending) {
+      update.run(hashSecret(row.token), row.id);
+    }
+  });
+  transaction(rows);
+}
+
 function currentAdapter() {
   return dbState;
 }
@@ -123,6 +162,7 @@ async function initDb(dbPath) {
       try {
         await pool.query(readSchema(POSTGRES_SCHEMA_PATH));
         dbState = { kind: 'postgres', driver: 'postgres', pool };
+        await backfillSessionTokenHashes(dbState);
         return pool;
       } catch (error) {
         if (isProduction) {
@@ -144,6 +184,7 @@ async function initDb(dbPath) {
       const { runMigrations } = require('./migrate');
       runMigrations(database);
       dbState = { kind: 'sqlite', driver: 'sqlite', database, databasePath: resolvedPath };
+      await backfillSessionTokenHashes(dbState);
       return database;
     }
 
@@ -855,22 +896,23 @@ async function getUserByToken(token) {
     return normalizeUserRow(fallbackUsers.get(session.user_id) || null);
   }
   if (!adapter || adapter.kind === 'none' || !token) return null;
+  const tokenHash = hashSecret(token);
 
   if (adapter.kind === 'postgres') {
     const result = await adapter.pool.query(`
       SELECT u.* FROM users u
       JOIN sessions s ON s.user_id = u.id
-      WHERE s.token = $1 AND s.expires_at > NOW()
+      WHERE (s.token_hash = $1 OR s.token = $2) AND s.expires_at > NOW()
       LIMIT 1
-    `, [token]);
+    `, [tokenHash, token]);
     return normalizeUserRow(result.rows[0] || null);
   }
 
   return normalizeUserRow(adapter.database.prepare(`
     SELECT u.* FROM users u
     JOIN sessions s ON s.user_id = u.id
-    WHERE s.token = ? AND s.expires_at > datetime('now')
-  `).get(token));
+    WHERE (s.token_hash = ? OR s.token = ?) AND s.expires_at > datetime('now')
+  `).get(tokenHash, token));
 }
 
 async function getUserById(userId) {
@@ -951,7 +993,8 @@ async function setUserAgentId(userId, agentId) {
 
 async function createSession(id, userId, token, expiresAt) {
   const adapter = await ensureDb();
-  const fallback = normalizeSessionRow({ id, user_id: userId, token, expires_at: expiresAt });
+  const tokenHash = hashSecret(token);
+  const fallback = normalizeSessionRow({ id, user_id: userId, token_hash: tokenHash, expires_at: expiresAt });
   if (!adapter || adapter.kind === 'none') {
     fallbackSessions.set(token, fallback);
     return fallback;
@@ -959,15 +1002,15 @@ async function createSession(id, userId, token, expiresAt) {
 
   if (adapter.kind === 'postgres') {
     await adapter.pool.query(
-      'INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
-      [id, userId, token, expiresAt],
+      'INSERT INTO sessions (id, user_id, token, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5)',
+      [id, userId, null, tokenHash, expiresAt],
     );
     return fallback;
   }
 
   adapter.database.prepare(
-    'INSERT INTO sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)',
-  ).run(id, userId, token, expiresAt);
+    'INSERT INTO sessions (id, user_id, token, token_hash, expires_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(id, userId, null, tokenHash, expiresAt);
   return fallback;
 }
 
@@ -983,18 +1026,19 @@ async function getSessionByToken(token) {
     return normalizeSessionRow(session);
   }
   if (!adapter || adapter.kind === 'none' || !token) return null;
+  const tokenHash = hashSecret(token);
 
   if (adapter.kind === 'postgres') {
     const result = await adapter.pool.query(
-      'SELECT * FROM sessions WHERE token = $1 AND expires_at > NOW() LIMIT 1',
-      [token],
+      'SELECT * FROM sessions WHERE (token_hash = $1 OR token = $2) AND expires_at > NOW() LIMIT 1',
+      [tokenHash, token],
     );
     return normalizeSessionRow(result.rows[0] || null);
   }
 
   return normalizeSessionRow(adapter.database.prepare(
-    "SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')",
-  ).get(token));
+    "SELECT * FROM sessions WHERE (token_hash = ? OR token = ?) AND expires_at > datetime('now')",
+  ).get(tokenHash, token));
 }
 
 async function deleteSessionsByUserId(userId) {
