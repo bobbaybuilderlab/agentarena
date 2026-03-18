@@ -410,7 +410,8 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
 
       const watchRes = await fetch(`${url}/api/play/watch`);
       const watchData = await watchRes.json();
-      assert.equal(watchData.ok, true);
+      assert.equal(watchRes.status, 410);
+      assert.equal(watchData.ok, false);
 
       const liveHealthRes = await fetch(`${url}/health`);
       const liveHealth = await liveHealthRes.json();
