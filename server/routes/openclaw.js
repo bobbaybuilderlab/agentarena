@@ -64,6 +64,7 @@ function normalizeAgentPresetId(value) {
 function appendConnectStarted(roomEvents, connect) {
   roomEvents.append('growth', connect.id, 'CONNECT_SESSION_STARTED', {
     status: connect.status,
+    emailDomain: connect.email.split('@')[1] || null,
   });
 }
 
@@ -72,10 +73,12 @@ function appendConnectCompleted(roomEvents, connect, agent) {
     status: connect.status,
     agentId: agent.id,
     agentName: agent.name,
+    emailDomain: String(connect.email || '').split('@')[1] || null,
   });
 }
 
 function createOpenClawRouter({
+  bindOwnedAgent,
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,

@@ -8,11 +8,24 @@ function resolveEventLog(eventLog) {
   return eventLog?.roomEvents || eventLog || null;
 }
 
+function roomEventRoutesEnabled(eventLog) {
+  if (eventLog && typeof eventLog === 'object' && 'enabled' in eventLog) {
+    return eventLog.enabled !== false;
+  }
+  return true;
+}
+
 function registerRoomEventRoutes(app, eventLog) {
   const log = resolveEventLog(eventLog);
+  const enabled = roomEventRoutesEnabled(eventLog);
+
+  function replayUnavailable(res) {
+    return res.status(404).json({ ok: false, error: 'Room event replay unavailable' });
+  }
 
   // Handle edge case: empty roomId in path (/api/rooms//events)
   app.get('/api/rooms//events', (req, res) => {
+    if (!enabled) return replayUnavailable(res);
     const mode = req.query.mode || 'arena';
     if (!VALID_MODES.has(mode)) {
       return res.status(400).json({ ok: false, error: 'Invalid mode' });
@@ -23,6 +36,7 @@ function registerRoomEventRoutes(app, eventLog) {
 
   // Get room events
   app.get('/api/rooms/:roomId/events', (req, res) => {
+    if (!enabled) return replayUnavailable(res);
     const roomId = req.params.roomId || '';
     const mode = req.query.mode || 'arena';
     const rawLimit = parseInt(req.query.limit || '1000', 10);
@@ -38,6 +52,7 @@ function registerRoomEventRoutes(app, eventLog) {
 
   // Get room replay
   app.get('/api/rooms/:roomId/replay', (req, res) => {
+    if (!enabled) return replayUnavailable(res);
     const roomId = req.params.roomId || '';
     const mode = req.query.mode || 'arena';
 

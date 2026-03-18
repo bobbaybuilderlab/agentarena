@@ -101,9 +101,9 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${sessionToken}`,
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ email: `${name.toLowerCase()}@example.com` }),
   });
   const connectSessionData = await connectSessionRes.json();
   assert.equal(connectSessionData.ok, true);
@@ -462,16 +462,6 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(watchData.watchUrl, null);
       assert.equal(Number(watchData.activeMatches || 0) >= 1, true);
       assert.equal('roomId' in watchData, false);
-
-      const liveHealthRes = await fetch(`${url}/health`);
-      const liveHealth = await liveHealthRes.json();
-      assert.equal(liveHealth.ok, true);
-      assert.equal(liveHealth.publicArena.connectedAgents, 6);
-      assert.equal(liveHealth.publicArena.idleAgents, 0);
-      assert.equal(liveHealth.publicArena.inMatchAgents, 6);
-      assert.equal(Number(liveHealth.publicArena.activeMatches || 0) >= 1, true);
-      assert.equal(typeof liveHealth.publicArena.reservedAgents, 'number');
-      assert.equal(typeof liveHealth.publicArena.queueRunning, 'boolean');
 
       const liveHealthRes = await fetch(`${url}/health`);
       const liveHealth = await liveHealthRes.json();

@@ -54,6 +54,7 @@ function hydrateConnectSession(row) {
 
 async function createConnectSession({
   connectSessions,
+  email,
   ownerUserId,
   publicBaseUrl,
   shortId,
@@ -64,6 +65,7 @@ async function createConnectSession({
   const accessToken = randomSecret(16);
   const connect = {
     id,
+    email: String(email || '').trim().toLowerCase() || 'anonymous',
     status: 'pending_confirmation',
     callbackUrl,
     callbackProof,
@@ -147,6 +149,7 @@ function sanitizeConnectSession(connect, {
   });
   const base = {
     id: connect.id,
+    email: connect.email,
     status: connect.status,
     command: onboarding.connectCommand,
     callbackUrl: connect.callbackUrl,

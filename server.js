@@ -23,7 +23,6 @@ const { createRoomScheduler } = require('./lib/room-scheduler');
 const { createRoomEventLog } = require('./lib/room-events');
 const { loadEvents, buildKpiReport } = require('./lib/kpi-report');
 const { shortId, correlationId, logStructured } = require('./server/state/helpers');
-const { createAccountModule } = require('./server/account');
 const { createPlayTelemetryService } = require('./server/services/play-telemetry');
 const { createOpenClawRouter } = require('./server/routes/openclaw');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('./server/sockets/ownership-guards');
@@ -39,7 +38,9 @@ const {
   getRatingHealth,
   getUserByToken,
   getUserById,
+  getUserByEmail,
   getSessionByToken,
+  setUserAgentId,
   createAnonymousUser,
   createSession,
   upgradeUser,
@@ -2382,19 +2383,9 @@ function buildAgentArenaUrl(agentId, arena = summarizeAgentArenaState(agentId)) 
   return `/connect.html?${params.toString()}`;
 }
 
-const accountModule = createAccountModule({
-  createAnonymousUser,
-  createSession,
-  expiresAtFromNow,
-  getCachedSession,
-  getSessionByToken,
-  getUserByToken,
-  isProduction: IS_PRODUCTION,
-  logStructured,
-  readBearerToken,
-  setCachedSession,
-  shortId,
-});
+async function resolveSiteSession(req) {
+  const token = readBearerToken(req);
+  if (!token) return null;
 
   try {
     const [session, user] = await Promise.all([
@@ -3490,6 +3481,7 @@ app.get('/api/matches/mine', async (req, res) => {
 });
 
 app.use('/api/openclaw', createOpenClawRouter({
+  bindOwnedAgent,
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
@@ -3650,8 +3642,67 @@ app.post('/api/openclaw/style-sync', async (req, res) => {
   res.json({ ok: true, agent });
 });
 
-app.get('/api/agents/mine', (_req, res) => {
-  sendRetiredAccountResponse(res);
+app.get('/api/agents/mine', async (req, res) => {
+  const siteSession = await resolveSiteSession(req);
+  if (!siteSession?.userId) {
+    return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
+  }
+
+  const ownedContext = await buildOwnedArenaContext(siteSession, {
+    requestedAgentId: req.query.agentId,
+    includeStats: true,
+  });
+
+  let streak = 0;
+  const agentIdForStreak = String(ownedContext.selectedAgentId || '').trim();
+  if (agentIdForStreak) {
+    try {
+      const recentMatches = await getPlayerMatches(agentIdForStreak, 50);
+      for (const m of recentMatches) {
+        const role = String(m.role || '').toLowerCase();
+        const winner = String(m.winner || '').toLowerCase();
+        if (role && winner && role === winner) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+    } catch (_err) {
+      // streak stays 0
+    }
+  }
+
+  let rank = null;
+  if (agentIdForStreak) {
+    try {
+      const leaders = await getLeaderboardEntries({ mode: 'mafia', limit: 100 });
+      const idx = leaders.findIndex((entry) => entry.id === agentIdForStreak);
+      if (idx >= 0) rank = idx + 1;
+    } catch (_err) {
+      // rank stays null
+    }
+  }
+
+  res.json({
+    ok: true,
+    session: {
+      userId: siteSession.userId,
+      isAnonymous: siteSession.isAnonymous !== false,
+      agentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
+      primaryAgentId: ownedContext.primaryAgentId || siteSession.primaryAgentId || siteSession.agentId || null,
+    },
+    agents: ownedContext.agents,
+    selectedAgentId: ownedContext.selectedAgentId || null,
+    selectionSource: ownedContext.selectionSource || 'none',
+    agent: ownedContext.agent,
+    stats: ownedContext.statsBundle?.stats || null,
+    statsSource: ownedContext.statsBundle?.source || 'none',
+    statsDurability: ownedContext.statsBundle?.durability || 'none',
+    statsCapped: Boolean(ownedContext.statsBundle?.capped),
+    streak,
+    rank,
+    arena: buildArenaAvailability(),
+  });
 });
 
 app.get('/api/agents/:id', async (req, res) => {
@@ -4581,10 +4632,6 @@ app.get('/config.js', (req, res) => {
   res.type('application/javascript');
   res.set('Cache-Control', 'no-store');
   res.send(buildRuntimeConfigScript(req));
-});
-
-app.get(['/arena.html', '/account.html', '/dashboard.html'], (_req, res) => {
-  res.redirect(302, '/leaderboard.html');
 });
 
 app.use(sendRuntimeHtml);
