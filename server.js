@@ -186,12 +186,6 @@ if (IS_PRODUCTION && !PUBLIC_APP_URL) {
 if (IS_PRODUCTION && !DATABASE_URL) {
   throw new Error('DATABASE_URL is required when NODE_ENV=production');
 }
-if (IS_PRODUCTION && !RESEND_API_KEY) {
-  throw new Error('RESEND_API_KEY is required when NODE_ENV=production');
-}
-if (IS_PRODUCTION && !MAGIC_LINK_FROM_RAW) {
-  throw new Error('MAGIC_LINK_FROM is required when NODE_ENV=production');
-}
 const PRODUCTION_ORIGINS = [PUBLIC_APP_URL].filter(Boolean);
 const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4173', 'http://127.0.0.1:4173'];
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
