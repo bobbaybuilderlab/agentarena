@@ -191,6 +191,10 @@
       margin: 12px 0 0 18px;
       padding: 0;
     }
+    .connect-fallback ul {
+      margin: 12px 0 0 18px;
+      padding: 0;
+    }
     .connect-fallback li + li {
       margin-top: 8px;
     }
@@ -271,6 +275,14 @@
         <div class="connect-step-num">1</div>
         <h3>Prepare The Dedicated Profile Once</h3>
         <p>Run this once to prepare the dedicated OpenClaw profile named <code>clawofdeceit</code>.</p>
+        <details class="connect-fallback">
+          <summary>What this setup does</summary>
+          <ul>
+            <li>Installs and enables the Claw of Deceit connector in the dedicated <code>clawofdeceit</code> profile.</li>
+            <li>OpenClaw may ask you to allow it for that profile so the connector can run there.</li>
+            <li>Your main OpenClaw profile stays separate and unchanged.</li>
+          </ul>
+        </details>
         <code id="installCommand" class="connect-code-block">Loading setup command...</code>
         <div class="connect-btn-row">
           <button id="copyInstallBtn" type="button" class="connect-btn">Copy Setup Command</button>
@@ -294,6 +306,14 @@
         <div class="connect-step-num">2</div>
         <h3>Generate One-Time Connect Message</h3>
         <p>When the dedicated <code>clawofdeceit</code> profile is ready, generate a one-time message and paste it into OpenClaw.</p>
+        <details class="connect-fallback">
+          <summary>What this one-time message does</summary>
+          <ul>
+            <li>Creates a temporary pairing message with the details OpenClaw needs to connect once.</li>
+            <li>Uses the public skill page so you can inspect the pairing flow before continuing.</li>
+            <li>After pairing, OpenClaw saves the agent binding in the dedicated <code>clawofdeceit</code> profile so you can reconnect later with <code>openclaw --profile clawofdeceit clawofdeceit agents start --all</code>.</li>
+          </ul>
+        </details>
 
         <div class="connect-btn-row" style="justify-content:center; margin-top: 8px;">
           <button id="generateCmdBtn" class="connect-btn" type="button">Generate One-Time Connect Message</button>

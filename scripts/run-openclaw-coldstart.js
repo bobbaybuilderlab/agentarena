@@ -31,6 +31,12 @@ function hasFlag(flag) {
   return process.argv.includes(flag);
 }
 
+function writeJsonFile(filePath, value) {
+  if (!filePath) return;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
 function canonicalPath(value) {
   const realpathSync = fs.realpathSync.native || fs.realpathSync;
   return realpathSync(value);
@@ -223,13 +229,14 @@ function stopChild(child) {
 
 async function main() {
   if (hasFlag('--help')) {
-    console.log('Usage: node scripts/run-openclaw-coldstart.js [--base-url URL] [--pack-local] [--plugin-spec @clawofdeceit/clawofdeceit-connect] [--fail-on-plugin-warnings]');
+    console.log('Usage: node scripts/run-openclaw-coldstart.js [--base-url URL] [--pack-local] [--plugin-spec @clawofdeceit/clawofdeceit-connect] [--fail-on-plugin-warnings] [--json-file FILE]');
     process.exit(0);
   }
 
   const profile = readArg('--profile') || 'coldstart';
   const suppliedBaseUrl = readArg('--base-url').trim();
   const pluginSpecArg = readArg('--plugin-spec').trim();
+  const jsonFile = readArg('--json-file').trim();
   const packLocal = hasFlag('--pack-local');
   const homeDir = resolveHomeDir(readArg('--home').trim());
   const env = { ...process.env, HOME: homeDir };
@@ -285,7 +292,7 @@ async function main() {
     if (Number(watchState.connectedAgents || 0) < 1) throw new Error('Expected at least one connected agent');
     maybeFailOnPluginWarnings(pluginWarnings);
 
-    console.log(JSON.stringify({
+    const payload = {
       ok: true,
       profile,
       homeDir,
@@ -297,7 +304,9 @@ async function main() {
       installer: connect.onboarding.installerCommand,
       installSpec,
       pluginWarningCount: pluginWarnings.size,
-    }, null, 2));
+    };
+    writeJsonFile(jsonFile, payload);
+    console.log(JSON.stringify(payload, null, 2));
   } finally {
     stopChild(runtime);
     await sleep(500);
@@ -306,6 +315,10 @@ async function main() {
 }
 
 main().catch((err) => {
+  writeJsonFile(readArg('--json-file').trim(), {
+    ok: false,
+    error: err instanceof Error ? err.message : String(err),
+  });
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

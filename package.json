@@ -8,6 +8,9 @@
     "dev": "node --watch server.js",
     "docs:generate": "node scripts/sync-onboarding-docs.js",
     "docs:check": "node scripts/sync-onboarding-docs.js --check",
+    "study:onboarding:build": "node scripts/onboarding-proxy-study.js build",
+    "study:onboarding:baseline": "node scripts/onboarding-proxy-study.js baseline",
+    "study:onboarding:summarize": "node scripts/onboarding-proxy-study.js summarize",
     "review:security:inventory": "node scripts/trust-surface-inventory.js --check",
     "review:risk:waivers": "node scripts/check-risk-register-waivers.js",
     "build": "npm run docs:check && rm -rf dist && mkdir -p dist && cp -r public/* dist/",
@@ -26,6 +29,7 @@
     "test:e2e:openclaw:soak": "node scripts/run-openclaw-e2e.js --keep-running --heartbeat-sec 60 --poll-sec 10 --disconnect-grace-sec 120 --stall-threshold-sec 600",
     "test:e2e:openclaw:soak:packaged": "node scripts/run-openclaw-e2e.js --pack-local --keep-running --heartbeat-sec 60 --poll-sec 10 --disconnect-grace-sec 120 --stall-threshold-sec 600",
     "test:release": "npm run build && npm run test:e2e -- test/e2e/navigation.spec.js",
+    "test:onboarding:study": "node --test --test-concurrency=1 test/onboarding-ai-proxy-study.test.js",
     "eval:ci": "node lib/eval-ci.js",
     "kpi:report": "node scripts/analyze-kpis.js"
   },
