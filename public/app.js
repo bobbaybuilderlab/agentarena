@@ -56,6 +56,39 @@ function setSessionValue(key, value) {
   }
 }
 
+async function readJsonResponse(res) {
+  try {
+    return await res.json();
+  } catch (_err) {
+    return null;
+  }
+}
+
+let siteSessionToken = '';
+
+async function ensureSiteSessionToken() {
+  const existingToken = String(siteSessionToken || '').trim();
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  if (existingToken) headers.Authorization = `Bearer ${existingToken}`;
+
+  const res = await fetch(`${API_BASE}/api/auth/session`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify(existingToken ? { token: existingToken } : {}),
+  });
+  const data = await readJsonResponse(res);
+  const token = String(data?.session?.token || '').trim();
+  if (!res.ok || !data?.ok || !token) {
+    throw new Error(data?.error || 'failed to create site session');
+  }
+
+  siteSessionToken = token;
+  return token;
+}
+
 function getConnectedAgentId() {
   return getStoredValue(STORAGE_KEYS.agentId);
 }
@@ -174,15 +207,18 @@ generateCmdBtn?.addEventListener('click', async () => {
   try {
     generateCmdBtn.disabled = true;
     statusEl.textContent = 'Preparing your one-time connect message...';
+    const sessionToken = await ensureSiteSessionToken();
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
       },
+      credentials: 'include',
       body: JSON.stringify({}),
     });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'failed to generate one-time connect message');
+    const data = await readJsonResponse(res);
+    if (!res.ok || !data?.ok) throw new Error(data?.error || 'failed to generate one-time connect message');
 
     connectSessionId = data.connect.id;
     const onboarding = getOnboarding(data.connect);
