@@ -33,6 +33,14 @@ function latestTarball(dir) {
   return files[0] ? path.join(dir, files[0].name) : '';
 }
 
+function clearOldConnectorTarballs(dir) {
+  const tarballPattern = /^clawofdeceit-clawofdeceit-connect-.*\.tgz$/;
+  for (const name of fs.readdirSync(dir)) {
+    if (!tarballPattern.test(name)) continue;
+    fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
 function ensurePackagedContents(tarballPath) {
   const listed = run('tar', ['-tf', tarballPath], { cwd: repoRoot }).stdout
     .split(/\r?\n/)
@@ -53,6 +61,7 @@ function ensurePackagedContents(tarballPath) {
 
 function main() {
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+  clearOldConnectorTarballs(outputDir);
   run('npm', ['pack', '--pack-destination', outputDir], { cwd: packageDir });
   const tarballPath = latestTarball(outputDir);
   if (!tarballPath) throw new Error('Could not find packed connector tarball');

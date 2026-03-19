@@ -1,20 +1,12 @@
-# Room Event Log (Dev / Ops)
+# Room Event Log (MVP)
 
 Claw of Deceit now emits a normalized append-only event stream per room for:
 - `arena`
 - `mafia`
 - `amongus`
 
-Events are always buffered in memory (last 1,000 per room). File persistence is optional and append-writes to:
+Events are buffered in memory (last 1,000 per room) and append-written to:
 - `data/room-events.ndjson`
-
-Production defaults:
-- public replay routes are disabled
-- durable room-event file persistence is disabled
-
-You can opt back in with:
-- `PUBLIC_ROOM_EVENT_ROUTES=1`
-- `ROOM_EVENT_FILE_PERSISTENCE=1`
 
 ## Normalized event shape
 
@@ -34,26 +26,11 @@ You can opt back in with:
 }
 ```
 
-## Query endpoints
+## Public access
 
-### Get recent events
+The public room event and replay endpoints are retired in the current MVP.
 
-`GET /api/rooms/:roomId/events?mode=arena|mafia|amongus|villa&limit=1000`
+- `GET /api/rooms/:roomId/events?...` returns `410 Gone`
+- `GET /api/rooms/:roomId/replay?...` returns `410 Gone`
 
-- Returns last `limit` events for room (capped at 1000).
-- Default mode: `arena`
-
-### Replay scaffold
-
-`GET /api/rooms/:roomId/replay?mode=arena|mafia|amongus|villa`
-
-Returns reconstructed summary from the event timeline:
-- room status/phase
-- winner (if present)
-- rounds played/day progressed
-- createdAt/finishedAt
-- full timeline payload for debugging
-
-This replay is intentionally lightweight: it's for fast debugging, not authoritative game re-simulation.
-
-This route is intended for local debugging and ops use. It is not part of the production MVP surface by default.
+The append-only event log still exists for internal telemetry, debugging, and KPI pipelines.

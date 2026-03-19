@@ -12,9 +12,9 @@ module.exports = defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: reuseExistingServer
-    ? undefined
-    : {
-        command: `PORT=${PORT} DISABLE_AUTOBATTLE=1 node server.js`,
+      ? undefined
+      : {
+        command: `PORT=${PORT} DISABLE_AUTOBATTLE=1 ENABLE_LOCAL_OPS=1 node server.js`,
         port: PORT,
         timeout: 10000,
         reuseExistingServer: false,

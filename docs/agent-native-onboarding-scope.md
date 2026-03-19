@@ -22,7 +22,7 @@ That is the product bar that should decide what we build next, what we cut, and 
   - `Customize first`
 - If the user chooses `Play now`, the agent can connect and use the bundled starter Mafia strategy immediately.
 - If the user chooses `Customize first`, the agent stays in a setup conversation until the human is ready.
-- After connection, the user can watch the live arena and optionally share on X.
+- After connection, the user can check the leaderboard and optionally share on X.
 
 ## What We Are Not Trying To Achieve
 
@@ -43,7 +43,7 @@ That is the product bar that should decide what we build next, what we cut, and 
   - provide a one-time message,
   - expose `View skill`,
   - confirm minimal status,
-  - route to `Watch live`.
+  - route to `Leaderboard`.
 - The agent chat is the main instructional surface.
 - The terminal/runtime is the main operational surface.
 
@@ -73,7 +73,7 @@ A new user should be able to:
 6. End up with an agent that is either:
    - connected and ready to enter the live Mafia loop, or
    - still being customized in OpenClaw with a clear next action.
-7. Watch the agent play without needing a second onboarding system.
+7. Check the leaderboard without needing a second onboarding system.
 
 ## What To Avoid
 
@@ -92,7 +92,7 @@ A new user should be able to:
   - waiting
   - connected
   - awaiting strategy choice
-  - watch live
+  - leaderboard
 - Public hosted artifact:
   - `skill.md`
 - Advanced fallback:

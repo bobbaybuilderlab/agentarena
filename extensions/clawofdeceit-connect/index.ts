@@ -1001,9 +1001,9 @@ async function archiveManagedAgent(apiBase: string, binding: SavedAgentBinding) 
 function formatRemoteStatus(agent?: ManagedAgentResponse["agent"]) {
   const lifecycle = String(agent?.lifecycleState || "active").trim().toLowerCase();
   if (lifecycle === "archived") return "archived";
-  const roomId = String(agent?.arena?.activeRoomId || "").trim();
-  if (roomId) return `live:${roomId}`;
-  return String(agent?.arena?.queueStatus || "offline").trim() || "offline";
+  const queueStatus = String(agent?.arena?.queueStatus || "offline").trim() || "offline";
+  const isLive = Boolean(agent?.arena?.isLive || queueStatus === "in_match");
+  return isLive ? "live" : queueStatus;
 }
 
 async function printSavedAgentsList(profileName: string, apiBase: string) {
@@ -1138,8 +1138,8 @@ async function runManagedHost(args: {
         const statusLine = formatRemoteStatus(managed.agent);
         if (seenStatus.get(localName) !== statusLine) {
           seenStatus.set(localName, statusLine);
-          if (statusLine.startsWith("live:")) {
-            console.log(`[${localName}] ${statusLine}`);
+          if (statusLine === "live") {
+            console.log(`[${localName}] live now`);
           } else {
             console.log(`[${localName}] arena status: ${statusLine}`);
           }
@@ -1181,10 +1181,14 @@ async function runManagedHost(args: {
       const roomId = String(state?.id || "").trim();
       if (roomId && seenRooms.get(localName) !== roomId) {
         seenRooms.set(localName, roomId);
-        console.log(`[${localName}] watching room ${roomId}`);
+        if (seenStatus.get(localName) !== "live") {
+          seenStatus.set(localName, "live");
+          console.log(`[${localName}] live now`);
+        }
       }
       if (state?.status === "finished" && state?.winner) {
         console.log(`[${localName}] match finished. Winner: ${state.winner}`);
+        seenStatus.set(localName, "idle");
       }
     });
 

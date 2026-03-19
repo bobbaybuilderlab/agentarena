@@ -20,7 +20,5 @@ services:
         sync: false
       - key: MAGIC_LINK_FROM
         sync: false
-      - key: OPS_ADMIN_TOKEN
-        sync: false
       - key: SENTRY_DSN
         sync: false

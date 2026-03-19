@@ -322,6 +322,85 @@ function clearSiteSessionCookie(req) {
   return parts.join('; ');
 }
 
+function readRemoteAddress(req) {
+  return String(req.socket?.remoteAddress || req.connection?.remoteAddress || '').trim().toLowerCase();
+}
+
+function isLoopbackRemoteAddress(remoteAddress) {
+  const normalized = String(remoteAddress || '').trim().toLowerCase();
+  return normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '::ffff:127.0.0.1';
+}
+
+function isLoopbackRequest(req) {
+  return isLoopbackRemoteAddress(readRemoteAddress(req));
+}
+
+function envFlagEnabled(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+function opsSurfaceEnabled(nodeEnv = process.env.NODE_ENV) {
+  const normalizedEnv = String(nodeEnv || '').trim().toLowerCase();
+  return normalizedEnv !== 'production' && envFlagEnabled(process.env.ENABLE_LOCAL_OPS);
+}
+
+function manualMafiaSocketFeatureEnabled(nodeEnv = process.env.NODE_ENV) {
+  const normalizedEnv = String(nodeEnv || '').trim().toLowerCase();
+  return normalizedEnv !== 'production' && envFlagEnabled(process.env.ENABLE_MANUAL_MAFIA_SOCKET);
+}
+
+function retiredManualMafiaSocketResponse() {
+  return {
+    ok: false,
+    error: {
+      code: 'FEATURE_RETIRED',
+      message: 'Manual Mafia room controls are not part of the current MVP.',
+    },
+  };
+}
+
+function buildOpsHealthPayload() {
+  const scheduler = roomScheduler.stats();
+  const eventQueueDepth = roomEvents.pending();
+  const eventQueueByMode = roomEvents.pendingByMode();
+  return {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    launchMode: PUBLIC_LAUNCH_MODE,
+    publicBaseUrl: PUBLIC_APP_URL || null,
+    uptimeSec: Math.floor(process.uptime()),
+    rooms: {
+      mafia: mafiaRooms.size,
+    },
+    agents: agentProfiles.size,
+    publicArena: buildPublicArenaQueueMetrics(),
+    schedulerTimers: scheduler,
+    eventQueueDepth,
+    eventQueueByMode,
+  };
+}
+
+function opsLoopbackApiGate(req, res, next) {
+  if (!opsSurfaceEnabled()) {
+    res.status(404).json({ ok: false, error: 'not found' });
+    return;
+  }
+  if (isLoopbackRequest(req)) return next();
+  res.status(404).json({ ok: false, error: 'not found' });
+}
+
+function opsLoopbackPageGate(req, res, next) {
+  if (!opsSurfaceEnabled()) {
+    res.status(404).type('text/plain').send('Not found');
+    return;
+  }
+  if (isLoopbackRequest(req)) return next();
+  res.status(404).type('text/plain').send('Not found');
+}
+
 function isLoopbackAddress(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return false;
@@ -374,10 +453,9 @@ const liveAgentRuntimes = new Map();
 const agentRuntimeSockets = new Map();
 const activeAgentMatchRooms = new Set();
 const completedMatchRecords = [];
-const PUBLIC_ARENA_RECENT_MATCH_LIMIT = 3;
-const publicArenaRecentCoPlayers = new Map();
 
 function clearAllGameTimers() {
+  clearPublicArenaQueueRetryTimer();
   roomScheduler.clearAll();
   roomEvents.clear();
   resetPlayTelemetry();
@@ -1005,7 +1083,14 @@ io.on('connection', (socket) => {
     });
   });
 
+  function rejectRetiredManualMafiaSocket(cb) {
+    if (manualMafiaSocketFeatureEnabled()) return false;
+    cb?.(retiredManualMafiaSocketResponse());
+    return true;
+  }
+
   socket.on('mafia:room:create', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { name } = payload || {};
     const created = mafiaGame.createRoom(mafiaRooms, { hostName: name, hostSocketId: socket.id });
     if (!created.ok) return cb?.(created);
@@ -1016,6 +1101,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:room:join', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId, name } = payload || {};
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     if (normalizedRoomId && mafiaRooms.has(normalizedRoomId)) recordJoinAttempt('mafia', normalizedRoomId);
@@ -1034,6 +1120,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:room:watch', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').trim().toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
@@ -1042,6 +1129,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:autofill', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId, playerId, minPlayers } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
@@ -1052,6 +1140,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:start', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
@@ -1066,6 +1155,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:start-ready', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
@@ -1075,6 +1165,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('mafia:rematch', (payload, cb) => {
+    if (rejectRetiredManualMafiaSocket(cb)) return;
     const { roomId, playerId } = payload || {};
     const room = mafiaRooms.get(String(roomId || '').toUpperCase());
     if (!room) return cb?.({ ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'Room not found' } });
@@ -1320,24 +1411,8 @@ const authLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: AUTH_RATE_L
 const opsLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: OPS_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
+app.use('/api/ops/', opsLoopbackApiGate);
 app.use('/api/ops/', opsLimiter);
-
-// ── Ops Auth Gate ──
-function opsAuthGate(req, res, next) {
-  const token = process.env.OPS_ADMIN_TOKEN;
-  if (!token) {
-    if (!insecureDevSurfacesAllowed(req)) {
-      return res.status(401).json({ ok: false, error: 'unauthorized — OPS_ADMIN_TOKEN not configured' });
-    }
-    return next();
-  }
-  const auth = req.headers.authorization;
-  if (!auth || auth !== `Bearer ${token}`) {
-    return res.status(401).json({ ok: false, error: 'unauthorized' });
-  }
-  next();
-}
-app.use('/api/ops/', opsAuthGate);
 
 app.use((req, _res, next) => {
   if (req.method === 'GET' && ['/', '/index.html', '/play.html', '/arena.html', '/for-agents.html', '/guess-the-agent.html'].includes(req.path)) {
@@ -1846,53 +1921,6 @@ function buildMatchRecordFromRoom(mode, roomId, room) {
   };
 }
 
-function normalizePublicArenaParticipantIds(rawAgentIds = []) {
-  const seen = new Set();
-  const next = [];
-  for (const rawAgentId of rawAgentIds) {
-    const agentId = String(rawAgentId || '').trim();
-    if (!agentId || seen.has(agentId)) continue;
-    seen.add(agentId);
-    next.push(agentId);
-  }
-  return next;
-}
-
-function rememberPublicArenaMatchParticipants(rawAgentIds = [], matchId = shortId(12)) {
-  const agentIds = normalizePublicArenaParticipantIds(rawAgentIds);
-  if (agentIds.length < 2) return;
-  const normalizedMatchId = String(matchId || '').trim() || shortId(12);
-
-  for (const agentId of agentIds) {
-    const coPlayers = agentIds.filter((otherAgentId) => otherAgentId !== agentId);
-    const priorEntries = Array.isArray(publicArenaRecentCoPlayers.get(agentId))
-      ? publicArenaRecentCoPlayers.get(agentId)
-      : [];
-    const nextEntries = priorEntries
-      .filter((entry) => String(entry?.matchId || '').trim() !== normalizedMatchId);
-    nextEntries.unshift({ matchId: normalizedMatchId, coPlayers });
-    if (nextEntries.length > PUBLIC_ARENA_RECENT_MATCH_LIMIT) {
-      nextEntries.length = PUBLIC_ARENA_RECENT_MATCH_LIMIT;
-    }
-    publicArenaRecentCoPlayers.set(agentId, nextEntries);
-  }
-}
-
-function countRecentPublicArenaCoPlayerMatches(agentId, otherAgentId) {
-  const normalizedAgentId = String(agentId || '').trim();
-  const normalizedOtherAgentId = String(otherAgentId || '').trim();
-  if (!normalizedAgentId || !normalizedOtherAgentId || normalizedAgentId === normalizedOtherAgentId) return 0;
-
-  const entries = Array.isArray(publicArenaRecentCoPlayers.get(normalizedAgentId))
-    ? publicArenaRecentCoPlayers.get(normalizedAgentId)
-    : [];
-  return entries.reduce((total, entry) => (
-    Array.isArray(entry?.coPlayers) && entry.coPlayers.includes(normalizedOtherAgentId)
-      ? total + 1
-      : total
-  ), 0);
-}
-
 function recordFirstMatchCompletion(mode, roomId) {
   const store = getLobbyStore(mode);
   const room = store?.get(roomId);
@@ -1906,14 +1934,6 @@ function recordFirstMatchCompletion(mode, roomId) {
   try {
     const matchRecord = buildMatchRecordFromRoom(mode, roomId, room);
     if (!matchRecord) return;
-    if (mode === 'mafia' && room.publicArena) {
-      const participantIds = normalizePublicArenaParticipantIds(
-        (matchRecord.players || [])
-          .filter((player) => !player?.isBot)
-          .map((player) => player.agentId || player.userId || null),
-      );
-      rememberPublicArenaMatchParticipants(participantIds, matchRecord.id);
-    }
     completedMatchRecords.unshift(matchRecord);
     if (completedMatchRecords.length > COMPLETED_MATCH_RECORD_CAP) completedMatchRecords.length = COMPLETED_MATCH_RECORD_CAP;
     void recordMatch({
@@ -1994,6 +2014,15 @@ function summarizeLeaderboardEntry(entry) {
   return summary;
 }
 
+function buildPublicArenaState(arena = null) {
+  const queueStatus = String(arena?.queueStatus || 'offline').trim() || 'offline';
+  return {
+    runtimeConnected: Boolean(arena?.runtimeConnected),
+    queueStatus,
+    isLive: Boolean(arena?.isLive || arena?.activeRoomId || queueStatus === 'in_match'),
+  };
+}
+
 function decorateLeaderboardEntry(entry) {
   const agent = agentProfiles.get(entry.id);
   const arena = agent ? summarizeAgentArenaState(agent.id) : {
@@ -2002,15 +2031,10 @@ function decorateLeaderboardEntry(entry) {
     activeRoomId: null,
     requiredAgents: 6,
   };
-  const activeRoomId = arena.activeRoomId || null;
+  const publicArena = buildPublicArenaState(arena);
   return {
     ...entry,
-    isLive: Boolean(activeRoomId),
-    activeRoomId,
-    queueStatus: arena.queueStatus || 'offline',
-    runtimeConnected: Boolean(arena.runtimeConnected),
-    arenaUrl: buildAgentArenaUrl(entry.id, arena),
-    watchUrl: null,
+    ...publicArena,
   };
 }
 
@@ -2584,8 +2608,8 @@ function toActivityIso(value) {
 }
 
 function compareOwnedAgentSummaries(a, b) {
-  const aLive = Boolean(a?.arena?.activeRoomId);
-  const bLive = Boolean(b?.arena?.activeRoomId);
+  const aLive = Boolean(a?.arena?.isLive);
+  const bLive = Boolean(b?.arena?.isLive);
   if (aLive !== bLive) return aLive ? -1 : 1;
 
   const aRuntimeConnected = Boolean(a?.arena?.runtimeConnected);
@@ -2620,7 +2644,7 @@ function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
     toActivityTimestamp(lastPlayedAt),
   ));
   const arena = {
-    ...summarizeAgentArenaState(agent.id),
+    ...buildPublicArenaState(summarizeAgentArenaState(agent.id)),
     ...buildArenaAvailability(),
   };
   return {
@@ -2741,13 +2765,14 @@ async function resolveMatchAgentId(rawId) {
 }
 
 function decorateMatchForClient(match) {
-  const normalizedMode = String(match?.mode || 'mafia').trim().toLowerCase() || 'mafia';
-  const roomId = String(match?.roomId || match?.room_id || '').trim().toUpperCase();
+  const {
+    roomId: _roomId,
+    room_id: _legacyRoomId,
+    replayUrl: _replayUrl,
+    ...safeMatch
+  } = match || {};
   return {
-    ...match,
-    replayUrl: PUBLIC_ROOM_EVENT_ROUTES_ENABLED && roomId
-      ? `/api/rooms/${encodeURIComponent(roomId)}/replay?mode=${encodeURIComponent(normalizedMode)}`
-      : null,
+    ...safeMatch,
   };
 }
 
@@ -2769,6 +2794,7 @@ function upsertAgentRuntime(agentId, patch) {
     currentRoomId: null,
     currentPlayerId: null,
     connectedAt: 0,
+    idleSince: 0,
     lastSeenAt: 0,
   };
   const next = {
@@ -2782,7 +2808,18 @@ function upsertAgentRuntime(agentId, patch) {
 }
 
 function setAgentRuntimeStatus(agentId, status, patch = {}) {
-  return upsertAgentRuntime(agentId, { status, ...patch });
+  const normalizedStatus = String(status || 'offline').trim() || 'offline';
+  const nextPatch = { ...patch, status: normalizedStatus };
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'idleSince')) {
+    nextPatch.idleSince = Number(patch.idleSince || 0);
+  } else if (normalizedStatus === 'idle') {
+    nextPatch.idleSince = Date.now();
+  } else {
+    nextPatch.idleSince = 0;
+  }
+
+  return upsertAgentRuntime(agentId, nextPatch);
 }
 
 function agentSocketIsAuthoritative(agentId, socketId) {
@@ -2809,10 +2846,9 @@ function bindAgentRuntimeSocket(agentId, socketId, patch = {}) {
   if (priorAgentId && priorAgentId !== normalizedAgentId) {
     const displacedRuntime = getAgentRuntime(priorAgentId);
     if (displacedRuntime?.socketId === normalizedSocketId) {
-      upsertAgentRuntime(priorAgentId, {
+      setAgentRuntimeStatus(priorAgentId, 'offline', {
         connected: false,
         socketId: null,
-        status: 'offline',
         currentRoomId: null,
         currentPlayerId: null,
       });
@@ -2820,7 +2856,12 @@ function bindAgentRuntimeSocket(agentId, socketId, patch = {}) {
   }
 
   agentRuntimeSockets.set(normalizedSocketId, normalizedAgentId);
-  return upsertAgentRuntime(normalizedAgentId, {
+  const nextStatus = Object.prototype.hasOwnProperty.call(patch, 'status')
+    ? String(patch.status || '').trim() || 'offline'
+    : (priorRuntime?.currentRoomId && priorRuntime?.currentPlayerId
+      ? String(priorRuntime.status || 'in_match')
+      : 'idle');
+  return setAgentRuntimeStatus(normalizedAgentId, nextStatus, {
     ...patch,
     connected: true,
     socketId: normalizedSocketId,
@@ -2830,19 +2871,19 @@ function bindAgentRuntimeSocket(agentId, socketId, patch = {}) {
 function releaseAgentRuntimeSocket(agentId, socketId, patch = {}) {
   if (!agentSocketIsAuthoritative(agentId, socketId)) return null;
   agentRuntimeSockets.delete(String(socketId || '').trim());
-  return upsertAgentRuntime(agentId, {
+  return setAgentRuntimeStatus(agentId, 'offline', {
     ...patch,
     connected: false,
     socketId: null,
   });
 }
 
-function clearAgentRuntimeAssignment(agentId, nextStatus = 'idle') {
+function clearAgentRuntimeAssignment(agentId, nextStatus = 'idle', patch = {}) {
   const runtime = getAgentRuntime(agentId);
   if (!runtime) return null;
   if (!runtime.connected) nextStatus = 'offline';
-  return upsertAgentRuntime(agentId, {
-    status: nextStatus,
+  return setAgentRuntimeStatus(agentId, nextStatus, {
+    ...patch,
     currentRoomId: null,
     currentPlayerId: null,
   });
@@ -2892,96 +2933,12 @@ function idleLaunchAgents() {
       return Boolean(runtime?.connected) && runtime.status === 'idle';
     })
     .sort((a, b) => {
-      return runtimeConnectedAt(a.id) - runtimeConnectedAt(b.id);
+      const aRuntime = getAgentRuntime(a.id);
+      const bRuntime = getAgentRuntime(b.id);
+      const aIdleSince = Number(aRuntime?.idleSince || aRuntime?.connectedAt || 0);
+      const bIdleSince = Number(bRuntime?.idleSince || bRuntime?.connectedAt || 0);
+      return aIdleSince - bIdleSince || Number(aRuntime?.connectedAt || 0) - Number(bRuntime?.connectedAt || 0);
     });
-}
-
-function addedRecentCoPlayerPenalty(batch, candidate) {
-  const normalizedBatch = Array.isArray(batch) ? batch : [];
-  return normalizedBatch.reduce((total, player) => {
-    const leftId = String(player?.id || '').trim();
-    const rightId = String(candidate?.id || '').trim();
-    if (!leftId || !rightId || leftId === rightId) return total;
-    return total + countRecentPublicArenaCoPlayerMatches(leftId, rightId);
-  }, 0);
-}
-
-function totalRecentCoPlayerPenalty(batch) {
-  const normalizedBatch = Array.isArray(batch) ? batch : [];
-  let total = 0;
-  for (let index = 0; index < normalizedBatch.length; index += 1) {
-    for (let peerIndex = index + 1; peerIndex < normalizedBatch.length; peerIndex += 1) {
-      const leftId = String(normalizedBatch[index]?.id || '').trim();
-      const rightId = String(normalizedBatch[peerIndex]?.id || '').trim();
-      if (!leftId || !rightId || leftId === rightId) continue;
-      total += countRecentPublicArenaCoPlayerMatches(leftId, rightId);
-    }
-  }
-  return total;
-}
-
-function canFillBatchWithoutRecentRepeats(seedAgent, remainingAgents, seatsNeeded = PUBLIC_ARENA_REQUIRED_AGENTS - 1) {
-  const seed = seedAgent && seedAgent.id ? seedAgent : null;
-  const candidates = Array.isArray(remainingAgents)
-    ? remainingAgents.filter((agent) => agent?.id && agent.id !== seed?.id)
-    : [];
-  if (!seed || seatsNeeded <= 0) return Boolean(seed);
-
-  function backtrack(currentBatch, startIndex) {
-    if (currentBatch.length >= PUBLIC_ARENA_REQUIRED_AGENTS) return true;
-    for (let index = startIndex; index < candidates.length; index += 1) {
-      const candidate = candidates[index];
-      if (addedRecentCoPlayerPenalty(currentBatch, candidate) !== 0) continue;
-      currentBatch.push(candidate);
-      if (backtrack(currentBatch, index + 1)) return true;
-      currentBatch.pop();
-    }
-    return false;
-  }
-
-  return backtrack([seed], 0);
-}
-
-function selectPublicArenaBatch(idleAgents) {
-  const candidates = Array.isArray(idleAgents) ? idleAgents.filter((agent) => agent?.id) : [];
-  if (candidates.length < PUBLIC_ARENA_REQUIRED_AGENTS) return null;
-
-  const batch = [candidates[0]];
-  const remaining = candidates.slice(1);
-  while (batch.length < PUBLIC_ARENA_REQUIRED_AGENTS && remaining.length) {
-    let bestIndex = -1;
-    let bestPenalty = Number.POSITIVE_INFINITY;
-    let bestWait = Number.POSITIVE_INFINITY;
-    let bestRandom = Number.POSITIVE_INFINITY;
-
-    for (let index = 0; index < remaining.length; index += 1) {
-      const candidate = remaining[index];
-      const penalty = addedRecentCoPlayerPenalty(batch, candidate);
-      const waitScore = runtimeConnectedAt(candidate.id);
-      const tieBreaker = Math.random();
-      const isBetter = penalty < bestPenalty
-        || (penalty === bestPenalty && waitScore < bestWait)
-        || (penalty === bestPenalty && waitScore === bestWait && tieBreaker < bestRandom);
-      if (!isBetter) continue;
-      bestIndex = index;
-      bestPenalty = penalty;
-      bestWait = waitScore;
-      bestRandom = tieBreaker;
-    }
-
-    if (bestIndex < 0) break;
-    batch.push(remaining.splice(bestIndex, 1)[0]);
-  }
-
-  if (batch.length !== PUBLIC_ARENA_REQUIRED_AGENTS) return null;
-  const totalRepeatPenaltyScore = totalRecentCoPlayerPenalty(batch);
-  return {
-    batch,
-    totalRepeatPenaltyScore,
-    repeatsUnavoidable: totalRepeatPenaltyScore > 0
-      ? !canFillBatchWithoutRecentRepeats(candidates[0], candidates.slice(1))
-      : false,
-  };
 }
 
 function markAgentProfileConnection(agentId, connected, note = null) {
@@ -3055,6 +3012,37 @@ function agentRuntimeRequiredError() {
 }
 
 let publicArenaQueueRunning = false;
+let publicArenaQueueRetryTimer = null;
+let publicArenaQueueRetryAt = 0;
+const PUBLIC_ARENA_REPEAT_OVERLAP_THRESHOLD = 4;
+const DEFAULT_PUBLIC_ARENA_REPEAT_IDLE_FALLBACK_MS = 60_000;
+
+function publicArenaRepeatIdleFallbackMs() {
+  const configured = Number(process.env.PUBLIC_ARENA_REPEAT_IDLE_FALLBACK_MS || DEFAULT_PUBLIC_ARENA_REPEAT_IDLE_FALLBACK_MS);
+  return Math.max(0, Number.isFinite(configured) ? configured : DEFAULT_PUBLIC_ARENA_REPEAT_IDLE_FALLBACK_MS);
+}
+
+function clearPublicArenaQueueRetryTimer() {
+  if (publicArenaQueueRetryTimer) clearTimeout(publicArenaQueueRetryTimer);
+  publicArenaQueueRetryTimer = null;
+  publicArenaQueueRetryAt = 0;
+}
+
+function schedulePublicArenaQueueRetry(waitMs) {
+  const safeDelay = Math.max(25, Number(waitMs || 0));
+  const nextRetryAt = Date.now() + safeDelay;
+  if (publicArenaQueueRetryTimer && publicArenaQueueRetryAt && publicArenaQueueRetryAt <= nextRetryAt) return;
+  clearPublicArenaQueueRetryTimer();
+  publicArenaQueueRetryAt = nextRetryAt;
+  publicArenaQueueRetryTimer = setTimeout(() => {
+    publicArenaQueueRetryTimer = null;
+    publicArenaQueueRetryAt = 0;
+    void processPublicArenaQueue();
+  }, safeDelay);
+  if (typeof publicArenaQueueRetryTimer?.unref === 'function') {
+    publicArenaQueueRetryTimer.unref();
+  }
+}
 
 function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
   if (!room || !player || !agent || !runtime) return;
@@ -3068,6 +3056,7 @@ function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
   runtime.currentRoomId = room.id;
   runtime.currentPlayerId = player.id;
   runtime.status = 'in_match';
+  runtime.idleSince = 0;
   const sock = io.sockets.sockets.get(runtime.socketId);
   if (sock) sock.join(`mafia:${room.id}`);
 }
@@ -3075,8 +3064,7 @@ function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
 function clearPublicArenaSeatRuntime(agentId, nextStatus = 'reserved') {
   const runtime = getAgentRuntime(agentId);
   if (!runtime) return null;
-  return upsertAgentRuntime(agentId, {
-    status: runtime.connected ? nextStatus : 'offline',
+  return setAgentRuntimeStatus(agentId, runtime.connected ? nextStatus : 'offline', {
     currentRoomId: null,
     currentPlayerId: null,
   });
@@ -3122,6 +3110,108 @@ function validatePublicArenaBatch(agents) {
   return { ok: true };
 }
 
+function listPublicArenaMatchAgentIds(match) {
+  const ids = [];
+  for (const player of match?.players || []) {
+    if (!player || player.isBot) continue;
+    const participantId = resolveParticipantId(player);
+    if (participantId) ids.push(participantId);
+  }
+  return ids;
+}
+
+function getLastCompletedPublicArenaMatch(mode = 'mafia') {
+  return completedMatchRecords.find((match) => match?.mode === mode && match?.publicArena) || null;
+}
+
+function buildLastCompletedPublicArenaAgentSet(mode = 'mafia') {
+  const match = getLastCompletedPublicArenaMatch(mode);
+  return new Set(listPublicArenaMatchAgentIds(match));
+}
+
+function buildSafePublicArenaBatch(idleAgents, recentAgentIds) {
+  const batch = [];
+  const maxRepeatedAgents = PUBLIC_ARENA_REPEAT_OVERLAP_THRESHOLD - 1;
+  let repeatedAgents = 0;
+
+  for (const agent of idleAgents) {
+    if (!agent?.id) continue;
+    const isRepeat = recentAgentIds.has(agent.id);
+    if (isRepeat && repeatedAgents >= maxRepeatedAgents) continue;
+    batch.push(agent);
+    if (isRepeat) repeatedAgents += 1;
+    if (batch.length === PUBLIC_ARENA_REQUIRED_AGENTS) return batch;
+  }
+
+  return null;
+}
+
+function publicArenaRepeatAgents(batch, recentAgentIds) {
+  return (batch || []).filter((agent) => recentAgentIds.has(agent?.id));
+}
+
+function batchRepeatFallbackReady(agents, now = Date.now()) {
+  const fallbackMs = publicArenaRepeatIdleFallbackMs();
+  return agents.every((agent) => {
+    const runtime = getAgentRuntime(agent?.id);
+    const idleSince = Number(runtime?.idleSince || 0);
+    return idleSince > 0 && (now - idleSince) >= fallbackMs;
+  });
+}
+
+function selectPublicArenaBatch(idleAgents, now = Date.now()) {
+  if (!Array.isArray(idleAgents) || idleAgents.length < PUBLIC_ARENA_REQUIRED_AGENTS) {
+    return { batch: null, reason: 'insufficient_agents' };
+  }
+
+  const recentAgentIds = buildLastCompletedPublicArenaAgentSet('mafia');
+  if (!recentAgentIds.size) {
+    return {
+      batch: idleAgents.slice(0, PUBLIC_ARENA_REQUIRED_AGENTS),
+      reason: 'no_recent_public_table',
+    };
+  }
+
+  const safeBatch = buildSafePublicArenaBatch(idleAgents, recentAgentIds);
+  if (safeBatch?.length === PUBLIC_ARENA_REQUIRED_AGENTS) {
+    return {
+      batch: safeBatch,
+      reason: 'overlap_safe',
+    };
+  }
+
+  const blockedCandidate = idleAgents.slice(0, PUBLIC_ARENA_REQUIRED_AGENTS);
+  const repeatedAgents = publicArenaRepeatAgents(blockedCandidate, recentAgentIds);
+  if (repeatedAgents.length < PUBLIC_ARENA_REPEAT_OVERLAP_THRESHOLD) {
+    return {
+      batch: blockedCandidate,
+      reason: 'oldest_candidate_safe',
+    };
+  }
+
+  if (batchRepeatFallbackReady(repeatedAgents, now)) {
+    return {
+      batch: blockedCandidate,
+      reason: 'fallback_after_idle_timeout',
+    };
+  }
+
+  const waits = repeatedAgents.map((agent) => {
+    const runtime = getAgentRuntime(agent?.id);
+    const idleSince = Number(runtime?.idleSince || 0);
+    const waitedMs = idleSince > 0 ? Math.max(0, now - idleSince) : 0;
+    return Math.max(0, publicArenaRepeatIdleFallbackMs() - waitedMs);
+  });
+
+  return {
+    batch: null,
+    reason: 'blocked_recent_overlap',
+    blockedCandidate,
+    repeatedAgentIds: repeatedAgents.map((agent) => agent.id),
+    waitMs: waits.length ? Math.max(...waits) : publicArenaRepeatIdleFallbackMs(),
+  };
+}
+
 function createPublicArenaMafiaRoom(agents, options = {}) {
   const validation = validatePublicArenaBatch(agents);
   if (!validation.ok) return null;
@@ -3144,8 +3234,10 @@ function createPublicArenaMafiaRoom(agents, options = {}) {
   room.publicArenaMatchmaking = options?.matchmaking
     ? {
       agentIds: agents.map((agent) => agent.id),
-      totalRepeatPenaltyScore: Number(options.matchmaking.totalRepeatPenaltyScore || 0),
-      repeatsUnavoidable: Boolean(options.matchmaking.repeatsUnavoidable),
+      reason: String(options.matchmaking.reason || '').trim() || null,
+      repeatedAgentIds: Array.isArray(options.matchmaking.repeatedAgentIds)
+        ? options.matchmaking.repeatedAgentIds.slice()
+        : [],
     }
     : null;
   attachLiveAgentToMafiaSeat(room, created.player, hostAgent, hostRuntime);
@@ -3181,8 +3273,10 @@ function createPublicArenaMafiaRoom(agents, options = {}) {
     phase: room.phase,
     publicArena: true,
     agents: agents.map((agent) => agent.id),
-    totalRepeatPenaltyScore: Number(room.publicArenaMatchmaking?.totalRepeatPenaltyScore || 0),
-    repeatsUnavoidable: Boolean(room.publicArenaMatchmaking?.repeatsUnavoidable),
+    matchmakingReason: room.publicArenaMatchmaking?.reason || null,
+    repeatedAgentIds: Array.isArray(room.publicArenaMatchmaking?.repeatedAgentIds)
+      ? room.publicArenaMatchmaking.repeatedAgentIds
+      : [],
   });
   emitMafiaRoom(room);
   activeAgentMatchRooms.add(room.id);
@@ -3201,26 +3295,40 @@ function createPublicArenaMafiaRoom(agents, options = {}) {
 async function processPublicArenaQueue() {
   if (publicArenaQueueRunning) return;
   publicArenaQueueRunning = true;
+  clearPublicArenaQueueRetryTimer();
   try {
     let idleAgents = idleLaunchAgents();
     while (idleAgents.length >= PUBLIC_ARENA_REQUIRED_AGENTS) {
       const selection = selectPublicArenaBatch(idleAgents);
-      if (!selection?.batch?.length) break;
+      if (!selection.batch?.length) {
+        if (selection.reason === 'blocked_recent_overlap') {
+          logStructured('mafia.publicArena.batch_deferred', {
+            reason: selection.reason,
+            blockedAgentIds: selection.repeatedAgentIds || [],
+            waitMs: Number(selection.waitMs || 0),
+            connectedAgents: idleAgents.length,
+          });
+          schedulePublicArenaQueueRetry(selection.waitMs);
+        }
+        break;
+      }
+
       const batch = selection.batch;
-      logStructured('mafia.publicArena.batch_selected', {
-        agentIds: batch.map((agent) => agent.id),
-        idleAgents: idleAgents.length,
-        totalRepeatPenaltyScore: Number(selection.totalRepeatPenaltyScore || 0),
-        repeatsUnavoidable: Boolean(selection.repeatsUnavoidable),
-      });
+      const preservedIdleSince = new Map(
+        batch.map((agent) => [agent.id, Number(getAgentRuntime(agent.id)?.idleSince || 0)]),
+      );
       batch.forEach((agent) => setAgentRuntimeStatus(agent.id, 'reserved'));
       const room = createPublicArenaMafiaRoom(batch, { matchmaking: selection });
       if (!room) {
         logStructured('mafia.publicArena.batch_failed', {
+          reason: selection.reason,
           agentIds: batch.map((agent) => agent.id),
           connectedAgents: idleAgents.length,
         });
-        batch.forEach((agent) => clearAgentRuntimeAssignment(agent.id, 'idle'));
+        batch.forEach((agent) => clearAgentRuntimeAssignment(agent.id, 'idle', {
+          idleSince: preservedIdleSince.get(agent.id) || 0,
+        }));
+        schedulePublicArenaQueueRetry(250);
         break;
       }
       idleAgents = idleLaunchAgents();
@@ -3529,6 +3637,13 @@ async function mergeOwnedAgentsIntoUser(sourceUserId, targetUserId, targetEmail)
   }
 }
 
+function sendRetiredApiResponse(res, message) {
+  res.status(410).json({
+    ok: false,
+    error: message,
+  });
+}
+
 app.post('/api/auth/magic-link', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!email || !email.includes('@')) {
@@ -3647,6 +3762,7 @@ app.use('/api/openclaw', createOpenClawRouter({
   resolvePublicBaseUrl,
   resolveSiteSession,
   roomEvents,
+  sanitizeArenaState: buildPublicArenaState,
   shortId,
   summarizeAgentArenaState,
 }));
@@ -3678,7 +3794,7 @@ app.get('/api/openclaw/agents/:id', async (req, res) => {
       arenaUrl: summary?.arenaUrl || buildAgentArenaUrl(authorized.agent.id),
       watchUrl: summary?.watchUrl || null,
       arena: summary?.arena || {
-        ...summarizeAgentArenaState(authorized.agent.id),
+        ...buildPublicArenaState(summarizeAgentArenaState(authorized.agent.id)),
         ...buildArenaAvailability(),
       },
       gamesPlayed: Number(summary?.gamesPlayed || 0),
@@ -3830,41 +3946,8 @@ app.get('/api/agents/mine', async (req, res) => {
   });
 });
 
-app.get('/api/agents/:id', async (req, res) => {
-  const agent = await ensureAgentProfileLoaded(String(req.params.id || '').trim());
-  if (!agent) return res.status(404).json({ ok: false, error: 'agent not found' });
-  const statsBundle = await buildOwnedAgentStats(agent.id);
-  const summary = summarizeOwnedAgentProfile(agent, {
-    stats: statsBundle?.stats || null,
-  });
-  const arena = summary?.arena || {
-    ...summarizeAgentArenaState(agent.id),
-    ...buildArenaAvailability(),
-  };
-
-  res.json({
-    ok: true,
-    agent: {
-      id: agent.id,
-      name: agent.name,
-      mmr: Number(statsBundle?.stats?.mmr ?? agent.mmr ?? DEFAULT_MMR),
-      peakMmr: Number(statsBundle?.stats?.peakMmr ?? agent.peakMmr ?? DEFAULT_MMR),
-      ratedMatches: Number(statsBundle?.stats?.ratedMatches ?? agent.ratedMatches ?? 0),
-      lastRatingDelta: Number(statsBundle?.stats?.lastRatingDelta ?? agent.lastRatingDelta ?? 0),
-      isProvisional: Boolean(statsBundle?.stats?.isProvisional ?? normalizeRatingSnapshot(agent).isProvisional),
-      karma: agent.karma,
-      deployed: !!agent.deployed,
-      openclawConnected: arena.runtimeConnected,
-      persona: agent.persona || null,
-      arenaUrl: buildAgentArenaUrl(agent.id, arena),
-      watchUrl: null,
-      arena,
-      gamesPlayed: Number(summary?.gamesPlayed || 0),
-      lastPlayedAt: summary?.lastPlayedAt || null,
-      lastConnectedAt: summary?.lastConnectedAt || null,
-      activityAt: summary?.activityAt || null,
-    },
-  });
+app.get('/api/agents/:id', (_req, res) => {
+  sendRetiredApiResponse(res, 'Public agent profile APIs are not part of the current MVP.');
 });
 
 app.post('/api/agents/:id/runtime-credential/rotate', async (req, res) => {
@@ -3945,58 +4028,16 @@ app.get('/api/matches', async (req, res) => {
   }
 });
 
-// ── Report a player/message ──
-app.post('/api/report', async (req, res) => {
-  const roomId = String(req.body?.roomId || '').trim();
-  const targetPlayer = String(req.body?.targetPlayer || '').trim().slice(0, 40);
-  const messageText = String(req.body?.messageText || '').trim().slice(0, 500);
-  const reason = String(req.body?.reason || 'inappropriate').trim().slice(0, 60);
-
-  if (!roomId || !targetPlayer) {
-    return res.status(400).json({ ok: false, error: 'roomId and targetPlayer are required' });
-  }
-
-  try {
-    // Get reporter ID from auth token if available
-    let reporterId = null;
-    const siteSession = await resolveSiteSession(req);
-    if (siteSession?.userId) reporterId = siteSession.userId;
-
-    await createReport({ reporterId, roomId, targetPlayer, messageText, reason });
-    logStructured('report.created', { roomId, targetPlayer, reason, reporterId });
-    res.json({ ok: true });
-  } catch (err) {
-    logStructured('error.createReport', { error: err.message });
-    res.status(500).json({ ok: false, error: 'failed to submit report' });
-  }
+app.post('/api/report', (_req, res) => {
+  sendRetiredApiResponse(res, 'Public report and moderation APIs are not part of the current MVP.');
 });
 
-// ── Ops: list reports ──
-app.get('/api/ops/reports', async (req, res) => {
-  const status = String(req.query.status || '').trim() || undefined;
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
-  try {
-    const reports = await getReports({ status, limit });
-    res.json({ ok: true, reports });
-  } catch (err) {
-    logStructured('error.getReports', { error: err.message });
-    res.status(500).json({ ok: false, error: 'failed to fetch reports' });
-  }
+app.get('/api/ops/reports', (_req, res) => {
+  sendRetiredApiResponse(res, 'Public report and moderation APIs are not part of the current MVP.');
 });
 
-// ── Ops: update report status ──
-app.patch('/api/ops/reports/:id', async (req, res) => {
-  const id = Number(req.params.id);
-  const status = String(req.body?.status || '').trim();
-  if (!status || !['pending', 'reviewed', 'actioned', 'dismissed'].includes(status)) {
-    return res.status(400).json({ ok: false, error: 'valid status required: pending, reviewed, actioned, dismissed' });
-  }
-  try {
-    await updateReportStatus(id, status);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: 'failed to update report' });
-  }
+app.patch('/api/ops/reports/:id', (_req, res) => {
+  sendRetiredApiResponse(res, 'Public report and moderation APIs are not part of the current MVP.');
 });
 
 function buildRoomLaunchReadiness(room) {
@@ -4373,19 +4414,25 @@ function startReadyLobby(mode, roomId, playerId) {
   };
 }
 
-app.get('/api/play/rooms', (req, res) => {
-  const modeInput = String(req.query.mode || PUBLIC_LAUNCH_MODE).toLowerCase();
-  const modeFilter = modeInput === 'all' ? PUBLIC_LAUNCH_MODE : modeInput;
-  const statusFilter = String(req.query.status || 'all').toLowerCase();
+function buildRoomsApiResponse(modeInput = PUBLIC_LAUNCH_MODE, statusFilter = 'all') {
+  const normalizedModeInput = String(modeInput || PUBLIC_LAUNCH_MODE).toLowerCase();
+  const modeFilter = normalizedModeInput === 'all' ? PUBLIC_LAUNCH_MODE : normalizedModeInput;
+  const normalizedStatusFilter = String(statusFilter || 'all').toLowerCase();
 
-  if (!['all', 'mafia'].includes(modeInput)) {
-    return res.status(400).json({ ok: false, error: 'Invalid mode filter' });
+  if (!['all', 'mafia'].includes(normalizedModeInput)) {
+    return {
+      statusCode: 400,
+      body: { ok: false, error: 'Invalid mode filter' },
+    };
   }
   if (!isEnabledPublicMode(modeFilter)) {
-    return res.status(400).json(modeDisabledError(modeFilter));
+    return {
+      statusCode: 400,
+      body: modeDisabledError(modeFilter),
+    };
   }
 
-  const roomsList = listPlayableRooms(modeFilter, statusFilter);
+  const roomsList = listPlayableRooms(modeFilter, normalizedStatusFilter);
   const aggregate = roomsList.reduce((totals, room) => {
     totals.playersOnline += Number(room.players || 0);
     if (room.canJoin) totals.openRooms += 1;
@@ -4436,85 +4483,39 @@ app.get('/api/play/rooms', (req, res) => {
     },
   };
 
-  res.json({ ok: true, rooms: roomsList.slice(0, 50).map((room) => sanitizePlayableRoomForPublic(room)), summary });
+  return {
+    statusCode: 200,
+    body: { ok: true, rooms: roomsList.slice(0, 50), summary },
+  };
+}
+
+app.get('/api/ops/rooms', (req, res) => {
+  const response = buildRoomsApiResponse(req.query.mode || PUBLIC_LAUNCH_MODE, req.query.status || 'all');
+  res.status(response.statusCode).json(response.body);
 });
 
-app.get('/api/play/lobby/claims', (_req, res) => {
-  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
+app.get('/api/play/rooms', (_req, res) => {
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
 });
 
-app.post('/api/play/reconnect-telemetry', (_req, res) => {
-  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
+app.get('/api/play/lobby/claims', (req, res) => {
+  void req;
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
+});
+
+app.post('/api/play/reconnect-telemetry', (req, res) => {
+  void req;
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
 });
 
 app.post('/api/play/quick-join', (req, res) => {
-  incrementGrowthMetric('funnel.quickJoinStarts', 1);
-  const modeInput = String(req.body?.mode || 'all').toLowerCase();
-  const playerName = String(req.body?.name || '').trim().slice(0, 24) || `Player-${Math.floor(Math.random() * 900) + 100}`;
-
-  if (!['all', 'mafia'].includes(modeInput)) {
-    return res.status(400).json({ ok: false, error: 'Invalid mode' });
-  }
-  if (!['all', PUBLIC_LAUNCH_MODE].includes(modeInput)) {
-    return res.status(400).json(modeDisabledError(modeInput));
-  }
-
-  const selectedMode = PUBLIC_LAUNCH_MODE;
-  roomEvents.append('growth', selectedMode, 'QUICK_JOIN_REQUESTED', {
-    modeInput,
-    selectedMode,
-  });
-  const candidates = listPlayableRooms(selectedMode, 'open')
-    .filter((room) => room.canJoin)
-    .sort((a, b) => {
-      const aScore = Number(a.matchQuality?.score || 0);
-      const bScore = Number(b.matchQuality?.score || 0);
-      return bScore - aScore || b.players - a.players || (b.createdAt || 0) - (a.createdAt || 0);
-    });
-
-  let targetRoom = candidates[0] || null;
-  let created = false;
-
-  if (!targetRoom) {
-    const createdRoom = createQuickJoinRoom(selectedMode, playerName);
-    if (!createdRoom.ok) return res.status(400).json(createdRoom);
-    logRoomEvent(selectedMode, createdRoom.room, 'ROOM_CREATED', { status: createdRoom.room.status, phase: createdRoom.room.phase });
-    const autoFilled = autoFillLobbyBots(selectedMode, createdRoom.room.id, QUICK_JOIN_MIN_PLAYERS);
-    if (!autoFilled.ok) return res.status(400).json(autoFilled);
-    targetRoom = summarizePlayableRoom(selectedMode, createdRoom.room);
-    created = true;
-  }
-
-  const quickJoinDecision = buildQuickJoinDecision(candidates, targetRoom, created);
-  const quickHint = encodeURIComponent(String(quickJoinDecision.message || '').slice(0, 180));
-  const joinTicket = {
-    mode: targetRoom.mode,
-    roomId: targetRoom.roomId,
-    name: playerName,
-    autojoin: true,
-    quickJoinDecision,
-    joinUrl: `/play.html?game=${targetRoom.mode}&room=${targetRoom.roomId}&autojoin=1&name=${encodeURIComponent(playerName)}&qjReason=${quickHint}`,
-    issuedAt: Date.now(),
-  };
-
-  issueQuickJoinTicket(targetRoom.mode, targetRoom.roomId, playerName);
-  roomEvents.append('growth', targetRoom.roomId, 'QUICK_JOIN_TICKET_ISSUED', {
-    mode: targetRoom.mode,
-    created,
-    hasReconnectSuggestion: false,
-    reasonCode: quickJoinDecision.code,
-  });
-  res.json({
-    ok: true,
-    created,
-    room: sanitizePlayableRoomForPublic(summarizePlayableRoom(targetRoom.mode, mafiaRooms.get(targetRoom.roomId))),
-    quickJoinDecision,
-    joinTicket,
-  });
+  void req;
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
 });
 
-app.post('/api/play/lobby/autofill', (_req, res) => {
-  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
+app.post('/api/play/lobby/autofill', (req, res) => {
+  void req;
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
 });
 
 loadState();
@@ -4522,34 +4523,15 @@ growthMetrics = buildEmptyGrowthMetrics();
 void loadGrowthMetrics();
 
 // ── Instant Play: one-click to join a game ──
-app.post('/api/play/instant', (_req, res) => {
-  res.status(404).json({ ok: false, error: { code: 'ROUTE_UNAVAILABLE', message: 'route unavailable' } });
+app.post('/api/play/instant', (req, res) => {
+  void req;
+  sendRetiredApiResponse(res, 'Public room discovery and play-control APIs are not part of the current MVP.');
 });
 
-// ── Watch status: public transcript access disabled ──
 app.get('/api/play/watch', (_req, res) => {
-  const arena = buildArenaAvailability();
-  const allRooms = listPlayableRooms(PUBLIC_LAUNCH_MODE, 'all');
-  const active = allRooms
-    .filter((r) => r.status === 'in_progress')
-    .sort((a, b) => (b.players || 0) - (a.players || 0));
-
-  res.json({
-    ok: true,
-    found: active.length > 0,
-    liveMatchActive: active.length > 0,
-    activeMatches: active.length,
-    mode: arena.mode,
-    connectedAgents: arena.connectedAgents,
-    requiredAgents: arena.requiredAgents,
-    missingAgents: arena.missingAgents,
-    canStart: arena.canStart,
-    watchUrl: null,
-    message: arena.connectedAgents > 0
-      ? (active.length > 0
-        ? 'A live agent-only Mafia match is currently in progress. Public transcript access is disabled.'
-        : `No live agent-only Mafia room is running yet. Need ${arena.missingAgents} more connected agent(s) to open the arena.`)
-      : 'No live agent-only Mafia rooms yet. Connect an OpenClaw agent to help open the arena.',
+  res.status(410).json({
+    ok: false,
+    error: 'Public watch pages and replay timelines are not part of the current MVP.',
   });
 });
 
@@ -4630,13 +4612,25 @@ app.get('/config.js', (req, res) => {
   res.send(buildRuntimeConfigScript(req));
 });
 
+app.get([
+  '/arena.html',
+  '/account.html',
+  '/dashboard.html',
+  '/play.html',
+  '/browse.html',
+  '/guide.html',
+  '/terminal-agent.html',
+  '/for-agents.html',
+  '/guess-the-agent.html',
+], (_req, res) => {
+  res.redirect(302, '/leaderboard.html');
+});
+
+app.use('/ops.html', opsLoopbackPageGate);
 app.use(sendRuntimeHtml);
 app.use(express.static(PUBLIC_DIR));
 
-registerRoomEventRoutes(app, {
-  roomEvents,
-  enabled: PUBLIC_ROOM_EVENT_ROUTES_ENABLED,
-});
+registerRoomEventRoutes(app, { roomEvents });
 
 app.get('/api/ops/events', (_req, res) => {
   res.json({ ok: true, pending: roomEvents.pending(), pendingByMode: roomEvents.pendingByMode() });
@@ -4826,16 +4820,20 @@ async function buildHealthPayload() {
   };
 }
 
-app.get('/api/ops/health', async (_req, res) => {
-  const payload = await buildHealthPayload();
-  const httpStatus = payload.healthy ? 200 : 503;
-  res.status(httpStatus).json(payload.detailed);
+app.get('/api/ops/health', (_req, res) => {
+  res.json(buildOpsHealthPayload());
 });
 
 app.get('/health', async (_req, res) => {
-  const payload = await buildHealthPayload();
-  const httpStatus = payload.healthy ? 200 : 503;
-  res.status(httpStatus).json(payload.summary);
+  const dbHealth = await getDatabaseHealth();
+  const durableStorageRequired = IS_PRODUCTION;
+  const healthy = dbHealth.status === 'ok' || !durableStorageRequired;
+  res.status(healthy ? 200 : 503).json({
+    ok: healthy,
+    status: healthy ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    uptimeSec: Math.floor(process.uptime()),
+  });
 });
 
 // ── Sentry error handler (must be after all routes) ──
@@ -4885,12 +4883,12 @@ function cleanupStaleRooms() {
 }
 
 function resetAgentArenaRuntime() {
+  clearPublicArenaQueueRetryTimer();
   liveAgentRuntimes.clear();
   agentRuntimeSockets.clear();
   activeAgentMatchRooms.clear();
   completedMatchRooms.clear();
   completedMatchRecords.length = 0;
-  publicArenaRecentCoPlayers.clear();
   publicArenaQueueRunning = false;
 }
 
@@ -4958,6 +4956,7 @@ module.exports = {
   agentProfiles,
   connectSessions,
   liveAgentRuntimes,
+  completedMatchRecords,
   agentRuntimeSockets,
   roomEvents,
   PUBLIC_APP_URL,
@@ -4967,8 +4966,9 @@ module.exports = {
   injectPublicBaseUrl,
   buildRuntimeConfigScript,
   processPublicArenaQueue,
+  idleLaunchAgents,
+  selectPublicArenaBatch,
   createPublicArenaMafiaRoom,
-  rememberPublicArenaMatchParticipants,
   recordFirstMatchCompletion,
   releasePublicArenaRoom,
   buildMatchBaseline,
@@ -4978,4 +4978,8 @@ module.exports = {
   seedPlayTelemetry,
   resetAgentArenaRuntime,
   maintenanceState,
+  isLoopbackRemoteAddress,
+  opsSurfaceEnabled,
+  manualMafiaSocketFeatureEnabled,
+  envFlagEnabled,
 };

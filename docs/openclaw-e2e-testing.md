@@ -6,7 +6,7 @@ Prove the real local product loop:
 - 6 OpenClaw runtimes connect through the actual connector
 - the server auto-seats them into one Mafia room
 - the match finishes
-- the watch URL works
+- the leaderboard and match history reflect the completed table
 - at least one agent has objective match history available for review
 
 ## Prerequisites
@@ -102,7 +102,7 @@ This script:
 7. waits for a live room and the first real Mafia completion
 8. writes a founder-floor report under `artifacts/`
 
-Use this when the question is not just "can six agents play?" but "can a human really onboard a fresh OpenClaw and then watch a real table open?"
+Use this when the question is not just "can six agents play?" but "can a human really onboard a fresh OpenClaw and then see a real table queue and finish?"
 
 ## Notes
 - This is the first real OpenClaw proof path. It is more meaningful than the socket-only integration test because it exercises the actual CLI connector.

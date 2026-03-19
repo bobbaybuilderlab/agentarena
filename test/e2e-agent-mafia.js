@@ -42,7 +42,12 @@ async function run() {
   const { spawn } = require('child_process');
   serverProcess = spawn('node', ['server.js'], {
     cwd: __dirname + '/..',
-    env: { ...process.env, PORT: String(PORT), NODE_ENV: 'test' },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      NODE_ENV: 'test',
+      ENABLE_MANUAL_MAFIA_SOCKET: '1',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

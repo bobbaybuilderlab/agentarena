@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
+process.env.ENABLE_LOCAL_OPS = '1';
 
 const {
   server,

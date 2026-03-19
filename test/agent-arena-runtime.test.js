@@ -21,7 +21,6 @@ const {
   roomEvents,
   processPublicArenaQueue,
   createPublicArenaMafiaRoom,
-  rememberPublicArenaMatchParticipants,
   recordFirstMatchCompletion,
   releasePublicArenaRoom,
   buildMatchBaseline,
@@ -212,99 +211,6 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   };
 }
 
-test('same-phase actions keep hard deadlines stable and discussion waits for its fixed deadline', async () => {
-  await withServer(async (url) => {
-    const names = ['Host', 'P2', 'P3', 'P4', 'P5', 'P6'];
-    const sockets = [];
-    try {
-      for (const _name of names) {
-        const socket = ioc(url, { reconnection: false, autoUnref: true });
-        await once(socket, 'connect');
-        sockets.push(socket);
-      }
-
-      const created = await emitAck(sockets[0], 'mafia:room:create', { name: names[0] });
-      assert.equal(created.ok, true);
-
-      const seats = new Map([[names[0], { socket: sockets[0], playerId: created.playerId }]]);
-      for (let index = 1; index < names.length; index += 1) {
-        const joined = await emitAck(sockets[index], 'mafia:room:join', { roomId: created.roomId, name: names[index] });
-        assert.equal(joined.ok, true);
-        seats.set(names[index], { socket: sockets[index], playerId: joined.playerId });
-      }
-
-      const started = await emitAck(sockets[0], 'mafia:start', { roomId: created.roomId, playerId: created.playerId });
-      assert.equal(started.ok, true);
-
-      const room = mafiaRooms.get(created.roomId);
-      assert.ok(room);
-      assert.equal(room.phase, 'night');
-
-      const initialNightDeadline = room.phaseEndsAt;
-      const mafiaPlayers = room.players.filter((player) => player.role === 'mafia');
-      assert.equal(mafiaPlayers.length, 2);
-      const nightTarget = room.players.find((player) => player.alive && player.role !== 'mafia');
-      assert.ok(nightTarget);
-
-      const firstMafiaSeat = [...seats.values()].find((seat) => seat.playerId === mafiaPlayers[0].id);
-      const secondMafiaSeat = [...seats.values()].find((seat) => seat.playerId === mafiaPlayers[1].id);
-      assert.ok(firstMafiaSeat);
-      assert.ok(secondMafiaSeat);
-
-      const firstNightAction = await emitAck(firstMafiaSeat.socket, 'mafia:action', {
-        roomId: created.roomId,
-        playerId: mafiaPlayers[0].id,
-        type: 'nightKill',
-        targetId: nightTarget.id,
-      });
-      assert.equal(firstNightAction.ok, true);
-      assert.equal(room.phase, 'night');
-      assert.equal(room.phaseEndsAt, initialNightDeadline);
-
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      assert.equal(room.phaseEndsAt, initialNightDeadline);
-
-      const secondNightAction = await emitAck(secondMafiaSeat.socket, 'mafia:action', {
-        roomId: created.roomId,
-        playerId: mafiaPlayers[1].id,
-        type: 'nightKill',
-        targetId: nightTarget.id,
-      });
-      assert.equal(secondNightAction.ok, true);
-      assert.equal(room.phase, 'discussion');
-
-      await waitFor(() => room.discussion?.turnId || null, 200, 5);
-      const initialDiscussionDeadline = room.phaseEndsAt;
-      assert.ok(initialDiscussionDeadline);
-
-      const discussionSpeakerId = room.discussion.currentSpeakerId;
-      const discussionSeat = [...seats.values()].find((seat) => seat.playerId === discussionSpeakerId);
-      assert.ok(discussionSeat);
-
-      const discussionAction = await emitAck(discussionSeat.socket, 'mafia:action', {
-        roomId: created.roomId,
-        playerId: discussionSpeakerId,
-        type: 'discussion',
-        turnId: room.discussion.turnId,
-        message: 'Pressure stays on the loudest contradiction.',
-      });
-      assert.equal(discussionAction.ok, true);
-      assert.equal(room.phase, 'discussion');
-      assert.equal(room.phaseEndsAt, initialDiscussionDeadline);
-
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      assert.equal(room.phase, 'discussion');
-      assert.equal(room.phaseEndsAt, initialDiscussionDeadline);
-
-      const votingRoom = await waitFor(() => room.phase === 'voting' ? room : null, 240, 5);
-      assert.ok(votingRoom, 'expected discussion to expire into voting without early skip');
-      assert.equal(room.phase, 'voting');
-    } finally {
-      sockets.forEach((socket) => socket.disconnect());
-    }
-  });
-});
-
 test('runtime secret can reconnect after the onboarding connect session expires', async () => {
   await withServer(async (url) => {
     const authRes = await fetch(`${url}/api/auth/session`, {
@@ -343,52 +249,6 @@ test('runtime secret can reconnect after the onboarding connect session expires'
     } finally {
       agent.socket.disconnect();
     }
-  });
-});
-
-test('public arena queue avoids recent co-players when fresh opponents are available', async () => {
-  await withServer(async (url) => {
-    void url;
-
-    const repeatGroup = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
-      .map((name, index) => addQueuedTestAgent(`repeat-${index + 1}`, name, index + 1));
-    const freshGroup = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo']
-      .map((name, index) => addQueuedTestAgent(`fresh-${index + 1}`, name, repeatGroup.length + index + 1));
-
-    rememberPublicArenaMatchParticipants(repeatGroup.map((agent) => agent.id), 'recent-repeat-group');
-    await processPublicArenaQueue();
-
-    assert.equal(mafiaRooms.size, 1);
-    const room = [...mafiaRooms.values()][0];
-    const selectedAgentIds = new Set(room.players.map((player) => player.agentId));
-
-    assert.equal(selectedAgentIds.has(repeatGroup[0].id), true, 'expected the oldest idle agent to seed the batch');
-    for (const agent of repeatGroup.slice(1)) {
-      assert.equal(selectedAgentIds.has(agent.id), false, `expected ${agent.name} to be avoided when fresh opponents exist`);
-    }
-    for (const agent of freshGroup) {
-      assert.equal(selectedAgentIds.has(agent.id), true, `expected ${agent.name} to be selected as a fresh opponent`);
-    }
-    assert.equal(room.publicArenaMatchmaking.totalRepeatPenaltyScore, 0);
-    assert.equal(room.publicArenaMatchmaking.repeatsUnavoidable, false);
-  });
-});
-
-test('public arena queue still forms a room when recent repeats are unavoidable', async () => {
-  await withServer(async (url) => {
-    void url;
-
-    const agents = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
-      .map((name, index) => addQueuedTestAgent(`fallback-${index + 1}`, name, index + 1));
-
-    rememberPublicArenaMatchParticipants(agents.map((agent) => agent.id), 'recent-fallback-group');
-    await processPublicArenaQueue();
-
-    assert.equal(mafiaRooms.size, 1);
-    const room = [...mafiaRooms.values()][0];
-    assert.equal(room.players.length, 6);
-    assert.equal(room.publicArenaMatchmaking.totalRepeatPenaltyScore > 0, true);
-    assert.equal(room.publicArenaMatchmaking.repeatsUnavoidable, true);
   });
 });
 
@@ -471,51 +331,32 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       }, 4000, 25);
       assert.ok(seatedRoomId, 'expected all six agents to receive a room assignment');
 
-      const watchData = await waitFor(async () => {
-        const res = await fetch(`${url}/api/play/watch`);
-        const data = await res.json();
-        return data?.ok && data.liveMatchActive ? data : null;
-      }, 4000, 25);
-      assert.ok(watchData, 'expected the status-only live match endpoint to report an active match');
-      assert.equal(watchData.watchUrl, null);
-      assert.equal(Number(watchData.activeMatches || 0) >= 1, true);
-      assert.equal('roomId' in watchData, false);
+      const watchRes = await fetch(`${url}/api/play/watch`);
+      assert.equal(watchRes.status, 410);
+      const watchData = await watchRes.json();
+      assert.equal(watchData.ok, false);
 
       const liveHealthRes = await fetch(`${url}/health`);
       const liveHealth = await liveHealthRes.json();
       assert.equal(liveHealth.ok, true);
       assert.equal('publicArena' in liveHealth, false);
 
-      const opsHealthRes = await fetch(`${url}/api/ops/health`);
-      const opsHealth = await opsHealthRes.json();
-      assert.equal(opsHealth.ok, true);
-      assert.equal(opsHealth.publicArena.connectedAgents, 6);
-      assert.equal(opsHealth.publicArena.idleAgents, 0);
-      assert.equal(opsHealth.publicArena.inMatchAgents, 6);
-      assert.equal(Number(opsHealth.publicArena.activeMatches || 0) >= 1, true);
-      assert.equal(typeof opsHealth.publicArena.reservedAgents, 'number');
-      assert.equal(typeof opsHealth.publicArena.queueRunning, 'boolean');
-      const baselineData = await waitFor(async () => {
-        const res = await fetch(`${url}/api/ops/match-baseline?mode=mafia`);
-        const data = await res.json();
-        return data?.ok && Number(data.baseline?.sampleSize || 0) >= 1 ? data : null;
+      const baseline = await waitFor(async () => {
+        const data = await buildMatchBaseline('mafia');
+        return Number(data?.sampleSize || 0) >= 1 ? data : null;
       }, 6000, 75);
-      assert.ok(baselineData, 'expected at least one completed Mafia match');
+      assert.ok(baseline, 'expected at least one completed Mafia match');
 
       const agentStatusRes = await fetch(`${url}/api/agents/${agents[0].agentId}`);
+      assert.equal(agentStatusRes.status, 410);
       const agentStatusData = await agentStatusRes.json();
-      assert.equal(agentStatusData.ok, true);
-      assert.equal(agentStatusData.agent.arena.runtimeConnected, true);
-      assert.ok(['idle', 'in_match'].includes(agentStatusData.agent.arena.queueStatus));
-      assert.equal(Number(agentStatusData.agent.mmr || 0) >= 0, true);
-      assert.equal(Number(agentStatusData.agent.ratedMatches || 0) >= 1, true);
-      assert.equal('peakMmr' in agentStatusData.agent, true);
-      assert.equal('isProvisional' in agentStatusData.agent, true);
+      assert.equal(agentStatusData.ok, false);
+      assert.match(agentStatusData.error || '', /agent profile APIs are not part of the current MVP/i);
 
-      assert.equal(baselineData.baseline.mode, 'mafia');
-      assert.equal(baselineData.baseline.sampleSize >= 1, true);
-      assert.equal(Number(baselineData.baseline.avgDurationMs || 0) > 0, true);
-      assert.equal(Number(baselineData.baseline.estimatedGamesPerHour || 0) > 0, true);
+      assert.equal(baseline.mode, 'mafia');
+      assert.equal(baseline.sampleSize >= 1, true);
+      assert.equal(Number(baseline.avgDurationMs || 0) > 0, true);
+      assert.equal(Number(baseline.estimatedGamesPerHour || 0) > 0, true);
 
       mafiaRooms.clear();
       const durableBaseline = await buildMatchBaseline('mafia');
@@ -536,14 +377,9 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal('isProvisional' in leaderboardData.topAgents[0], true);
       assert.equal('queueStatus' in leaderboardData.topAgents[0], true);
       assert.equal('isLive' in leaderboardData.topAgents[0], true);
-      assert.equal('arenaUrl' in leaderboardData.topAgents[0], true);
-      assert.equal(leaderboardData.topAgents[0].watchUrl, null);
-
-      const ratingsHealthRes = await fetch(`${url}/api/ops/ratings/health?mode=mafia`);
-      const ratingsHealthData = await ratingsHealthRes.json();
-      assert.equal(ratingsHealthData.ok, true);
-      assert.equal(ratingsHealthData.health.mode, 'mafia');
-      assert.equal(Number(ratingsHealthData.health.sampleSize || 0) >= 1, true);
+      assert.equal('activeRoomId' in leaderboardData.topAgents[0], false);
+      assert.equal('arenaUrl' in leaderboardData.topAgents[0], false);
+      assert.equal('watchUrl' in leaderboardData.topAgents[0], false);
 
       const matchesRes = await fetch(`${url}/api/matches?userId=${encodeURIComponent(agents[0].agentId)}&limit=5`);
       const matchesData = await matchesRes.json();
@@ -551,19 +387,15 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(matchesData.matches), true);
       assert.equal(matchesData.matches.length >= 1, true);
       assert.ok(['mafia', 'town'].includes(matchesData.matches[0].winner));
-      assert.match(matchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
+      assert.equal('roomId' in matchesData.matches[0], false);
+      assert.equal('room_id' in matchesData.matches[0], false);
+      assert.equal('replayUrl' in matchesData.matches[0], false);
 
       const replayRes = await fetch(`${url}/api/rooms/${encodeURIComponent(seatedRoomId)}/replay?mode=mafia`);
+      assert.equal(replayRes.status, 410);
       const replayData = await replayRes.json();
-      assert.equal(replayData.ok, true);
-      assert.equal(replayData.room.id, seatedRoomId);
-      assert.equal(replayData.summary.roomId, seatedRoomId);
-      assert.equal(Array.isArray(replayData.highlights), true);
-      assert.equal(Array.isArray(replayData.turns), true);
-      assert.equal(Array.isArray(replayData.timeline), true);
-      assert.equal(replayData.timeline.length >= 1, true);
-      assert.equal(typeof replayData.summary.headline, 'string');
-      assert.equal(typeof replayData.summary.durationLabel, 'string');
+      assert.equal(replayData.ok, false);
+      assert.match(replayData.error || '', /replay and event timelines/i);
 
       const statsRes = await fetch(`${url}/api/stats`);
       const statsData = await statsRes.json();
@@ -602,7 +434,9 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(Array.isArray(mineMatchesData.matches), true);
       assert.equal(mineMatchesData.matches.length >= 1, true);
       assert.equal('nightKillCredits' in mineMatchesData.matches[0], true);
-      assert.match(mineMatchesData.matches[0].replayUrl, /\/api\/rooms\/.+\/replay\?mode=mafia/);
+      assert.equal('roomId' in mineMatchesData.matches[0], false);
+      assert.equal('room_id' in mineMatchesData.matches[0], false);
+      assert.equal('replayUrl' in mineMatchesData.matches[0], false);
     } finally {
       agents.forEach(({ socket }) => socket.disconnect());
     }

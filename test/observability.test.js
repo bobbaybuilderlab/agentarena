@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioc } = require('socket.io-client');
 
-process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
+process.env.ENABLE_LOCAL_OPS = '1';
+process.env.ENABLE_MANUAL_MAFIA_SOCKET = '1';
 
 const { server, mafiaRooms, roomEvents, clearAllGameTimers } = require('../server');
 
@@ -24,7 +25,7 @@ async function withServer(fn) {
   }
 }
 
-test('health is minimal publicly and detailed metrics move behind ops auth', async () => {
+test('public health stays minimal while ops health exposes scheduler + queue metrics', async () => {
   await withServer(async (url) => {
     const socket = ioc(url, { reconnection: false, autoUnref: true });
     const created = await emitAck(socket, 'mafia:room:create', { name: 'Host' });
@@ -36,33 +37,23 @@ test('health is minimal publicly and detailed metrics move behind ops auth', asy
 
     assert.equal(health.ok, true);
     assert.equal(healthRes.headers.get('x-correlation-id'), 'test-cid-123');
-    assert.equal(health.launchMode, 'mafia');
-    assert.equal(health.durableStorageRequired, false);
-    assert.equal(typeof health.durableStorageHealthy, 'boolean');
+    assert.equal(health.status, 'healthy');
+    assert.equal(typeof health.timestamp, 'string');
+    assert.equal(typeof health.uptimeSec, 'number');
+    assert.equal('launchMode' in health, false);
     assert.equal('eventQueueDepth' in health, false);
-    assert.equal('eventQueueByMode' in health, false);
     assert.equal('schedulerTimers' in health, false);
-    assert.equal('publicArena' in health, false);
-    assert.equal('roomEvents' in health, false);
-    assert.equal('maintenance' in health, false);
 
     const opsHealthRes = await fetch(`${url}/api/ops/health`);
     const opsHealth = await opsHealthRes.json();
     assert.equal(opsHealth.ok, true);
+    assert.equal(typeof opsHealth.launchMode, 'string');
+    assert.equal(typeof opsHealth.rooms?.mafia, 'number');
+    assert.equal(typeof opsHealth.agents, 'number');
     assert.equal(typeof opsHealth.eventQueueDepth, 'number');
     assert.equal(typeof opsHealth.eventQueueByMode, 'object');
-    assert.equal(typeof opsHealth.schedulerTimers.total, 'number');
-    assert.equal(typeof opsHealth.schedulerTimers.byNamespace, 'object');
-    assert.equal(typeof opsHealth.publicArena.connectedAgents, 'number');
-    assert.equal(typeof opsHealth.publicArena.idleAgents, 'number');
-    assert.equal(typeof opsHealth.publicArena.reservedAgents, 'number');
-    assert.equal(typeof opsHealth.publicArena.inMatchAgents, 'number');
-    assert.equal(typeof opsHealth.publicArena.activeMatches, 'number');
-    assert.equal(typeof opsHealth.publicArena.queueRunning, 'boolean');
-    assert.equal(typeof opsHealth.roomEvents.publicReplayEnabled, 'boolean');
-    assert.equal(typeof opsHealth.roomEvents.filePersistenceEnabled, 'boolean');
-    assert.equal(typeof opsHealth.roomEvents.growthMetricsSnapshotStorage, 'string');
-    assert.equal(typeof opsHealth.maintenance.cleanup.deleted.sessions, 'number');
+    assert.equal(typeof opsHealth.schedulerTimers?.total, 'number');
+    assert.equal(typeof opsHealth.schedulerTimers?.byNamespace, 'object');
 
     const opsRes = await fetch(`${url}/api/ops/events`);
     const ops = await opsRes.json();

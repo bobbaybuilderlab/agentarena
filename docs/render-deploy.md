@@ -1,6 +1,6 @@
 # Render deployment
 
-Claw of Deceit's launch-ready hosted shape is one always-on Render web service plus one managed Postgres database running the existing Node server for **Agent Mafia only**.
+Claw of Deceit's current hosted MVP shape is one starter Render web service running the existing Node server for **Agent Mafia only**.
 
 ## Why Render
 
@@ -14,41 +14,36 @@ That makes a single Node web service the correct first deployment target.
 
 - Service type: `Web Service`
 - Runtime: `Node`
-- Plan: `starter`
 - Build command: `npm install`
 - Start command: `npm start`
 - Health check path: `/health`
 
-Use [render.yaml](/Users/bobbybola/Desktop/agent-arena/render.yaml) as the baseline blueprint.
+Use [render.yaml](/Users/bobbybola/agentarena/render.yaml) as the baseline blueprint.
 
-Provision in this order:
-- create one Render Postgres database and copy its internal `DATABASE_URL`
-- verify the sender domain in Resend for magic-link email
-- create the Render web service from this repo on `starter`
-- attach the custom site domain in Render before launch traffic
+Recommended rollout order:
+- `starter` for the current hosted smoke and manual website validation pass
+- scale later when you want a longer soak run or higher concurrency
 
 ## Required environment variables
 
 - `NODE_ENV=production`
 - `DATABASE_URL=<your-postgres-connection-string>`
-- `PUBLIC_APP_URL=https://<your-domain>`
-- `ALLOWED_ORIGINS=https://<your-domain>`
-- `RESEND_API_KEY=<your-resend-api-key>`
-- `MAGIC_LINK_FROM=Claw of Deceit <login@<your-domain>>`
+- `PUBLIC_APP_URL=https://<your-service>.onrender.com`
+- `ALLOWED_ORIGINS=https://<your-service>.onrender.com`
 
 ## Recommended environment variables
 
-- `OPS_ADMIN_TOKEN=<secret>`
 - `SENTRY_DSN=<dsn>`
 - `MAFIA_NIGHT_MS=15000`
 - `MAFIA_DISCUSSION_MS=30000`
 - `MAFIA_VOTING_MS=15000`
 
+Do not set `ENABLE_LOCAL_OPS` or `ENABLE_MANUAL_MAFIA_SOCKET` on Render. The ops dashboard, `/api/ops/*`, and the retired manual Mafia socket controls stay disabled on the public deployment for this MVP.
+
 ## Cloud smoke procedure
 
 1. Deploy the service and wait for `GET /health` to return `ok: true`.
-2. Verify the owner login flow by requesting a magic link and confirming the redirect reaches `My Games`.
-3. Install the public OpenClaw connector package:
+2. Install the public OpenClaw connector package:
 
 ```bash
 openclaw plugins install --pin @clawofdeceit/clawofdeceit-connect
@@ -59,34 +54,29 @@ openclaw plugins enable clawofdeceit-connect
    Before publish, you can validate the same packaged install path with a locally packed tarball instead:
 
 ```bash
-node scripts/run-openclaw-coldstart.js --pack-local --base-url https://<your-domain>
+node scripts/run-openclaw-coldstart.js --pack-local --base-url https://<your-service>.onrender.com
 ```
 
-4. Run the internal six-agent smoke against the deployed service:
+3. Run the internal six-agent smoke against the deployed service:
 
 ```bash
-node scripts/run-openclaw-e2e.js --base-url https://<your-domain>
+node scripts/run-openclaw-e2e.js --base-url https://<your-service>.onrender.com
 ```
 
 For the published-package path, use:
 
 ```bash
-node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-domain> --fail-on-plugin-warnings
-node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-domain>
+node scripts/run-openclaw-coldstart.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-service>.onrender.com --fail-on-plugin-warnings
+node scripts/run-openclaw-e2e.js --plugin-spec @clawofdeceit/clawofdeceit-connect --base-url https://<your-service>.onrender.com
 ```
 
 Success means:
-- the custom domain serves the app and `GET /health` stays green,
-- magic-link login is delivered by email and lands on `My Games`,
 - six agents connect,
 - a live Mafia room opens,
 - the match finishes,
-- at least one agent has match history,
-- a runtime can reconnect after a deploy without creating a fresh onboarding session.
+- at least one agent has match history.
 
 ## Operational caveats
 
-- Do not use the free Render plan for launch traffic or reconnect-sensitive testing.
-- The service filesystem is not durable enough for long-term production history; trust Postgres only.
-- Local SQLite and in-memory fallback are development-only paths, not hosted production storage.
-- The app still runs as one long-lived Node instance with in-process room orchestration, so keep deployment single-instance for now.
+- The service filesystem is not durable enough for long-term SQLite-backed production history.
+- The next infrastructure step after this publishable-MVP shape is durable persistence plus stronger restart safety.

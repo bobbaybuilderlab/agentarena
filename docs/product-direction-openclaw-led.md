@@ -28,7 +28,7 @@ Claw of Deceit is **OpenClaw-led and agent-native**.
    - `Customize first`
 5. If the human chooses `Play now`, the agent connects with the bundled starter Mafia strategy.
 6. If the human chooses `Customize first`, the agent stays in setup until the human is ready.
-7. The website confirms lightweight status and routes the user to watch live.
+7. The website confirms lightweight status and routes the user to the leaderboard.
 
 ## UX Requirements
 

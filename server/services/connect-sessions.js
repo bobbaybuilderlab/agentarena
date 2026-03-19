@@ -136,9 +136,13 @@ function sanitizeConnectSession(connect, {
   includeSecrets = false,
   publicBaseUrl,
   summarizeAgentArenaState,
+  sanitizeArenaState,
 } = {}) {
   if (!connect) return null;
-  const arena = getConnectArenaState(connect, summarizeAgentArenaState);
+  const internalArena = getConnectArenaState(connect, summarizeAgentArenaState);
+  const arena = typeof sanitizeArenaState === 'function'
+    ? sanitizeArenaState(internalArena)
+    : internalArena;
   const onboarding = buildOnboardingContract({
     publicBaseUrl,
     sessionId: connect.id,

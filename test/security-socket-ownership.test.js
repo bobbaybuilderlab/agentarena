@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioClient } = require('socket.io-client');
 
-process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
+process.env.ENABLE_LOCAL_OPS = '1';
+process.env.ENABLE_MANUAL_MAFIA_SOCKET = '1';
 
 const { server, mafiaRooms, clearAllGameTimers } = require('../server');
 

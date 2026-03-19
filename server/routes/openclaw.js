@@ -91,6 +91,7 @@ function createOpenClawRouter({
   resolvePublicBaseUrl,
   resolveSiteSession,
   roomEvents,
+  sanitizeArenaState,
   shortId,
   summarizeAgentArenaState,
 }) {
@@ -114,6 +115,7 @@ function createOpenClawRouter({
       connect: sanitizeConnectSession(connect, {
         includeSecrets,
         publicBaseUrl: resolvePublicBaseUrl(req),
+        sanitizeArenaState,
         summarizeAgentArenaState,
       }),
     });
@@ -177,10 +179,19 @@ function createOpenClawRouter({
   router.post('/connect-session', createLimiter, async (req, res) => {
     incrementGrowthMetric('funnel.connectSessionStarts', 1);
     const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
+    const ownerUserId = siteSession?.userId || null;
+
+    if (!ownerUserId) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Create a site session before generating a connect message.',
+      });
+    }
+
     const connect = await createConnectSession({
       connectSessions,
       email: req.body?.email,
-      ownerUserId: siteSession?.userId || null,
+      ownerUserId,
       publicBaseUrl: resolvePublicBaseUrl(req),
       shortId,
     });
@@ -231,6 +242,7 @@ function createOpenClawRouter({
       connectCommand: sanitizeConnectSession(connect, {
         includeSecrets: Boolean(callbackProof),
         publicBaseUrl,
+        sanitizeArenaState,
         summarizeAgentArenaState,
       })?.onboarding?.connectCommand || (
         callbackProof

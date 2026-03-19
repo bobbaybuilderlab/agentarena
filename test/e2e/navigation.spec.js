@@ -1,110 +1,153 @@
 const { test, expect } = require('@playwright/test');
 
 const PAGES = [
-  { path: '/', name: 'index' },
+  { path: '/', name: 'home' },
+  { path: '/connect.html', name: 'connect' },
   { path: '/leaderboard.html', name: 'leaderboard' },
   { path: '/how-it-works.html', name: 'how-it-works' },
-  { path: '/connect.html', name: 'connect' },
 ];
 
 test.describe('Public navigation', () => {
   for (const entry of PAGES) {
-    test(`${entry.name} shows the connect-first nav`, async ({ page }) => {
+    test(`${entry.name} keeps the reduced MVP nav`, async ({ page }) => {
       await page.goto(entry.path);
       await expect(page.locator('nav a[href="/connect.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/leaderboard.html"]').first()).toBeVisible();
       await expect(page.locator('nav a[href="/how-it-works.html"]').first()).toBeVisible();
-      await expect(page.locator('nav a.btn-primary[href="/connect.html"]').first()).toBeVisible();
-      await expect(page.locator('nav .nav-links a[href="/arena.html"]')).toHaveCount(0);
-      await expect(page.locator('nav .nav-links a[href="/dashboard.html"]')).toHaveCount(0);
-      await expect(page.locator('nav .nav-links a[href="/guide.html"]')).toHaveCount(0);
-      await expect(page.locator('nav .nav-links a[href="/games-info.html"]')).toHaveCount(0);
-    });
-
-    test(`${entry.name} has a join CTA in nav`, async ({ page }) => {
-      await page.goto(entry.path);
-      await expect(page.locator('nav a.btn-primary').first()).toContainText(/Deploy Agent/);
-    });
-
-    test(`${entry.name} has How it works link in nav`, async ({ page }) => {
-      await page.goto(entry.path);
-      await expect(page.locator('nav a[href="/how-it-works.html"]').first()).toContainText('How It Works');
+      await expect(page.locator('nav a[href="/arena.html"]')).toHaveCount(0);
+      await expect(page.locator('nav a[href="/account.html"]')).toHaveCount(0);
     });
   }
 });
 
-test.describe('Homepage', () => {
-  test('shows bold headline, CTA, and stats strip', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.locator('h1')).toContainText(/Openclaw/i);
-    await expect(page.locator('.home-stats')).toBeVisible();
-    await expect(page.locator('a.btn-red-glow').first()).toContainText('Connect Your Openclaw');
-    await expect(page.locator('text=847 agents deployed')).toBeVisible();
-    await expect(page.locator('text=847 watching')).toHaveCount(0);
-  });
-});
-
-test.describe('Legacy arena redirect', () => {
-  test('old arena links redirect into connect', async ({ page }) => {
-    await page.goto('/arena.html?mode=mafia&room=ABC123&spectate=1');
-    await expect(page).toHaveURL(/\/connect\.html$/);
-    await expect(page.locator('#stepWatch')).toBeVisible();
-    await expect(page.locator('#dashboardMain')).toHaveCount(0);
-    await expect(page.locator('#ownerWatchCard')).toHaveCount(0);
-    await expect(page.locator('text=Open live transcript')).toHaveCount(0);
-  });
-});
-
-test.describe('Connect flow', () => {
-  test('uses connect language instead of retired private-surface prompts', async ({ page }) => {
+test.describe('Connect page', () => {
+  test('shows the reduced post-connect surface with no login or claim UI', async ({ page }) => {
     await page.goto('/connect.html');
-    await expect(page.locator('#stepWatch')).toContainText('Open Connect');
-    await expect(page.locator('text=Check Connect Status')).toBeVisible();
-    await expect(page.locator('text=Watch It Play')).toHaveCount(0);
-    await expect(page.locator('text=My Games')).toHaveCount(0);
+    await expect(page.locator('h1')).toContainText('Connect Your Openclaw');
+    await expect(page.locator('#generateCmdBtn')).toBeVisible();
+    const packageSummary = page.locator('.connect-fallback summary');
+    await expect(packageSummary).toContainText('Want to review the package?');
+    await packageSummary.click();
+    await expect(page.locator('a[href="https://www.npmjs.com/package/@clawofdeceit/clawofdeceit-connect"]')).toBeVisible();
+    await expect(page.locator('text=Email Login')).toHaveCount(0);
+    await expect(page.locator('text=Claim this agent')).toHaveCount(0);
+    await expect(page.locator('a[href="/leaderboard.html"]').first()).toBeVisible();
   });
 });
 
-test.describe('How it works', () => {
-  test('describes the current Mafia roles and round flow', async ({ page }) => {
-    await page.goto('/how-it-works.html');
-    await expect(page.locator('h1')).toContainText('How It Works');
-    await expect(page.locator('text=Know Your Role')).toBeVisible();
-    await expect(page.locator('text=How Each Round Plays Out')).toBeVisible();
+test.describe('Ops page', () => {
+  test('loads locally without an admin-token prompt', async ({ page }) => {
+    await page.goto('/ops.html');
+    await expect(page.locator('h1')).toContainText('Ops Dashboard');
+    await expect(page.locator('text=Local-only diagnostics')).toBeVisible();
+    await expect(page.locator('text=Admin token')).toHaveCount(0);
   });
 });
 
-test.describe('Terminal page', () => {
-  test('removes live-watch prompts and retired private-surface CTAs', async ({ page }) => {
-    await page.goto('/terminal-agent.html');
-    await expect(page.locator('text=Watch a Live Game')).toHaveCount(0);
-    await expect(page.locator('text=Open live transcript')).toHaveCount(0);
-    await expect(page.locator('text=View My Games')).toHaveCount(0);
-    await expect(page.locator('#pulseJoinBtn')).toContainText(/Connect your Openclaw/i);
+test.describe('Leaderboard page', () => {
+  test('does not render raw agent ids and search is name-only', async ({ page }) => {
+    await page.route('**/api/leaderboard**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          window: 'all',
+          windowLabel: 'All time',
+          source: 'test',
+          topAgents: [
+            {
+              id: 'agent_alpha_secret',
+              name: 'Alpha',
+              gamesPlayed: 12,
+              wins: 8,
+              winRate: 66.7,
+              mmr: 1320,
+              lastRatingDelta: 18,
+              isProvisional: false,
+              queueStatus: 'idle',
+              isLive: false,
+            },
+            {
+              id: 'agent_bravo_secret',
+              name: 'Bravo',
+              gamesPlayed: 10,
+              wins: 6,
+              winRate: 60,
+              mmr: 1250,
+              lastRatingDelta: -4,
+              isProvisional: false,
+              queueStatus: 'in_match',
+              isLive: true,
+            },
+            {
+              id: 'agent_charlie_secret',
+              name: 'Charlie',
+              gamesPlayed: 9,
+              wins: 5,
+              winRate: 55.6,
+              mmr: 1190,
+              lastRatingDelta: 0,
+              isProvisional: true,
+              queueStatus: 'reserved',
+              isLive: false,
+            },
+          ],
+          windows: [
+            { key: '12h', label: '12h' },
+            { key: '24h', label: '24h' },
+            { key: 'all', label: 'All' },
+          ],
+        }),
+      });
+    });
+
+    await page.goto('/leaderboard.html');
+    await expect(page.locator('#leaderboardList .lb-table-row')).toHaveCount(3);
+    await expect(page.locator('#leaderboardPodium')).not.toContainText('agent_alpha_secret');
+    await expect(page.locator('#leaderboardList')).not.toContainText('agent_alpha_secret');
+    await expect(page.locator('.lb-table-header')).not.toContainText('AGENT');
+
+    const search = page.locator('#leaderboardSearch');
+    await search.fill('agent_alpha_secret');
+    await expect(page.locator('.lb-empty')).toContainText('No agents found.');
+
+    await search.fill('Alpha');
+    await expect(page.locator('#leaderboardList')).toContainText('Alpha');
+    await expect(page.locator('#leaderboardList')).not.toContainText('agent_alpha_secret');
+  });
+});
+
+test.describe('Redirects', () => {
+  test('legacy arena route redirects to leaderboard', async ({ page }) => {
+    await page.goto('/arena.html');
+    await expect(page).toHaveURL(/\/leaderboard\.html$/);
+  });
+
+  test('legacy account route redirects to leaderboard', async ({ page }) => {
+    await page.goto('/account.html');
+    await expect(page).toHaveURL(/\/leaderboard\.html$/);
   });
 });
 
 test.describe('Launch API smoke', () => {
-  test('instant play route is unavailable', async ({ request }) => {
-    const res = await request.post('/api/play/instant', {
+  test('public room and play endpoints are retired', async ({ request }) => {
+    const instantRes = await request.post('/api/play/instant', {
       data: { mode: 'mafia' },
     });
-    expect(res.status()).toBe(404);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error.code).toBe('ROUTE_UNAVAILABLE');
+    expect(instantRes.status()).toBe(410);
+    const instantBody = await instantRes.json();
+    expect(instantBody.ok).toBe(false);
+
+    const roomsRes = await request.get('/api/play/rooms?status=open');
+    expect(roomsRes.status()).toBe(410);
+    const roomsBody = await roomsRes.json();
+    expect(roomsBody.ok).toBe(false);
   });
 
-  test('watch endpoint exposes status-only arena availability', async ({ request }) => {
+  test('retired watch endpoint returns gone', async ({ request }) => {
     const res = await request.get('/api/play/watch');
-    expect(res.status()).toBe(200);
+    expect(res.status()).toBe(410);
     const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.found).toBe(false);
-    expect(body.liveMatchActive).toBe(false);
-    expect(body.activeMatches).toBe(0);
-    expect(body.watchUrl).toBeNull();
-    expect(body.requiredAgents).toBe(6);
-    expect(body.message).toContain('No live agent-only Mafia rooms yet');
+    expect(body.ok).toBe(false);
   });
 });

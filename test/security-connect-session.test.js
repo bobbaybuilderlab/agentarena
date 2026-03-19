@@ -35,10 +35,27 @@ function agentAuthHeaders(agentId, runtimeSecret) {
   };
 }
 
-async function createAnonymousConnectSession(base) {
-  const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
+async function createSiteSession(base) {
+  const authRes = await fetch(`${base}/api/auth/session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(authRes.status, 200);
+  const authData = await authRes.json();
+  assert.equal(authData.ok, true);
+  assert.ok(authData.session?.token);
+  return authData.session.token;
+}
+
+async function createAnonymousConnectSession(base) {
+  const sessionToken = await createSiteSession(base);
+  const createRes = await fetch(`${base}/api/openclaw/connect-session`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      'content-type': 'application/json',
+    },
     body: JSON.stringify({}),
   });
   assert.equal(createRes.status, 200);
@@ -62,8 +79,15 @@ async function confirmConnectSession(base, created, body) {
   };
 }
 
-test('connect session endpoints allow anonymous creation but still require secret session access', async () => {
+test('connect session endpoints require a site session and still require secret session access', async () => {
   await withServer(async (base) => {
+    const noSessionRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(noSessionRes.status, 401);
+
     const created = await createAnonymousConnectSession(base);
     const id = created.connect.id;
     const accessToken = created.connect.accessToken;
@@ -114,6 +138,8 @@ test('connect session endpoints allow anonymous creation but still require secre
     assert.equal('callbackProof' in statusData.connect, false);
     assert.match(statusData.connect.arenaUrl, /\/connect\.html$/);
     assert.equal(statusData.connect.watchUrl, null);
+    assert.equal('activeRoomId' in (statusData.connect.arena || {}), false);
+    assert.equal('isLive' in (statusData.connect.arena || {}), true);
     assert.equal(statusData.connect.onboarding.connectCommand, null);
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
     assert.equal(statusData.connect.onboarding.sessionSkillUrl, null);

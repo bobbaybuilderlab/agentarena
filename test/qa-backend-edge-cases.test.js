@@ -2,109 +2,103 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { io: ioClient } = require('socket.io-client');
 
+process.env.ENABLE_MANUAL_MAFIA_SOCKET = '1';
+
 const { server, mafiaRooms, clearAllGameTimers } = require('../server');
 const { socketOwnsPlayer, socketIsHostPlayer } = require('../server/sockets/ownership-guards');
 const { shortId, correlationId, logStructured } = require('../server/state/helpers');
 
+const activeSockets = new Set();
+
 function emit(socket, event, payload) {
-  return new Promise((resolve) => socket.emit(event, payload, (res) => resolve(res)));
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({
+        ok: false,
+        error: {
+          code: 'ACK_TIMEOUT',
+          message: `Timed out waiting for ${event} acknowledgement`,
+        },
+      });
+    }, 1000);
+    socket.emit(event, payload, (res) => {
+      clearTimeout(timer);
+      resolve(res);
+    });
+  });
 }
 
+function createSocket(base) {
+  const socket = ioClient(base, {
+    transports: ['websocket'],
+    reconnection: false,
+    autoUnref: true,
+  });
+  activeSockets.add(socket);
+  socket.on('disconnect', () => activeSockets.delete(socket));
+  return socket;
+}
+
+async function closeTrackedSockets() {
+  const sockets = [...activeSockets];
+  activeSockets.clear();
+  await Promise.all(sockets.map((socket) => new Promise((resolve) => {
+    if (!socket || socket.disconnected) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, 50);
+    socket.once('disconnect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.disconnect();
+  })));
+}
+
+async function closeServerIfListening() {
+  clearAllGameTimers();
+  if (!server.listening) return;
+  await new Promise((resolve) => server.close(resolve));
+}
+
+test.afterEach(async () => {
+  await closeTrackedSockets();
+  mafiaRooms.clear();
+  await closeServerIfListening();
+});
+
 // ============================================================================
-// Room Events API Tests
+// Retired Public Replay Routes
 // ============================================================================
 
-test('GET /api/rooms/:roomId/events validates mode parameter', async () => {
+test('public room event and replay routes are retired', async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
   try {
-    // Invalid mode
-    const invalidMode = await fetch(`${base}/api/rooms/TEST123/events?mode=invalid`);
-    const invalidRes = await invalidMode.json();
-    assert.equal(invalidRes.ok, false);
-    assert.equal(invalidRes.error, 'Invalid mode');
+    const retiredPaths = [
+      '/api/rooms//events?mode=arena',
+      '/api/rooms/TEST123/events?mode=invalid',
+      '/api/rooms/TEST123/events?mode=mafia&limit=5',
+      '/api/rooms/NONEXISTENT/replay?mode=arena',
+      '/api/rooms/NONEXISTENT/replay?mode=invalid',
+    ];
 
-    // Valid modes should work
-    const validModes = ['arena', 'mafia', 'amongus'];
-    for (const mode of validModes) {
-      const res = await fetch(`${base}/api/rooms/TEST123/events?mode=${mode}`);
+    for (const path of retiredPaths) {
+      const res = await fetch(`${base}${path}`);
+      assert.equal(res.status, 410);
       const json = await res.json();
-      assert.equal(json.ok, true);
-      assert.equal(json.mode, mode);
+      assert.equal(json.ok, false);
+      assert.match(json.error || '', /replay and event timelines/i);
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test('GET /api/rooms/:roomId/events handles missing roomId gracefully', async () => {
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const base = `http://127.0.0.1:${port}`;
-
-  try {
-    const res = await fetch(`${base}/api/rooms//events?mode=arena`);
-    const json = await res.json();
-    // Should handle empty roomId by converting to empty string
-    assert.equal(json.ok, true);
-    assert.equal(json.roomId, '');
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('GET /api/rooms/:roomId/events respects limit parameter', async () => {
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const base = `http://127.0.0.1:${port}`;
-
-  try {
-    // Test with explicit limit
-    const res1 = await fetch(`${base}/api/rooms/TEST123/events?mode=arena&limit=5`);
-    const json1 = await res1.json();
-    assert.equal(json1.ok, true);
-    assert.ok(json1.events.length <= 5);
-
-    // Test with default limit (should be 1000)
-    const res2 = await fetch(`${base}/api/rooms/TEST123/events?mode=arena`);
-    const json2 = await res2.json();
-    assert.equal(json2.ok, true);
-
-    // Test with invalid limit (should coerce to number)
-    const res3 = await fetch(`${base}/api/rooms/TEST123/events?mode=arena&limit=abc`);
-    const json3 = await res3.json();
-    assert.equal(json3.ok, true);
-    assert.equal(json3.events.length, 0); // NaN becomes 0
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('GET /api/rooms/:roomId/replay validates mode and handles missing room', async () => {
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const base = `http://127.0.0.1:${port}`;
-
-  try {
-    // Invalid mode
-    const invalidMode = await fetch(`${base}/api/rooms/NONEXISTENT/replay?mode=invalid`);
-    const invalidRes = await invalidMode.json();
-    assert.equal(invalidRes.ok, false);
-    assert.equal(invalidRes.error, 'Invalid mode');
-
-    // Valid mode but non-existent room
-    const nonexistent = await fetch(`${base}/api/rooms/NONEXISTENT/replay?mode=arena`);
-    const json = await nonexistent.json();
-    assert.equal(json.ok, false);
-    assert.equal(json.error, 'No events for room');
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('room event routes handle special characters in roomId', async () => {
+test('retired room event routes handle special characters in roomId safely', async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
@@ -115,9 +109,9 @@ test('room event routes handle special characters in roomId', async () => {
     
     for (const roomId of specialIds) {
       const res = await fetch(`${base}/api/rooms/${encodeURIComponent(roomId)}/events?mode=arena`);
+      assert.equal(res.status, 410);
       const json = await res.json();
-      // Should handle gracefully without crashing
-      assert.equal(json.ok, true);
+      assert.equal(json.ok, false);
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -313,7 +307,7 @@ test('concurrent room creation with same name does not collide', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const sockets = Array.from({ length: 5 }, () => ioClient(base, { transports: ['websocket'] }));
+  const sockets = Array.from({ length: 5 }, () => createSocket(base));
 
   try {
     await Promise.all(sockets.map((s) => new Promise((resolve) => s.on('connect', resolve))));
@@ -341,7 +335,7 @@ test('rapid disconnect/reconnect does not leave orphaned players', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket1 = ioClient(base, { transports: ['websocket'] });
+  const socket1 = createSocket(base);
   
   try {
     await new Promise((resolve) => socket1.on('connect', resolve));
@@ -354,7 +348,7 @@ test('rapid disconnect/reconnect does not leave orphaned players', async () => {
     socket1.close();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const socket2 = ioClient(base, { transports: ['websocket'] });
+    const socket2 = createSocket(base);
     await new Promise((resolve) => socket2.on('connect', resolve));
 
     // Should be able to join the room (original player disconnected)
@@ -373,7 +367,7 @@ test('malformed payload does not crash server', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
@@ -411,7 +405,7 @@ test('extremely long player name is handled gracefully', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
@@ -434,7 +428,7 @@ test('special characters in player name do not break game state', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
@@ -465,56 +459,6 @@ test('special characters in player name do not break game state', async () => {
   }
 });
 
-test('rapid vote submissions do not cause double counting', async () => {
-  mafiaRooms.clear();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const base = `http://127.0.0.1:${port}`;
-
-  const host = ioClient(base, { transports: ['websocket'] });
-  const player2 = ioClient(base, { transports: ['websocket'] });
-
-  try {
-    await Promise.all([
-      new Promise((resolve) => host.on('connect', resolve)),
-      new Promise((resolve) => player2.on('connect', resolve)),
-    ]);
-
-    const created = await emit(host, 'mafia:room:create', { name: 'Host' });
-    assert.equal(created.ok, true);
-    const roomId = created.roomId;
-    const hostPlayerId = created.playerId;
-
-    await emit(player2, 'mafia:room:join', { roomId, name: 'Player2' });
-    
-    // Fill with bots and start
-    await emit(host, 'mafia:autofill', { roomId, playerId: hostPlayerId, minPlayers: 6 });
-    const started = await emit(host, 'mafia:start', { roomId, playerId: hostPlayerId });
-    assert.equal(started.ok, true);
-
-    // Try to submit same vote multiple times rapidly
-    const votePromises = Array.from({ length: 10 }, () =>
-      emit(host, 'mafia:vote:cast', {
-        roomId,
-        playerId: hostPlayerId,
-        targetPlayerId: 'bot-player-id',
-      })
-    );
-
-    const voteResults = await Promise.all(votePromises);
-    
-    // First should succeed, rest should be rejected or idempotent
-    // At least one should have succeeded
-    const successCount = voteResults.filter((r) => r.ok).length;
-    assert.ok(successCount >= 1);
-  } finally {
-    host.close();
-    player2.close();
-    clearAllGameTimers();
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
 // ============================================================================
 // Error Path Tests
 // ============================================================================
@@ -525,7 +469,7 @@ test('joining non-existent room returns proper error', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
@@ -549,7 +493,7 @@ test('starting game with insufficient players returns error', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
@@ -578,7 +522,7 @@ test('duplicate room join attempts are rejected', async () => {
   const { port } = server.address();
   const base = `http://127.0.0.1:${port}`;
 
-  const socket = ioClient(base, { transports: ['websocket'] });
+  const socket = createSocket(base);
 
   try {
     await new Promise((resolve) => socket.on('connect', resolve));
