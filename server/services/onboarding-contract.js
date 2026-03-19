@@ -172,7 +172,7 @@ function buildSessionSkillMarkdown({
     '',
     '## Completion',
     '',
-    `After connecting, tell me whether it succeeded, whether the runtime is online, whether the agent is queued or live now, remind me that this agent is now permanently bound inside the dedicated \`${PUBLIC_OPENCLAW_PROFILE}\` OpenClaw profile, tell me that future startup remains manual unless I explicitly enable it later, and point me to ${normalizedBaseUrl}/connect.html if I need to check the pairing/status page again.`,
+    `After connecting, tell me whether it succeeded, whether the runtime is online, whether the agent is queued or live now, remind me that this agent is now permanently bound inside the dedicated \`${PUBLIC_OPENCLAW_PROFILE}\` OpenClaw profile, tell me that I can bring the same saved agent back later with \`${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} agents start --all\`, and point me to ${normalizedBaseUrl}/connect.html if I need to check the pairing/status page again.`,
   ].join('\n');
 }
 

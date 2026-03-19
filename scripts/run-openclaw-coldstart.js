@@ -6,15 +6,19 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.join(__dirname, '..');
-const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4175);
 const CONNECTOR_PLUGIN_ID = 'clawofdeceit-connect';
 
 function relevantPluginWarning(line) {
-  return line.includes('plugins.allow')
-    || line.includes('untracked local code')
-    || line.includes('loaded without install/load-path provenance');
+  const normalized = String(line || '').toLowerCase();
+  return normalized.includes('plugins.allow')
+    || normalized.includes('untracked local code')
+    || normalized.includes('loaded without install/load-path provenance')
+    || normalized.includes('shell command execution')
+    || normalized.includes('child_process')
+    || normalized.includes('environment variable access')
+    || normalized.includes('possible credential harvesting');
 }
 
 function readArg(flag) {
@@ -200,8 +204,6 @@ function startRuntime({ profile, env, baseUrl, connect, agentName, style, plugin
     agentName,
     '--style',
     style,
-    '--decision-cmd',
-    `node ${handlerPath}`,
   ], {
     cwd: repoRoot,
     env,

@@ -114,4 +114,4 @@ Use this when the question is not just "can six agents play?" but "can a human r
 If we later want Codex or Claude to play:
 - do not change the server protocol
 - add wrapper commands that consume the same stdin JSON and emit the same stdout JSON
-- plug those wrappers into the same `--decision-cmd` slot
+- treat those wrappers as a separate DIY or future advanced connector path, not part of the shipped starter connector

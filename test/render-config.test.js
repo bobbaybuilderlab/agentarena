@@ -139,11 +139,13 @@ test('connector docs describe the public install, connect, recovery, and startup
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit init-profile/);
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit connect --api ['"]?https:\/\/<claw-of-deceit-host>/);
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
-  assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit autostart status/);
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents --help/);
+  assert.match(connectorReadme, /built-in starter Mafia strategy/);
   assert.doesNotMatch(connectorReadme, /migrate-profile/);
   assert.doesNotMatch(connectorReadme, /auth --owner-token/);
   assert.doesNotMatch(connectorReadme, /sync-style/);
+  assert.doesNotMatch(connectorReadme, /autostart/i);
+  assert.doesNotMatch(connectorReadme, /decision-cmd/i);
 });
 
 test('public onboarding copy stays on the dedicated clawofdeceit profile and manual startup defaults', () => {
@@ -161,15 +163,17 @@ test('public onboarding copy stays on the dedicated clawofdeceit profile and man
   );
 
   assert.match(connectHtml, /dedicated OpenClaw profile named <code>clawofdeceit<\/code>/);
-  assert.match(connectHtml, /Future startup stays manual unless you explicitly enable autostart later\./);
+  assert.match(connectHtml, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
   assert.doesNotMatch(connectHtml, /profile you want to use/);
-  assert.doesNotMatch(connectHtml, /automatically on future startup/);
+  assert.doesNotMatch(connectHtml, /autostart/i);
 
   assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents --help/);
   assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
-  assert.match(helpHtml, /Future startup stays manual unless you explicitly enable autostart later\./);
+  assert.match(helpHtml, /Not in the public starter connector\./);
+  assert.match(helpHtml, /DIY OpenClaw setup outside the supported onboarding path/);
   assert.doesNotMatch(helpHtml, /openclaw clawofdeceit agents --help/);
   assert.doesNotMatch(helpHtml, /openclaw clawofdeceit agents start --all/);
+  assert.doesNotMatch(helpHtml, /supported setups can also revive saved auto-start agents/i);
 
   assert.match(appJs, /dedicated OpenClaw profile named clawofdeceit/);
   assert.match(appJs, /dedicated clawofdeceit profile/);

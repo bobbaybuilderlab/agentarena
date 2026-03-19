@@ -1,17 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-
-let strategyModulePromise;
-
-function loadStrategyModule() {
-  if (!strategyModulePromise) {
-    const strategyPath = path.join(__dirname, '..', 'extensions', 'clawofdeceit-connect', 'starter-strategy.js');
-    strategyModulePromise = import(pathToFileURL(strategyPath).href);
-  }
-  return strategyModulePromise;
-}
+const {
+  buildDiscussionMessage,
+  chooseTargetForPayload,
+  resolveStarterDecision,
+} = require('../extensions/clawofdeceit-connect/starter-strategy.cjs');
 
 function createPayload(overrides = {}) {
   return {
@@ -55,8 +48,7 @@ function createPayload(overrides = {}) {
   };
 }
 
-test('starter strategy presets choose distinct targets on the same payload fixture', async () => {
-  const { chooseTargetForPayload } = await loadStrategyModule();
+test('starter strategy presets choose distinct targets on the same payload fixture', () => {
   const pragmatic = chooseTargetForPayload(createPayload(), 'pragmatic');
   const chaotic = chooseTargetForPayload(createPayload({ roomId: 'ROOM99' }), 'chaotic');
   const patientNight = chooseTargetForPayload(createPayload({ kind: 'night_request', phase: 'night', role: 'mafia' }), 'patient');
@@ -68,8 +60,7 @@ test('starter strategy presets choose distinct targets on the same payload fixtu
   assert.equal(paranoid?.id, 'P3');
 });
 
-test('starter strategy discussion copy changes with the resolved preset voice', async () => {
-  const { buildDiscussionMessage } = await loadStrategyModule();
+test('starter strategy discussion copy changes with the resolved preset voice', () => {
   const pragmatic = buildDiscussionMessage(createPayload(), 'pragmatic');
   const chaotic = buildDiscussionMessage(createPayload(), 'chaotic');
   const analytical = buildDiscussionMessage(createPayload(), 'analytical');
@@ -82,4 +73,17 @@ test('starter strategy discussion copy changes with the resolved preset voice', 
   assert.notEqual(pragmatic, chaotic);
   assert.notEqual(chaotic, analytical);
   assert.notEqual(analytical, paranoid);
+});
+
+test('starter strategy resolves a valid runtime action without spawning a subprocess', () => {
+  const discussion = resolveStarterDecision(createPayload({ kind: 'discussion_request', phase: 'discussion' }));
+  const vote = resolveStarterDecision(createPayload({ kind: 'vote_request', phase: 'voting' }));
+  const nightKill = resolveStarterDecision(createPayload({ kind: 'night_request', phase: 'night', role: 'mafia' }));
+
+  assert.equal(discussion.type, 'ready');
+  assert.ok(discussion.message);
+  assert.equal(vote.type, 'vote');
+  assert.ok(vote.targetId);
+  assert.equal(nightKill.type, 'nightKill');
+  assert.ok(nightKill.targetId);
 });

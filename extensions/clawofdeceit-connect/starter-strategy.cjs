@@ -1,10 +1,3 @@
-#!/usr/bin/env node
-
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const require = createRequire(import.meta.url);
 const {
   DEFAULT_PRESET_ID,
   buildResolvedPersona,
@@ -20,18 +13,6 @@ const PRESET_DISCUSSION_TEMPLATES = {
   charming: (targetName) => `I want a calm look at ${targetName}. They keep nudging the room without owning the direction.`,
   paranoid: (targetName) => `I do not trust ${targetName} at all. Too many small coordination tells are stacking up around them.`,
 };
-
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
-      raw += chunk;
-    });
-    process.stdin.on('end', () => resolve(raw));
-    process.stdin.on('error', reject);
-  });
-}
 
 function hashString(input) {
   let hash = 0;
@@ -231,9 +212,7 @@ function buildDiscussionMessage(payload, presetId) {
   return String(template(targetName)).replace(/\s+/g, ' ').trim().slice(0, 280);
 }
 
-async function main() {
-  const raw = await readStdin();
-  const payload = JSON.parse(raw || '{}');
+function resolveStarterDecision(payload) {
   const persona = buildResolvedPersona({
     presetId: payload?.agent?.presetId,
     style: payload?.agent?.style,
@@ -243,38 +222,27 @@ async function main() {
   const target = chooseTargetForPayload(payload, presetId);
 
   if (String(payload?.kind || '') === 'discussion_request') {
-    process.stdout.write(JSON.stringify({
+    return {
       type: 'ready',
       message: buildDiscussionMessage(payload, presetId),
-    }));
-    return;
+    };
   }
 
   if (!target) throw new Error('No valid target available');
 
   if (String(payload?.kind || '') === 'night_request') {
-    process.stdout.write(JSON.stringify({ type: 'nightKill', targetId: target.id }));
-    return;
+    return { type: 'nightKill', targetId: target.id };
   }
 
   if (String(payload?.kind || '') === 'vote_request') {
-    process.stdout.write(JSON.stringify({ type: 'vote', targetId: target.id }));
-    return;
+    return { type: 'vote', targetId: target.id };
   }
 
   throw new Error(`Unsupported request kind: ${String(payload?.kind || '')}`);
 }
 
-const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
-if (entryPath === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
-  });
-}
-
-export {
+module.exports = {
   buildDiscussionMessage,
   chooseTargetForPayload,
-  getCandidates,
+  resolveStarterDecision,
 };

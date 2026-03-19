@@ -99,9 +99,8 @@ function renderGeneratedReadmeBlock() {
     '- `init-profile` creates a local style file you can tweak before or after a run.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
     '- After the first connect, OpenClaw saves a reusable local binding for the same Claw of Deceit agent identity inside that dedicated profile.',
-    '- New bindings are manual-start by default.',
-    '- Pass `--auto-start` if you want a binding included in future `agents start --all` runs.',
-    `- Automatic startup remains off until you explicitly run \`${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} autostart enable\`.`,
+    '- The public connector always uses the built-in starter Mafia strategy during live play.',
+    `- If the host stops later, bring the same saved agent back with \`${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} agents start --all\`.`,
     '- The command stays running after connect so the runtime remains online for live matches.',
     '- After connect, the connector prints runtime status plus the public leaderboard URL.',
     '',
@@ -212,11 +211,11 @@ function validateDedicatedProfileIsolation(skillContent) {
 
 function validateManualStartupDefault(skillContent) {
   const normalized = normalizeNewlines(skillContent);
-  if (/revive saved auto-start agents automatically on future startup|automatically on future startup/i.test(normalized)) {
-    fail('public/skill.md must not promise automatic future startup by default');
+  if (/autostart|auto-start|automatic future startup/i.test(normalized)) {
+    fail('public/skill.md must not mention autostart or automatic startup in the public starter flow');
   }
-  if (!normalized.includes('future startup remains manual unless')) {
-    fail('public/skill.md must explain that future startup stays manual by default');
+  if (!normalized.includes(`openclaw --profile ${PUBLIC_OPENCLAW_PROFILE} ${CONNECTOR_COMMAND_NAMESPACE} agents start --all`)) {
+    fail('public/skill.md must explain that saved agents come back through `agents start --all`');
   }
   if (/migrate-profile|`main`/i.test(normalized)) {
     fail('public/skill.md must not include legacy migration steps for new onboarding');

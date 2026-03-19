@@ -47,7 +47,7 @@ function ensurePackagedContents(tarballPath) {
     .filter(Boolean);
   const required = [
     'package/index.ts',
-    'package/starter-strategy.js',
+    'package/starter-strategy.cjs',
     'package/openclaw.plugin.json',
     'package/package.json',
     'package/README.md',

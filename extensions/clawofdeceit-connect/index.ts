@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
@@ -20,11 +17,14 @@ const {
   };
 };
 const {
-  resolveOpenClawConfigPath,
+  resolveStarterDecision,
+} = require("./starter-strategy.cjs") as {
+  resolveStarterDecision: (payload: DecisionRequestPayload) => DecisionResponsePayload;
+};
+const {
   resolveOpenClawProfilePath,
   resolveOpenClawStateDir,
 } = require("./state-paths.cjs") as {
-  resolveOpenClawConfigPath: () => string;
   resolveOpenClawProfilePath: (fileName: string) => string;
   resolveOpenClawStateDir: () => string;
 };
@@ -70,11 +70,7 @@ type DecisionResponsePayload = {
   message?: string;
 };
 
-const DEFAULT_API_BASE = process.env.CLAWOFDECEIT_API_BASE?.trim()
-  || process.env.AGENTARENA_API_BASE?.trim()
-  || "http://127.0.0.1:3000";
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
+const DEFAULT_API_BASE = "http://127.0.0.1:3000";
 const FALLBACK_DISCUSSION_MESSAGE = "I'm locking a public read before the vote.";
 const ISOLATED_PROFILE_NAME = "clawofdeceit";
 const LEGACY_MIGRATION_SOURCE_PROFILE = "main";
@@ -182,56 +178,8 @@ function normalizeDecisionResponse(kind: DecisionRequestPayload["kind"], raw: un
   throw new Error(`Unsupported decision request kind: ${kind}`);
 }
 
-async function runDecisionCommand(command: string, payload: DecisionRequestPayload): Promise<DecisionResponsePayload> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      shell: true,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        CLAWOFDECEIT_REQUEST_KIND: payload.kind,
-        CLAWOFDECEIT_AGENT_ID: payload.agent.agentId,
-        CLAWOFDECEIT_ROOM_ID: payload.roomId,
-        AGENTARENA_REQUEST_KIND: payload.kind,
-        AGENTARENA_AGENT_ID: payload.agent.agentId,
-        AGENTARENA_ROOM_ID: payload.roomId,
-      },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error("decision handler timed out after 10s"));
-    }, 10_000);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`decision handler exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout.trim() || "{}");
-        resolve(normalizeDecisionResponse(payload.kind, parsed));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
-
-    child.stdin.write(JSON.stringify(payload));
-    child.stdin.end();
-  });
+async function runStarterStrategy(payload: DecisionRequestPayload): Promise<DecisionResponsePayload> {
+  return normalizeDecisionResponse(payload.kind, resolveStarterDecision(payload));
 }
 
 function buildArenaUrls(apiBase: string) {
@@ -289,8 +237,6 @@ type SavedAgentBinding = {
   serverName: string;
   presetId: string;
   style: string;
-  decisionCmd: string;
-  autoStart: boolean;
   status: string;
   createdAt: string;
   lastConnectedAt: string | null;
@@ -300,18 +246,7 @@ type BindingRegistry = {
   version: number;
   apiBase: string;
   defaultAgent: string | null;
-  autoBoot: boolean;
   agents: Record<string, SavedAgentBinding>;
-};
-
-type AutoBootSyncResult = {
-  supported: boolean;
-  enabled: boolean;
-  configured: boolean;
-  activatedNow: boolean;
-  path: string | null;
-  label: string | null;
-  note: string;
 };
 
 type SavedPairingResult = {
@@ -320,7 +255,7 @@ type SavedPairingResult = {
   binding: SavedAgentBinding;
   apiBase: string;
   webBase: string;
-  autoBootNote: string;
+  startupNote: string;
 };
 
 type ProfileMigrationResult = {
@@ -329,8 +264,6 @@ type ProfileMigrationResult = {
   movedBindings: number;
   sourceRegistryPath: string;
   targetRegistryPath: string;
-  sourceAutoBootNote: string;
-  targetAutoBootNote: string;
   note: string;
 };
 
@@ -343,8 +276,6 @@ function sanitizeBindingName(value: unknown) {
 }
 
 function resolveCurrentProfileName() {
-  const envProfile = String(process.env.OPENCLAW_PROFILE || "").trim();
-  if (envProfile) return envProfile;
   const args = process.argv || [];
   const idx = args.lastIndexOf("--profile");
   if (idx >= 0) {
@@ -366,32 +297,6 @@ function getHostLockPath(profileName: string) {
   return path.join(getRegistryDir(profileName), "host.lock");
 }
 
-function getLaunchAgentsDir() {
-  return String(process.env.CLAWOFDECEIT_LAUNCH_AGENTS_DIR || "").trim()
-    || path.join(os.homedir(), "Library", "LaunchAgents");
-}
-
-function sanitizeLaunchLabelComponent(value: unknown) {
-  const normalized = String(value || "").trim().replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "");
-  return normalized || "main";
-}
-
-function getLaunchStateScope() {
-  return sanitizeLaunchLabelComponent(path.basename(resolveOpenClawStateDir()));
-}
-
-function getLaunchAgentLabel(profileName: string) {
-  return `com.clawofdeceit.openclaw.${getLaunchStateScope()}.${sanitizeLaunchLabelComponent(profileName)}`;
-}
-
-function getLaunchAgentPath(profileName: string) {
-  return path.join(getLaunchAgentsDir(), `${getLaunchAgentLabel(profileName)}.plist`);
-}
-
-function getLaunchAgentLogPath(profileName: string, kind: "out" | "err") {
-  return path.join(getRegistryDir(profileName), `autostart.${kind}.log`);
-}
-
 function ensureDirectory(target: string) {
   if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
 }
@@ -408,7 +313,6 @@ function defaultRegistry(apiBase = ""): BindingRegistry {
     version: 2,
     apiBase: apiBase.replace(/\/+$/, ""),
     defaultAgent: null,
-    autoBoot: false,
     agents: {},
   };
 }
@@ -426,8 +330,6 @@ function normalizeSavedAgentBinding(raw: unknown): SavedAgentBinding | null {
     serverName,
     presetId: String(input.presetId || DEFAULT_PRESET_ID).trim() || DEFAULT_PRESET_ID,
     style: String(input.style || "").trim() || serverName,
-    decisionCmd: String(input.decisionCmd || "").trim(),
-    autoStart: input.autoStart === true,
     status: String(input.status || "offline").trim() || "offline",
     createdAt: String(input.createdAt || new Date().toISOString()),
     lastConnectedAt: input.lastConnectedAt == null ? null : String(input.lastConnectedAt),
@@ -450,7 +352,6 @@ function normalizeRegistry(raw: unknown, apiBase = ""): BindingRegistry {
     version: Number(input.version || 2) || 2,
     apiBase: String(input.apiBase || apiBase || "").trim().replace(/\/+$/, ""),
     defaultAgent: sanitizeBindingName(input.defaultAgent || "") || null,
-    autoBoot: input.autoBoot === true,
     agents,
   };
 }
@@ -488,17 +389,6 @@ function listBindingEntries(registry: BindingRegistry) {
 
 function hasSavedBindings(registry: BindingRegistry) {
   return listBindingEntries(registry).length > 0;
-}
-
-function hasSavedAutoStartAgents(registry: BindingRegistry) {
-  return listBindingEntries(registry).some(([, binding]) => binding.autoStart === true);
-}
-
-function cloneBindingAsManualStart(binding: SavedAgentBinding): SavedAgentBinding {
-  return {
-    ...binding,
-    autoStart: false,
-  };
 }
 
 function saveBinding(profileName: string, apiBase: string, localName: string, binding: SavedAgentBinding) {
@@ -541,14 +431,6 @@ function removeSavedBinding(profileName: string, localName: string) {
   return registry;
 }
 
-function setRegistryAutoBoot(profileName: string, enabled: boolean, apiBase = "") {
-  const registry = readBindingRegistry(profileName, apiBase);
-  if (apiBase) registry.apiBase = apiBase.replace(/\/+$/, "");
-  registry.autoBoot = enabled;
-  writeBindingRegistry(profileName, registry);
-  return registry;
-}
-
 function clearBindingRegistry(profileName: string, apiBase = "") {
   const registry = defaultRegistry(apiBase);
   writeBindingRegistry(profileName, registry);
@@ -582,277 +464,6 @@ function readActiveHostLock(profileName: string) {
   return null;
 }
 
-function isAutoBootSupported() {
-  return process.platform === "darwin";
-}
-
-function getLaunchCtlDomain() {
-  const uid = typeof process.getuid === "function"
-    ? process.getuid()
-    : os.userInfo().uid;
-  return `gui/${uid}`;
-}
-
-function runLaunchCtl(args: string[]) {
-  if (String(process.env.CLAWOFDECEIT_SKIP_LAUNCHCTL || "").trim() === "1") {
-    return {
-      status: 0,
-      stdout: "",
-      stderr: "",
-      error: undefined,
-    };
-  }
-  return spawnSync("launchctl", args, {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-}
-
-function xmlEscape(value: string) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function buildAutoBootEnvironment(profileName: string) {
-  return {
-    OPENCLAW_STATE_DIR: resolveOpenClawStateDir(),
-    OPENCLAW_CONFIG_PATH: resolveOpenClawConfigPath(),
-    OPENCLAW_PROFILE: profileName,
-    PATH: String(process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"),
-  };
-}
-
-function resolveOpenClawBinary() {
-  const envBinary = String(process.env.OPENCLAW_BIN || "").trim();
-  if (envBinary) return envBinary;
-
-  try {
-    const probe = spawnSync("which", ["openclaw"], {
-      encoding: "utf8",
-      stdio: "pipe",
-    });
-    if (probe.status === 0) {
-      const found = String(probe.stdout || "").split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-      if (found) return found;
-    }
-  } catch {
-    // fall through to the generic binary name
-  }
-
-  return "openclaw";
-}
-
-function renderAutoBootLaunchAgent(args: {
-  profileName: string;
-  apiBase: string;
-}) {
-  const programArguments = [
-    resolveOpenClawBinary(),
-    "--profile",
-    args.profileName,
-    "clawofdeceit",
-    "agents",
-    "start",
-    "--all",
-    "--allow-existing-host",
-  ];
-  if (args.apiBase) {
-    programArguments.push("--api", args.apiBase);
-  }
-  const renderStringList = (values: string[]) => values.map((value) => `      <string>${xmlEscape(value)}</string>`).join("\n");
-  const renderEnvDict = (values: Record<string, string>) => Object.entries(values)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .flatMap(([key, value]) => [
-      `    <key>${xmlEscape(key)}</key>`,
-      `    <string>${xmlEscape(value)}</string>`,
-    ])
-    .join("\n");
-
-  return [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
-    `<plist version="1.0">`,
-    `<dict>`,
-    `  <key>Label</key>`,
-    `  <string>${xmlEscape(getLaunchAgentLabel(args.profileName))}</string>`,
-    `  <key>ProgramArguments</key>`,
-    `  <array>`,
-    renderStringList(programArguments),
-    `  </array>`,
-    `  <key>RunAtLoad</key>`,
-    `  <true/>`,
-    `  <key>WorkingDirectory</key>`,
-    `  <string>${xmlEscape(os.homedir())}</string>`,
-    `  <key>EnvironmentVariables</key>`,
-    `  <dict>`,
-    renderEnvDict(buildAutoBootEnvironment(args.profileName)),
-    `  </dict>`,
-    `  <key>StandardOutPath</key>`,
-    `  <string>${xmlEscape(getLaunchAgentLogPath(args.profileName, "out"))}</string>`,
-    `  <key>StandardErrorPath</key>`,
-    `  <string>${xmlEscape(getLaunchAgentLogPath(args.profileName, "err"))}</string>`,
-    `</dict>`,
-    `</plist>`,
-    ``,
-  ].join("\n");
-}
-
-function formatLaunchCtlFailure(args: string[], result: { status: number | null; stdout?: string; stderr?: string; error?: unknown }) {
-  const detail = String(result.stderr || result.stdout || (result.error instanceof Error ? result.error.message : result.error || "")).trim();
-  return `launchctl ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`;
-}
-
-function syncAutoBoot(profileName: string, apiBase = "", options?: {
-  activateNow?: boolean;
-  unloadNow?: boolean;
-}): AutoBootSyncResult {
-  const registry = readBindingRegistry(profileName, apiBase);
-  const enabled = registry.autoBoot === true;
-  const configured = enabled && hasSavedAutoStartAgents(registry);
-  const supported = isAutoBootSupported();
-  const label = supported ? getLaunchAgentLabel(profileName) : null;
-  const launchAgentPath = supported ? getLaunchAgentPath(profileName) : null;
-
-  if (!supported) {
-    return {
-      supported,
-      enabled,
-      configured,
-      activatedNow: false,
-      path: null,
-      label: null,
-      note: enabled
-        ? "Automatic startup is not available on this OS in the public connector build. Mark bindings with `--auto-start`, then use `openclaw clawofdeceit agents start --all` when you want to bring them back."
-        : "Automatic startup is disabled for this OpenClaw profile.",
-    };
-  }
-
-  const activePid = readActiveHostLock(profileName);
-  const domain = getLaunchCtlDomain();
-
-  if (!configured) {
-    if (launchAgentPath && fs.existsSync(launchAgentPath)) {
-      if (!activePid && options?.unloadNow !== false) {
-        const bootoutArgs = ["bootout", domain, launchAgentPath];
-        const result = runLaunchCtl(bootoutArgs);
-        if (result.status !== 0) {
-          // ignore stale or already-unloaded jobs
-        }
-      }
-      try {
-        fs.unlinkSync(launchAgentPath);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
-      }
-    }
-
-    return {
-      supported,
-      enabled,
-      configured,
-      activatedNow: false,
-      path: launchAgentPath,
-      label,
-      note: enabled
-        ? "Automatic startup is enabled, but there are no saved auto-start agents for this profile yet."
-        : activePid
-          ? "Automatic startup was removed for future logins and reboots. The current host keeps running until you stop it."
-          : "Automatic startup is disabled for this OpenClaw profile.",
-    };
-  }
-
-  const normalizedApiBase = (registry.apiBase || apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
-  writeTextFileAtomic(launchAgentPath as string, renderAutoBootLaunchAgent({
-    profileName,
-    apiBase: normalizedApiBase,
-  }), 0o644);
-
-  if (!activePid && options?.activateNow) {
-    const bootoutArgs = ["bootout", domain, launchAgentPath as string];
-    runLaunchCtl(bootoutArgs);
-    const bootstrapArgs = ["bootstrap", domain, launchAgentPath as string];
-    const bootstrap = runLaunchCtl(bootstrapArgs);
-    if (bootstrap.status !== 0) {
-      throw new Error(formatLaunchCtlFailure(bootstrapArgs, bootstrap));
-    }
-    return {
-      supported,
-      enabled,
-      configured,
-      activatedNow: true,
-      path: launchAgentPath,
-      label,
-      note: "Automatic startup is enabled for this OpenClaw profile and will revive saved agents on future login or reboot.",
-    };
-  }
-
-  return {
-    supported,
-    enabled,
-    configured,
-    activatedNow: false,
-    path: launchAgentPath,
-    label,
-    note: activePid
-      ? "Automatic startup was updated for future logins and reboots. The current host was left running."
-      : "Automatic startup is set for future logins and reboots for this OpenClaw profile.",
-  };
-}
-
-function readAutoBootStatus(profileName: string, apiBase = "") {
-  const registry = readBindingRegistry(profileName, apiBase);
-  const enabled = registry.autoBoot === true;
-  const autoStartCount = listBindingEntries(registry).filter(([, binding]) => binding.autoStart === true).length;
-  const supported = isAutoBootSupported();
-  const launchAgentPath = supported ? getLaunchAgentPath(profileName) : null;
-  const configured = Boolean(launchAgentPath && fs.existsSync(launchAgentPath));
-  const activePid = readActiveHostLock(profileName);
-
-  let note = "";
-  if (!enabled) {
-    note = "Automatic startup is disabled for this OpenClaw profile.";
-  } else if (!supported) {
-    note = autoStartCount
-      ? "Automatic startup is not available on this OS in the public connector build. Use `openclaw clawofdeceit agents start --all` when you want to bring saved auto-start agents back."
-      : "Automatic startup is not available on this OS in the public connector build, and there are no saved auto-start agents for this profile yet.";
-  } else if (!autoStartCount) {
-    note = "Automatic startup is enabled, but there are no saved auto-start agents for this profile yet.";
-  } else if (configured) {
-    note = activePid
-      ? "Automatic startup is configured, and a shared host is already running for this profile."
-      : "Automatic startup is configured for future login and reboot.";
-  } else {
-    note = "Automatic startup is enabled, but the startup file has not been installed yet.";
-  }
-
-  return {
-    profileName,
-    enabled,
-    supported,
-    autoStartCount,
-    path: launchAgentPath,
-    configured,
-    activePid,
-    note,
-  };
-}
-
-function cleanupProfileAutoBoot(profileName: string, apiBase = "") {
-  const registryPath = getRegistryPath(profileName);
-  const launchAgentPath = isAutoBootSupported() ? getLaunchAgentPath(profileName) : "";
-  const hasState = fs.existsSync(registryPath) || Boolean(launchAgentPath && fs.existsSync(launchAgentPath));
-  if (!hasState) return "";
-  setRegistryAutoBoot(profileName, false, apiBase);
-  return syncAutoBoot(profileName, apiBase, {
-    activateNow: false,
-    unloadNow: true,
-  }).note;
-}
-
 function migrateProfileBindings(args: {
   fromProfileName: string;
   toProfileName: string;
@@ -872,15 +483,12 @@ function migrateProfileBindings(args: {
   const normalizedApiBase = (requestedApiBase || targetRegistry.apiBase || sourceRegistry.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
 
   if (!sourceEntries.length) {
-    const sourceAutoBootNote = cleanupProfileAutoBoot(fromProfileName, normalizedApiBase);
     return {
       fromProfileName,
       toProfileName,
       movedBindings: 0,
       sourceRegistryPath: getRegistryPath(fromProfileName),
       targetRegistryPath: getRegistryPath(toProfileName),
-      sourceAutoBootNote,
-      targetAutoBootNote: "",
       note: targetEntries.length
         ? `Nothing to migrate from profile ${fromProfileName}. Existing bindings in ${toProfileName} were left unchanged.`
         : `Nothing to migrate from profile ${fromProfileName}.`,
@@ -892,7 +500,7 @@ function migrateProfileBindings(args: {
   }
 
   const migratedAgents = Object.fromEntries(
-    sourceEntries.map(([localName, binding]) => [localName, cloneBindingAsManualStart(binding)]),
+    sourceEntries.map(([localName, binding]) => [localName, binding]),
   ) as Record<string, SavedAgentBinding>;
   const defaultAgent = sourceRegistry.defaultAgent && migratedAgents[sourceRegistry.defaultAgent]
     ? sourceRegistry.defaultAgent
@@ -902,13 +510,9 @@ function migrateProfileBindings(args: {
     version: Math.max(Number(sourceRegistry.version || 2), Number(targetRegistry.version || 2), 2),
     apiBase: normalizedApiBase,
     defaultAgent,
-    autoBoot: false,
     agents: migratedAgents,
   });
   clearBindingRegistry(fromProfileName, normalizedApiBase);
-
-  const sourceAutoBootNote = cleanupProfileAutoBoot(fromProfileName, normalizedApiBase);
-  const targetAutoBootNote = cleanupProfileAutoBoot(toProfileName, normalizedApiBase);
 
   return {
     fromProfileName,
@@ -916,8 +520,6 @@ function migrateProfileBindings(args: {
     movedBindings: sourceEntries.length,
     sourceRegistryPath: getRegistryPath(fromProfileName),
     targetRegistryPath: getRegistryPath(toProfileName),
-    sourceAutoBootNote,
-    targetAutoBootNote,
     note: `Migrated ${sourceEntries.length} saved Claw of Deceit agent binding(s) from profile ${fromProfileName} to ${toProfileName}.`,
   };
 }
@@ -1026,15 +628,12 @@ async function printSavedAgentsList(profileName: string, apiBase: string) {
     } catch {
       // keep last known local status
     }
-    console.log(`- ${localName} (${binding.serverName}, ${binding.presetId}) ${status} · ${binding.autoStart === true ? "auto-start" : "manual-start"}`);
+    console.log(`- ${localName} (${binding.serverName}, ${binding.presetId}) ${status}`);
   }
 }
 
-function describeDecisionMode(decisionCmd: string) {
-  if (decisionCmd === STARTER_STRATEGY_CMD) {
-    return "starter Mafia strategy";
-  }
-  return decisionCmd ? `decision hook ${decisionCmd}` : "no decision command";
+function describeStrategyMode() {
+  return "built-in starter Mafia strategy";
 }
 
 async function createSavedBinding(args: {
@@ -1045,8 +644,6 @@ async function createSavedBinding(args: {
   agentName: string;
   presetId: string;
   style: string;
-  decisionCmd: string;
-  autoStart: boolean;
 }) {
   const callbackUrl = String(args.callbackUrl || "").trim() || `${args.apiBase}/api/openclaw/callback`;
   const cbRes = await fetch(callbackUrl, {
@@ -1081,8 +678,6 @@ async function createSavedBinding(args: {
       serverName,
       presetId: args.presetId,
       style: args.style,
-      decisionCmd: args.decisionCmd,
-      autoStart: args.autoStart,
       status: "offline",
       createdAt: new Date().toISOString(),
       lastConnectedAt: cbJson.connect?.connectedAt == null ? null : String(cbJson.connect.connectedAt),
@@ -1163,7 +758,7 @@ async function runManagedHost(args: {
           updateSavedBinding(args.profileName, localName, { status: "auth_failed" });
           return;
         }
-        console.log(`[${localName}] runtime connected as ${binding.serverName} (${describeDecisionMode(binding.decisionCmd || STARTER_STRATEGY_CMD)})`);
+        console.log(`[${localName}] runtime connected as ${binding.serverName} (${describeStrategyMode()})`);
         updateSavedBinding(args.profileName, localName, {
           status: String(response.arena?.queueStatus || "idle"),
           lastConnectedAt: new Date().toISOString(),
@@ -1193,8 +788,6 @@ async function runManagedHost(args: {
     });
 
     const handleDecisionRequest = async (kind: DecisionRequestPayload["kind"], payload: Record<string, unknown>) => {
-      const decisionCmd = String(binding.decisionCmd || STARTER_STRATEGY_CMD).trim();
-      if (!decisionCmd) return;
       try {
         const requestPayload: DecisionRequestPayload = {
           kind,
@@ -1214,7 +807,7 @@ async function runManagedHost(args: {
             intensity: 7,
           },
         };
-        const decision = await runDecisionCommand(decisionCmd, requestPayload);
+        const decision = await runStarterStrategy(requestPayload);
         socket.emit("mafia:agent:decision", {
           roomId: requestPayload.roomId,
           playerId: requestPayload.playerId,
@@ -1222,7 +815,7 @@ async function runManagedHost(args: {
           ...decision,
         });
       } catch (err) {
-        console.error(`[${localName}] decision hook failed for ${kind}: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(`[${localName}] starter strategy failed for ${kind}: ${err instanceof Error ? err.message : String(err)}`);
       }
     };
 
@@ -1255,12 +848,10 @@ const plugin = {
       const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
       return {
         apiBase: typeof raw.apiBase === "string" && raw.apiBase.trim() ? raw.apiBase.trim() : DEFAULT_API_BASE,
-        decisionCmd: typeof raw.decisionCmd === "string" && raw.decisionCmd.trim() ? raw.decisionCmd.trim() : "",
       };
     },
     uiHints: {
       apiBase: { label: "Claw of Deceit API Base URL", placeholder: DEFAULT_API_BASE },
-      decisionCmd: { label: "Decision command", placeholder: "node ./examples/clawofdeceit-decision-handler/index.js" },
     },
   },
   register(api: OpenClawPluginApi) {
@@ -1279,8 +870,6 @@ const plugin = {
           callback?: string;
           path?: string;
           api?: string;
-          decisionCmd?: string;
-          autoStart?: boolean;
         }) {
           const urls = buildArenaUrls(opts.api || cfg.apiBase || DEFAULT_API_BASE);
           const apiBase = urls.apiBase;
@@ -1293,7 +882,6 @@ const plugin = {
             style: opts.style,
           });
           const { intensity, presetId, style } = persona;
-          const decisionCmd = String(opts.decisionCmd || cfg.decisionCmd || STARTER_STRATEGY_CMD).trim();
           const token = String(opts.token || "").trim();
           const proof = String(opts.proof || "").trim();
           const callbackUrl = String(opts.callback || "").trim();
@@ -1309,35 +897,10 @@ const plugin = {
             agentName: opts.agent,
             presetId,
             style,
-            decisionCmd,
-            autoStart: opts.autoStart === true,
           });
           const localName = sanitizeBindingName(created.response.agent?.name || opts.agent || created.binding.serverName);
           saveBinding(profileName, apiBase, localName, created.binding);
-
-          let autoBootNote = created.binding.autoStart
-            ? `This agent is saved for future \`agents start --all\` runs, but automatic startup stays disabled until you run \`openclaw --profile ${profileName} clawofdeceit autostart enable\`.`
-            : "This agent is saved as manual-start only.";
-          if (created.binding.autoStart) {
-            try {
-              const syncStatus = syncAutoBoot(profileName, apiBase, {
-                activateNow: false,
-                unloadNow: false,
-              });
-              if (syncStatus.enabled) autoBootNote = syncStatus.note;
-            } catch (err) {
-              autoBootNote = `Saved the binding, but automatic startup could not be updated: ${err instanceof Error ? err.message : String(err)}`;
-            }
-          } else {
-            try {
-              syncAutoBoot(profileName, apiBase, {
-                activateNow: false,
-                unloadNow: false,
-              });
-            } catch {
-              // keep the connect flow successful even if startup cleanup fails
-            }
-          }
+          const startupNote = `Restart the same saved agent later with \`openclaw --profile ${profileName} clawofdeceit agents start --all\`.`;
 
           console.log("✅ Bound permanent Claw of Deceit agent");
           console.log(`Profile: ${profileName}`);
@@ -1345,8 +908,8 @@ const plugin = {
           console.log(`Local name: ${localName}`);
           console.log(`Style: ${style} · preset ${persona.preset.label} · intensity ${intensity}`);
           console.log(`Saved: ${getRegistryPath(profileName)}`);
-          console.log(`Decision mode: ${describeDecisionMode(decisionCmd)}`);
-          console.log(`Startup revive: ${autoBootNote}`);
+          console.log(`Strategy: ${describeStrategyMode()}`);
+          console.log(`Manual revive: ${startupNote}`);
 
           return {
             profileName,
@@ -1354,7 +917,7 @@ const plugin = {
             binding: created.binding,
             apiBase,
             webBase,
-            autoBootNote,
+            startupNote,
           } satisfies SavedPairingResult;
         }
 
@@ -1369,8 +932,6 @@ const plugin = {
           .option("--callback <url>", "Callback URL from Claw of Deceit")
           .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
-          .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
-          .option("--auto-start", "Include this agent in future `agents start --all` runs")
           .action(async (opts: {
             agent: string;
             preset?: string;
@@ -1380,8 +941,6 @@ const plugin = {
             callback?: string;
             path?: string;
             api?: string;
-            decisionCmd?: string;
-            autoStart?: boolean;
           }) => {
             const urls = buildArenaUrls(opts.api || cfg.apiBase || DEFAULT_API_BASE);
             try {
@@ -1411,8 +970,6 @@ const plugin = {
               console.log(`✅ ${result.note}`);
               console.log(`Source: ${result.sourceRegistryPath}`);
               console.log(`Target: ${result.targetRegistryPath}`);
-              if (result.sourceAutoBootNote) console.log(`Source startup cleanup: ${result.sourceAutoBootNote}`);
-              if (result.targetAutoBootNote) console.log(`Target startup cleanup: ${result.targetAutoBootNote}`);
             } catch (err) {
               console.error(`❌ Failed to migrate profile bindings: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
@@ -1530,8 +1087,6 @@ const plugin = {
           .option("--callback <url>", "Callback URL from Claw of Deceit")
           .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
-          .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
-          .option("--auto-start", "Include this agent in future `agents start --all` runs")
           .option("--start", "Start the newly created binding immediately")
           .action(async (opts: {
             agent: string;
@@ -1542,8 +1097,6 @@ const plugin = {
             callback?: string;
             path?: string;
             api?: string;
-            decisionCmd?: string;
-            autoStart?: boolean;
             start?: boolean;
           }) => {
             try {
@@ -1575,18 +1128,18 @@ const plugin = {
 
             try {
               const entries = opts.all
-                ? listBindingEntries(registry).filter(([, binding]) => binding.autoStart === true)
+                ? listBindingEntries(registry)
                 : (() => {
                     const selected = findBindingEntry(registry, name || registry.defaultAgent || "");
                     return selected ? [[selected.localName, selected.binding] as [string, SavedAgentBinding]] : [];
                   })();
               if (!entries.length) {
                 if (opts.allowExistingHost) {
-                  console.log(`No saved auto-start agents found for profile ${profileName}.`);
+                  console.log(`No saved Claw of Deceit agents found for profile ${profileName}.`);
                   return;
                 }
                 throw new Error(opts.all
-                  ? "No saved auto-start agents found for this profile."
+                  ? "No saved Claw of Deceit agents found for this profile."
                   : "No saved agent binding found. Use `connect` or `agents create` first.");
               }
               const activePid = readActiveHostLock(profileName);
@@ -1636,65 +1189,6 @@ const plugin = {
             }
           });
 
-        const autostart = root.command("autostart").description("Manage automatic startup revive for saved Claw of Deceit agents");
-
-        autostart
-          .command("status")
-          .description("Show whether this OpenClaw profile will revive saved agents automatically on future login or reboot")
-          .option("--api <url>", "Override API base URL")
-          .action((opts: { api?: string }) => {
-            const profileName = resolveCurrentProfileName();
-            const status = readAutoBootStatus(profileName, opts.api || cfg.apiBase || DEFAULT_API_BASE);
-            console.log(`Profile: ${status.profileName}`);
-            console.log(`State dir: ${resolveOpenClawStateDir()}`);
-            console.log(`Config: ${resolveOpenClawConfigPath()}`);
-            console.log(`Automatic startup: ${status.enabled ? "enabled" : "disabled"}`);
-            console.log(`Saved auto-start agents: ${status.autoStartCount}`);
-            if (status.activePid) console.log(`Current shared host: pid ${status.activePid}`);
-            if (status.path) console.log(`Startup file: ${status.path}`);
-            console.log(status.note);
-          });
-
-        autostart
-          .command("enable")
-          .description("Enable automatic startup revive for saved auto-start agents in this OpenClaw profile")
-          .option("--api <url>", "Override API base URL")
-          .action((opts: { api?: string }) => {
-            const profileName = resolveCurrentProfileName();
-            const apiBase = (opts.api || cfg.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
-            try {
-              setRegistryAutoBoot(profileName, true, apiBase);
-              const status = syncAutoBoot(profileName, apiBase, {
-                activateNow: true,
-                unloadNow: false,
-              });
-              console.log(`✅ ${status.note}`);
-            } catch (err) {
-              console.error(`❌ Failed to enable automatic startup: ${err instanceof Error ? err.message : String(err)}`);
-              process.exitCode = 1;
-            }
-          });
-
-        autostart
-          .command("disable")
-          .description("Disable automatic startup revive for this OpenClaw profile")
-          .option("--api <url>", "Override API base URL")
-          .action((opts: { api?: string }) => {
-            const profileName = resolveCurrentProfileName();
-            const apiBase = (opts.api || cfg.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
-            try {
-              setRegistryAutoBoot(profileName, false, apiBase);
-              const status = syncAutoBoot(profileName, apiBase, {
-                activateNow: false,
-                unloadNow: true,
-              });
-              console.log(`✅ ${status.note}`);
-            } catch (err) {
-              console.error(`❌ Failed to disable automatic startup: ${err instanceof Error ? err.message : String(err)}`);
-              process.exitCode = 1;
-            }
-          });
-
         agents
           .command("delete <name>")
           .description("Archive a permanent Claw of Deceit agent and remove its local binding")
@@ -1709,17 +1203,8 @@ const plugin = {
               if (!selected) throw new Error("No saved agent binding found for delete.");
               await archiveManagedAgent(apiBase, selected.binding);
               removeSavedBinding(profileName, selected.localName);
-              let autoBootNote = "";
-              try {
-                autoBootNote = syncAutoBoot(profileName, apiBase, {
-                  activateNow: false,
-                  unloadNow: true,
-                }).note;
-              } catch (err) {
-                autoBootNote = `Automatic startup could not be updated: ${err instanceof Error ? err.message : String(err)}`;
-              }
               console.log(`✅ Archived ${selected.binding.serverName} and removed local binding ${selected.localName}`);
-              console.log(autoBootNote);
+              console.log(`Restart any remaining saved agents later with \`openclaw --profile ${profileName} clawofdeceit agents start --all\`.`);
             } catch (err) {
               console.error(`❌ Failed to delete saved agent: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
@@ -1739,7 +1224,6 @@ export const __test__ = {
   normalizeRegistry,
   readBindingRegistry,
   getRegistryPath,
-  getLaunchAgentPath,
   migrateProfileBindings,
   keepBindingLiveAfterConnect,
 };

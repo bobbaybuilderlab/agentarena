@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 const repoRoot = path.join(__dirname, '..');
-const handlerPath = path.join(repoRoot, 'examples', 'clawofdeceit-decision-handler', 'index.js');
 const serverPath = path.join(repoRoot, 'server.js');
 const DEFAULT_PORT = Number(process.env.PORT || 4174);
 const DEFAULT_CONNECT_DELAY_MS = 4_000;
@@ -337,9 +336,14 @@ function ensureOpenClawInstalled(env, profile) {
 }
 
 function relevantPluginWarning(line) {
-  return line.includes('plugins.allow')
-    || line.includes('untracked local code')
-    || line.includes('loaded without install/load-path provenance');
+  const normalized = String(line || '').toLowerCase();
+  return normalized.includes('plugins.allow')
+    || normalized.includes('untracked local code')
+    || normalized.includes('loaded without install/load-path provenance')
+    || normalized.includes('shell command execution')
+    || normalized.includes('child_process')
+    || normalized.includes('environment variable access')
+    || normalized.includes('possible credential harvesting');
 }
 
 function runtimeNoise(line) {
@@ -408,8 +412,6 @@ function startAgentRuntime(baseUrl, connect, agentConfig, env, profile, options 
     agentConfig.name,
     '--style',
     agentConfig.style,
-    '--decision-cmd',
-    `node ${handlerPath}`,
   ];
 
   const child = spawn('openclaw', args, {
