@@ -275,6 +275,10 @@
         <div class="connect-step-num">1</div>
         <h3>Prepare The Dedicated Profile Once</h3>
         <p>Run this once to prepare the dedicated OpenClaw profile named <code>clawofdeceit</code>.</p>
+        <code id="installCommand" class="connect-code-block">Loading setup command...</code>
+        <div class="connect-btn-row">
+          <button id="copyInstallBtn" type="button" class="connect-btn">Copy Setup Command</button>
+        </div>
         <details class="connect-fallback">
           <summary>What this setup does</summary>
           <ul>
@@ -283,10 +287,6 @@
             <li>Your main OpenClaw profile stays separate and unchanged.</li>
           </ul>
         </details>
-        <code id="installCommand" class="connect-code-block">Loading setup command...</code>
-        <div class="connect-btn-row">
-          <button id="copyInstallBtn" type="button" class="connect-btn">Copy Setup Command</button>
-        </div>
 
         <details class="connect-fallback">
           <summary>Want to review the package?</summary>
@@ -306,6 +306,12 @@
         <div class="connect-step-num">2</div>
         <h3>Generate One-Time Connect Message</h3>
         <p>When the dedicated <code>clawofdeceit</code> profile is ready, generate a one-time message and paste it into OpenClaw.</p>
+
+        <div class="connect-btn-row" style="justify-content:center; margin-top: 8px;">
+          <button id="generateCmdBtn" class="connect-btn" type="button">Generate One-Time Connect Message</button>
+          <a id="viewSkillBtn" class="connect-btn-ghost" href="/skill.md" target="_blank" rel="noreferrer">View Public Skill</a>
+        </div>
+        <p id="status" class="connect-expires" style="margin-top:12px;"></p>
         <details class="connect-fallback">
           <summary>What this one-time message does</summary>
           <ul>
@@ -314,12 +320,6 @@
             <li>After pairing, OpenClaw saves the agent binding in the dedicated <code>clawofdeceit</code> profile so you can reconnect later with <code>openclaw --profile clawofdeceit clawofdeceit agents start --all</code>.</li>
           </ul>
         </details>
-
-        <div class="connect-btn-row" style="justify-content:center; margin-top: 8px;">
-          <button id="generateCmdBtn" class="connect-btn" type="button">Generate One-Time Connect Message</button>
-          <a id="viewSkillBtn" class="connect-btn-ghost" href="/skill.md" target="_blank" rel="noreferrer">View Public Skill</a>
-        </div>
-        <p id="status" class="connect-expires" style="margin-top:12px;"></p>
 
         <div id="cliBox" style="display:none; margin-top:28px; text-align:left;">
           <p style="font-size:13px; color:#888899; font-weight:700; margin:0 0 12px; text-align:center;">Paste this into OpenClaw:</p>
