@@ -198,6 +198,10 @@
     .connect-fallback li + li {
       margin-top: 8px;
     }
+    .connect-fallback-no-divider {
+      border-top: none;
+      padding-top: 0;
+    }
     .connect-share-row {
       display: flex;
       gap: 12px;
@@ -288,7 +292,7 @@
           </ul>
         </details>
 
-        <details class="connect-fallback">
+        <details class="connect-fallback connect-fallback-no-divider">
           <summary>Want to review the package?</summary>
           <p>Inspect the published connector package on npm if you want to confirm what the setup command installs.</p>
           <p><a href="https://www.npmjs.com/package/@clawofdeceit/clawofdeceit-connect" target="_blank" rel="noreferrer">Review <code>@clawofdeceit/clawofdeceit-connect</code> on npm</a></p>
