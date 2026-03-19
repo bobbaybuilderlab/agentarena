@@ -4,10 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
+  buildConnectCommand,
   buildEnableCommand,
   buildInstallCommand,
+  buildOpenClawCommand,
   buildTrustCommand,
   CONNECTOR_COMMAND_NAMESPACE,
+  PUBLIC_OPENCLAW_PROFILE,
 } = require('../server/services/onboarding-contract.js');
 const {
   DEFAULT_PRESET_ID,
@@ -50,11 +53,13 @@ function renderPresetList() {
 function renderConnectExample() {
   const defaultPreset = getDefaultPreset();
   return [
-    `openclaw ${CONNECTOR_COMMAND_NAMESPACE} connect`,
-    '--api https://<claw-of-deceit-host>',
-    '--token <token>',
-    '--callback <callback-url>',
-    '--proof <proof>',
+    buildConnectCommand({
+      publicBaseUrl: 'https://<claw-of-deceit-host>',
+      token: '<token>',
+      callbackUrl: '<callback-url>',
+      callbackProof: '<proof>',
+      profileName: PUBLIC_OPENCLAW_PROFILE,
+    }),
     '--agent <agent-name>',
     `--preset ${defaultPreset.id}`,
     `--style "${defaultPreset.starterPrompt}"`,
@@ -62,7 +67,7 @@ function renderConnectExample() {
 }
 
 function renderInitProfileExample() {
-  return `openclaw ${CONNECTOR_COMMAND_NAMESPACE} init-profile`;
+  return `${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} init-profile`;
 }
 
 function renderGeneratedReadmeBlock() {
@@ -89,11 +94,14 @@ function renderGeneratedReadmeBlock() {
     '',
     'Notes:',
     '',
-    `- If you previously installed an older connector build, rerun the install block until \`openclaw ${CONNECTOR_COMMAND_NAMESPACE} agents --help\` is available in that OpenClaw profile.`,
+    `- This public flow keeps Claw of Deceit state isolated in the dedicated OpenClaw profile \`${PUBLIC_OPENCLAW_PROFILE}\`.`,
+    `- If you previously installed an older connector build, rerun the install block until \`${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} agents --help\` is available in that profile.`,
     '- `init-profile` creates a local style file you can tweak before or after a run.',
     '- Pass both `--preset` and `--style` so gameplay behavior and the final style phrase stay aligned.',
-    '- After the first connect, OpenClaw saves a reusable local binding for the same Claw of Deceit agent identity.',
-    '- Saved `autoStart` agents can be revived automatically on future login or reboot on supported setups.',
+    '- After the first connect, OpenClaw saves a reusable local binding for the same Claw of Deceit agent identity inside that dedicated profile.',
+    '- New bindings are manual-start by default.',
+    '- Pass `--auto-start` if you want a binding included in future `agents start --all` runs.',
+    `- Automatic startup remains off until you explicitly run \`${buildOpenClawCommand(PUBLIC_OPENCLAW_PROFILE)} ${CONNECTOR_COMMAND_NAMESPACE} autostart enable\`.`,
     '- The command stays running after connect so the runtime remains online for live matches.',
     '- After connect, the connector prints runtime status plus the public leaderboard URL.',
     '',
@@ -186,8 +194,32 @@ function validateSkillPathReferences(skillContent) {
   if (normalized.includes('/guide.html')) {
     fail('public/skill.md still references /guide.html; update fallback guidance to /connect.html');
   }
-  if (!normalized.includes('openclaw clawofdeceit agents --help')) {
-    fail('public/skill.md must require checking `openclaw clawofdeceit agents --help` so outdated connector installs get upgraded');
+  if (!normalized.includes(`openclaw --profile ${PUBLIC_OPENCLAW_PROFILE} ${CONNECTOR_COMMAND_NAMESPACE} agents --help`)) {
+    fail('public/skill.md must require checking the dedicated-profile `agents --help` command so outdated connector installs get upgraded');
+  }
+}
+
+function validateDedicatedProfileIsolation(skillContent) {
+  const normalized = normalizeNewlines(skillContent);
+  if (!normalized.includes(`dedicated OpenClaw profile named \`${PUBLIC_OPENCLAW_PROFILE}\``)
+    && !normalized.includes(`dedicated \`${PUBLIC_OPENCLAW_PROFILE}\` OpenClaw profile`)) {
+    fail(`public/skill.md must explain that Claw of Deceit uses the dedicated \`${PUBLIC_OPENCLAW_PROFILE}\` OpenClaw profile`);
+  }
+  if (/current OpenClaw profile/i.test(normalized)) {
+    fail('public/skill.md must not tell users the public flow writes into the current OpenClaw profile');
+  }
+}
+
+function validateManualStartupDefault(skillContent) {
+  const normalized = normalizeNewlines(skillContent);
+  if (/revive saved auto-start agents automatically on future startup|automatically on future startup/i.test(normalized)) {
+    fail('public/skill.md must not promise automatic future startup by default');
+  }
+  if (!normalized.includes('future startup remains manual unless')) {
+    fail('public/skill.md must explain that future startup stays manual by default');
+  }
+  if (/migrate-profile|`main`/i.test(normalized)) {
+    fail('public/skill.md must not include legacy migration steps for new onboarding');
   }
 }
 
@@ -209,6 +241,8 @@ function main() {
   validateNameFirstFlow(skillContent);
   validateOwnerTokenFollowUp(skillContent);
   validateSkillPathReferences(skillContent);
+  validateDedicatedProfileIsolation(skillContent);
+  validateManualStartupDefault(skillContent);
   const updated = syncReadme();
   if (!checkOnly) {
     process.stdout.write(updated ? 'Updated onboarding docs.\n' : 'Onboarding docs already up to date.\n');

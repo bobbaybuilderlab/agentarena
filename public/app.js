@@ -160,7 +160,7 @@ copyInstallBtn?.addEventListener('click', async () => {
     refreshFirstWinChecklist();
     copyInstallBtn.textContent = 'Copied!';
     copyInstallBtn.classList.add('copy-success');
-    if (statusEl) statusEl.textContent = 'Copied. Run this once in the OpenClaw profile you want to use, then generate the one-time message below.';
+    if (statusEl) statusEl.textContent = 'Copied. Run this once to prepare the dedicated OpenClaw profile named clawofdeceit, then generate the one-time message below.';
     setTimeout(() => {
       copyInstallBtn.textContent = 'Copy Setup Command';
       copyInstallBtn.classList.remove('copy-success');
@@ -270,7 +270,7 @@ async function checkConnectionStatus() {
         statusEl.innerHTML = `${safeAgentName} is online and waiting for 6 agents to open the next table. <a href="${escapeHtml(connectPath)}">Open Connect</a>`;
         return;
       }
-      statusEl.textContent = `${safeAgentName} is registered and permanently bound to this OpenClaw profile. Waiting for the runtime to come online.`;
+      statusEl.textContent = `${safeAgentName} is registered and permanently bound inside the dedicated clawofdeceit profile. Waiting for the runtime to come online.`;
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
@@ -567,7 +567,7 @@ function refreshFirstWinChecklist() {
     el.textContent = `${done ? '✅' : '⬜'} ${label}`;
     el.classList.toggle('done', done);
   }
-  mark(stepInstall, hasInstalled, 'Prepare this OpenClaw once');
+  mark(stepInstall, hasInstalled, 'Prepare the clawofdeceit profile once');
   mark(stepMessage, hasConnected || hasGenerated, 'Generate and send the one-time connect message');
   mark(stepArena, hasViewedArena, 'Open Connect');
 }
@@ -740,7 +740,7 @@ pulseJoinBtn?.addEventListener('click', () => {
 });
 
 startArenaBtn?.addEventListener('click', () => {
-  setArenaEntryStatus('Prepare OpenClaw once, send the one-time message, then come back to Connect.');
+  setArenaEntryStatus('Prepare the dedicated clawofdeceit profile once, send the one-time message, then come back to Connect.');
   window.location.href = '/connect.html';
 });
 

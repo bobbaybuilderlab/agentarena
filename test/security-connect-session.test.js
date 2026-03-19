@@ -72,11 +72,12 @@ test('connect session endpoints allow anonymous creation but still require secre
     assert.equal(created.connect.callbackProof.length > 0, true);
     assert.equal(created.connect.onboarding.pluginId, 'clawofdeceit-connect');
     assert.equal(created.connect.onboarding.pluginPackage, '@clawofdeceit/clawofdeceit-connect');
-    assert.match(created.connect.onboarding.installCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
-    assert.match(created.connect.onboarding.trustCommand, /openclaw config set plugins\.allow/);
-    assert.match(created.connect.onboarding.enableCommand, /openclaw plugins enable clawofdeceit-connect/);
-    assert.match(created.connect.onboarding.installerCommand, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw config set plugins\.allow .* && openclaw plugins enable clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.installCommand, /openclaw --profile clawofdeceit plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.trustCommand, /openclaw --profile clawofdeceit config set plugins\.allow/);
+    assert.match(created.connect.onboarding.enableCommand, /openclaw --profile clawofdeceit plugins enable clawofdeceit-connect/);
+    assert.match(created.connect.onboarding.installerCommand, /openclaw --profile clawofdeceit plugins install --pin @clawofdeceit\/clawofdeceit-connect && openclaw --profile clawofdeceit config set plugins\.allow .* && openclaw --profile clawofdeceit plugins enable clawofdeceit-connect/);
     assert.equal(created.connect.onboarding.connectCommand, created.connect.command);
+    assert.match(created.connect.onboarding.connectCommand, /openclaw --profile clawofdeceit clawofdeceit connect/);
     assert.match(created.connect.onboarding.skillUrl, /\/skill\.md$/);
     assert.match(created.connect.onboarding.sessionSkillUrl, new RegExp(`/api/openclaw/connect-session/${id}/skill\\.md\\?accessToken=`));
     assert.equal(
@@ -125,13 +126,15 @@ test('connect session endpoints allow anonymous creation but still require secre
     assert.equal(authSkill.headers.get('x-robots-tag'), 'noindex, nofollow');
     const skillBody = await authSkill.text();
     assert.match(skillBody, /Claw of Deceit Session Skill/);
-    assert.match(skillBody, /openclaw clawofdeceit connect --help/);
-    assert.match(skillBody, /openclaw clawofdeceit agents --help/);
-    assert.match(skillBody, /openclaw plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
+    assert.match(skillBody, /openclaw --profile clawofdeceit clawofdeceit connect --help/);
+    assert.match(skillBody, /openclaw --profile clawofdeceit clawofdeceit agents --help/);
+    assert.match(skillBody, /openclaw --profile clawofdeceit plugins install --pin @clawofdeceit\/clawofdeceit-connect/);
     assert.match(skillBody, new RegExp(`Connect token: ${id}`));
     assert.match(skillBody, new RegExp(`Callback proof: ${created.connect.callbackProof}`));
     assert.match(skillBody, /installed connector is outdated and rerun the same setup block/);
     assert.match(skillBody, /return to `\/connect\.html` and use the step-by-step fallback/);
+    assert.match(skillBody, /dedicated OpenClaw profile `clawofdeceit`|dedicated `clawofdeceit` OpenClaw profile/);
+    assert.match(skillBody, /future startup remains manual unless I explicitly enable it later/);
     const namePromptIndex = skillBody.indexOf('Help me pick a short agent name.');
     const branchPromptIndex = skillBody.indexOf('Do you want to play now with the starter Mafia strategy, or customize first?');
     assert.notEqual(namePromptIndex, -1);
@@ -145,6 +148,10 @@ test('connect session endpoints allow anonymous creation but still require secre
     assert.doesNotMatch(skillBody, /dashboard/i);
     assert.doesNotMatch(skillBody, /magic link/i);
     assert.doesNotMatch(skillBody, /sync-style/i);
+    assert.doesNotMatch(skillBody, /current OpenClaw profile/i);
+    assert.doesNotMatch(skillBody, /automatically on future startup/i);
+    assert.doesNotMatch(skillBody, /migrate-profile/i);
+    assert.doesNotMatch(skillBody, /from `main`/i);
     assert.doesNotMatch(skillBody, /\/guide\.html/);
 
     const queryConfirm = await fetch(`${base}/api/openclaw/connect-session/${id}/confirm?accessToken=${encodeURIComponent(accessToken)}`, {

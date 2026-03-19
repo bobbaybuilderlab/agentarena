@@ -76,6 +76,8 @@ const DEFAULT_API_BASE = process.env.CLAWOFDECEIT_API_BASE?.trim()
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const STARTER_STRATEGY_CMD = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(MODULE_DIR, "starter-strategy.js"))}`;
 const FALLBACK_DISCUSSION_MESSAGE = "I'm locking a public read before the vote.";
+const ISOLATED_PROFILE_NAME = "clawofdeceit";
+const LEGACY_MIGRATION_SOURCE_PROFILE = "main";
 
 function resolveDefaultArenaProfilePath() {
   return resolveOpenClawProfilePath("CLAWOFDECEIT.md");
@@ -312,6 +314,26 @@ type AutoBootSyncResult = {
   note: string;
 };
 
+type SavedPairingResult = {
+  profileName: string;
+  localName: string;
+  binding: SavedAgentBinding;
+  apiBase: string;
+  webBase: string;
+  autoBootNote: string;
+};
+
+type ProfileMigrationResult = {
+  fromProfileName: string;
+  toProfileName: string;
+  movedBindings: number;
+  sourceRegistryPath: string;
+  targetRegistryPath: string;
+  sourceAutoBootNote: string;
+  targetAutoBootNote: string;
+  note: string;
+};
+
 function normalizeLookupKey(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -386,7 +408,7 @@ function defaultRegistry(apiBase = ""): BindingRegistry {
     version: 2,
     apiBase: apiBase.replace(/\/+$/, ""),
     defaultAgent: null,
-    autoBoot: true,
+    autoBoot: false,
     agents: {},
   };
 }
@@ -405,7 +427,7 @@ function normalizeSavedAgentBinding(raw: unknown): SavedAgentBinding | null {
     presetId: String(input.presetId || DEFAULT_PRESET_ID).trim() || DEFAULT_PRESET_ID,
     style: String(input.style || "").trim() || serverName,
     decisionCmd: String(input.decisionCmd || "").trim(),
-    autoStart: input.autoStart !== false,
+    autoStart: input.autoStart === true,
     status: String(input.status || "offline").trim() || "offline",
     createdAt: String(input.createdAt || new Date().toISOString()),
     lastConnectedAt: input.lastConnectedAt == null ? null : String(input.lastConnectedAt),
@@ -428,7 +450,7 @@ function normalizeRegistry(raw: unknown, apiBase = ""): BindingRegistry {
     version: Number(input.version || 2) || 2,
     apiBase: String(input.apiBase || apiBase || "").trim().replace(/\/+$/, ""),
     defaultAgent: sanitizeBindingName(input.defaultAgent || "") || null,
-    autoBoot: input.autoBoot !== false,
+    autoBoot: input.autoBoot === true,
     agents,
   };
 }
@@ -464,8 +486,19 @@ function listBindingEntries(registry: BindingRegistry) {
   return Object.entries(registry.agents).sort(([a], [b]) => a.localeCompare(b));
 }
 
+function hasSavedBindings(registry: BindingRegistry) {
+  return listBindingEntries(registry).length > 0;
+}
+
 function hasSavedAutoStartAgents(registry: BindingRegistry) {
-  return listBindingEntries(registry).some(([, binding]) => binding.autoStart !== false);
+  return listBindingEntries(registry).some(([, binding]) => binding.autoStart === true);
+}
+
+function cloneBindingAsManualStart(binding: SavedAgentBinding): SavedAgentBinding {
+  return {
+    ...binding,
+    autoStart: false,
+  };
 }
 
 function saveBinding(profileName: string, apiBase: string, localName: string, binding: SavedAgentBinding) {
@@ -512,6 +545,12 @@ function setRegistryAutoBoot(profileName: string, enabled: boolean, apiBase = ""
   const registry = readBindingRegistry(profileName, apiBase);
   if (apiBase) registry.apiBase = apiBase.replace(/\/+$/, "");
   registry.autoBoot = enabled;
+  writeBindingRegistry(profileName, registry);
+  return registry;
+}
+
+function clearBindingRegistry(profileName: string, apiBase = "") {
+  const registry = defaultRegistry(apiBase);
   writeBindingRegistry(profileName, registry);
   return registry;
 }
@@ -672,7 +711,7 @@ function syncAutoBoot(profileName: string, apiBase = "", options?: {
   unloadNow?: boolean;
 }): AutoBootSyncResult {
   const registry = readBindingRegistry(profileName, apiBase);
-  const enabled = registry.autoBoot !== false;
+  const enabled = registry.autoBoot === true;
   const configured = enabled && hasSavedAutoStartAgents(registry);
   const supported = isAutoBootSupported();
   const label = supported ? getLaunchAgentLabel(profileName) : null;
@@ -687,7 +726,7 @@ function syncAutoBoot(profileName: string, apiBase = "", options?: {
       path: null,
       label: null,
       note: enabled
-        ? "Automatic startup is not available on this OS in the public connector build. Saved agents still keep the same identity; use `openclaw clawofdeceit agents start --all` after a restart."
+        ? "Automatic startup is not available on this OS in the public connector build. Mark bindings with `--auto-start`, then use `openclaw clawofdeceit agents start --all` when you want to bring them back."
         : "Automatic startup is disabled for this OpenClaw profile.",
     };
   }
@@ -766,8 +805,8 @@ function syncAutoBoot(profileName: string, apiBase = "", options?: {
 
 function readAutoBootStatus(profileName: string, apiBase = "") {
   const registry = readBindingRegistry(profileName, apiBase);
-  const enabled = registry.autoBoot !== false;
-  const autoStartCount = listBindingEntries(registry).filter(([, binding]) => binding.autoStart !== false).length;
+  const enabled = registry.autoBoot === true;
+  const autoStartCount = listBindingEntries(registry).filter(([, binding]) => binding.autoStart === true).length;
   const supported = isAutoBootSupported();
   const launchAgentPath = supported ? getLaunchAgentPath(profileName) : null;
   const configured = Boolean(launchAgentPath && fs.existsSync(launchAgentPath));
@@ -777,7 +816,9 @@ function readAutoBootStatus(profileName: string, apiBase = "") {
   if (!enabled) {
     note = "Automatic startup is disabled for this OpenClaw profile.";
   } else if (!supported) {
-    note = "Automatic startup is not available on this OS in the public connector build. Saved agents still reconnect with the same identity when you run `openclaw clawofdeceit agents start --all`.";
+    note = autoStartCount
+      ? "Automatic startup is not available on this OS in the public connector build. Use `openclaw clawofdeceit agents start --all` when you want to bring saved auto-start agents back."
+      : "Automatic startup is not available on this OS in the public connector build, and there are no saved auto-start agents for this profile yet.";
   } else if (!autoStartCount) {
     note = "Automatic startup is enabled, but there are no saved auto-start agents for this profile yet.";
   } else if (configured) {
@@ -798,6 +839,116 @@ function readAutoBootStatus(profileName: string, apiBase = "") {
     activePid,
     note,
   };
+}
+
+function cleanupProfileAutoBoot(profileName: string, apiBase = "") {
+  const registryPath = getRegistryPath(profileName);
+  const launchAgentPath = isAutoBootSupported() ? getLaunchAgentPath(profileName) : "";
+  const hasState = fs.existsSync(registryPath) || Boolean(launchAgentPath && fs.existsSync(launchAgentPath));
+  if (!hasState) return "";
+  setRegistryAutoBoot(profileName, false, apiBase);
+  return syncAutoBoot(profileName, apiBase, {
+    activateNow: false,
+    unloadNow: true,
+  }).note;
+}
+
+function migrateProfileBindings(args: {
+  fromProfileName: string;
+  toProfileName: string;
+  apiBase?: string;
+}): ProfileMigrationResult {
+  const fromProfileName = sanitizeBindingName(args.fromProfileName) || LEGACY_MIGRATION_SOURCE_PROFILE;
+  const toProfileName = sanitizeBindingName(args.toProfileName) || ISOLATED_PROFILE_NAME;
+  if (normalizeLookupKey(fromProfileName) === normalizeLookupKey(toProfileName)) {
+    throw new Error("Source and target profiles must be different.");
+  }
+
+  const requestedApiBase = String(args.apiBase || "").trim().replace(/\/+$/, "");
+  const sourceRegistry = readBindingRegistry(fromProfileName, requestedApiBase);
+  const targetRegistry = readBindingRegistry(toProfileName, requestedApiBase || sourceRegistry.apiBase);
+  const sourceEntries = listBindingEntries(sourceRegistry);
+  const targetEntries = listBindingEntries(targetRegistry);
+  const normalizedApiBase = (requestedApiBase || targetRegistry.apiBase || sourceRegistry.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+
+  if (!sourceEntries.length) {
+    const sourceAutoBootNote = cleanupProfileAutoBoot(fromProfileName, normalizedApiBase);
+    return {
+      fromProfileName,
+      toProfileName,
+      movedBindings: 0,
+      sourceRegistryPath: getRegistryPath(fromProfileName),
+      targetRegistryPath: getRegistryPath(toProfileName),
+      sourceAutoBootNote,
+      targetAutoBootNote: "",
+      note: targetEntries.length
+        ? `Nothing to migrate from profile ${fromProfileName}. Existing bindings in ${toProfileName} were left unchanged.`
+        : `Nothing to migrate from profile ${fromProfileName}.`,
+    };
+  }
+
+  if (hasSavedBindings(targetRegistry)) {
+    throw new Error(`Both profiles ${fromProfileName} and ${toProfileName} already contain saved Claw of Deceit bindings.`);
+  }
+
+  const migratedAgents = Object.fromEntries(
+    sourceEntries.map(([localName, binding]) => [localName, cloneBindingAsManualStart(binding)]),
+  ) as Record<string, SavedAgentBinding>;
+  const defaultAgent = sourceRegistry.defaultAgent && migratedAgents[sourceRegistry.defaultAgent]
+    ? sourceRegistry.defaultAgent
+    : sourceEntries[0]?.[0] || null;
+
+  writeBindingRegistry(toProfileName, {
+    version: Math.max(Number(sourceRegistry.version || 2), Number(targetRegistry.version || 2), 2),
+    apiBase: normalizedApiBase,
+    defaultAgent,
+    autoBoot: false,
+    agents: migratedAgents,
+  });
+  clearBindingRegistry(fromProfileName, normalizedApiBase);
+
+  const sourceAutoBootNote = cleanupProfileAutoBoot(fromProfileName, normalizedApiBase);
+  const targetAutoBootNote = cleanupProfileAutoBoot(toProfileName, normalizedApiBase);
+
+  return {
+    fromProfileName,
+    toProfileName,
+    movedBindings: sourceEntries.length,
+    sourceRegistryPath: getRegistryPath(fromProfileName),
+    targetRegistryPath: getRegistryPath(toProfileName),
+    sourceAutoBootNote,
+    targetAutoBootNote,
+    note: `Migrated ${sourceEntries.length} saved Claw of Deceit agent binding(s) from profile ${fromProfileName} to ${toProfileName}.`,
+  };
+}
+
+async function keepBindingLiveAfterConnect(
+  saved: SavedPairingResult,
+  dependencies: {
+    readActiveHostLock: (profileName: string) => number | null;
+    runManagedHost: typeof runManagedHost;
+    log: (message: string) => void;
+  } = {
+    readActiveHostLock,
+    runManagedHost,
+    log: (message: string) => console.log(message),
+  },
+) {
+  const activePid = dependencies.readActiveHostLock(saved.profileName);
+  if (activePid) {
+    dependencies.log(`Saved binding for ${saved.localName}, but host pid ${activePid} is already running for this profile.`);
+    dependencies.log(`Restart that host or run \`openclaw --profile ${saved.profileName} clawofdeceit agents start ${saved.localName}\` later to load the new agent now.`);
+    dependencies.log("The saved binding will still keep the same agent identity for future reconnects.");
+    return { started: false, activePid };
+  }
+
+  await dependencies.runManagedHost({
+    profileName: saved.profileName,
+    apiBase: saved.apiBase,
+    webBase: saved.webBase,
+    entries: [[saved.localName, saved.binding]],
+  });
+  return { started: true, activePid: null };
 }
 
 function acquireHostLock(profileName: string) {
@@ -875,7 +1026,7 @@ async function printSavedAgentsList(profileName: string, apiBase: string) {
     } catch {
       // keep last known local status
     }
-    console.log(`- ${localName} (${binding.serverName}, ${binding.presetId}) ${status} · ${binding.autoStart !== false ? "auto-start" : "manual-start"}`);
+    console.log(`- ${localName} (${binding.serverName}, ${binding.presetId}) ${status} · ${binding.autoStart === true ? "auto-start" : "manual-start"}`);
   }
 }
 
@@ -1155,20 +1306,21 @@ const plugin = {
             presetId,
             style,
             decisionCmd,
-            autoStart: opts.autoStart !== false,
+            autoStart: opts.autoStart === true,
           });
           const localName = sanitizeBindingName(created.response.agent?.name || opts.agent || created.binding.serverName);
           saveBinding(profileName, apiBase, localName, created.binding);
 
           let autoBootNote = created.binding.autoStart
-            ? "Automatic startup is disabled for this OpenClaw profile."
+            ? `This agent is saved for future \`agents start --all\` runs, but automatic startup stays disabled until you run \`openclaw --profile ${profileName} clawofdeceit autostart enable\`.`
             : "This agent is saved as manual-start only.";
           if (created.binding.autoStart) {
             try {
-              autoBootNote = syncAutoBoot(profileName, apiBase, {
+              const syncStatus = syncAutoBoot(profileName, apiBase, {
                 activateNow: false,
                 unloadNow: false,
-              }).note;
+              });
+              if (syncStatus.enabled) autoBootNote = syncStatus.note;
             } catch (err) {
               autoBootNote = `Saved the binding, but automatic startup could not be updated: ${err instanceof Error ? err.message : String(err)}`;
             }
@@ -1199,7 +1351,7 @@ const plugin = {
             apiBase,
             webBase,
             autoBootNote,
-          };
+          } satisfies SavedPairingResult;
         }
 
         root
@@ -1214,7 +1366,7 @@ const plugin = {
           .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
-          .option("--no-auto-start", "Save this agent but exclude it from future `agents start --all` runs")
+          .option("--auto-start", "Include this agent in future `agents start --all` runs")
           .action(async (opts: {
             agent: string;
             preset?: string;
@@ -1231,21 +1383,34 @@ const plugin = {
             try {
               console.log(`Connecting to Claw of Deceit at ${urls.apiBase}`);
               const saved = await savePairing(opts);
-              const activePid = readActiveHostLock(saved.profileName);
-              if (activePid) {
-                console.log(`Saved binding for ${saved.localName}, but host pid ${activePid} is already running for this profile.`);
-                console.log(`Restart that host or run \`openclaw --profile ${saved.profileName} clawofdeceit agents start --all\` later to load the new agent now.`);
-                console.log("The saved binding will still keep the same agent identity for future reconnects.");
-                return;
-              }
-              await runManagedHost({
-                profileName: saved.profileName,
-                apiBase: saved.apiBase,
-                webBase: saved.webBase,
-                entries: [[saved.localName, saved.binding]],
-              });
+              await keepBindingLiveAfterConnect(saved);
             } catch (err) {
               console.error(`❌ Claw of Deceit connect failed: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
+
+        root
+          .command("migrate-profile")
+          .description("Move saved Claw of Deceit bindings from one OpenClaw profile into another isolated profile")
+          .option("--from <profile>", "Source OpenClaw profile", LEGACY_MIGRATION_SOURCE_PROFILE)
+          .option("--to <profile>", "Target OpenClaw profile")
+          .option("--api <url>", "Override API base URL")
+          .action((opts: { from?: string; to?: string; api?: string }) => {
+            const targetProfileName = String(opts.to || resolveCurrentProfileName()).trim() || resolveCurrentProfileName();
+            try {
+              const result = migrateProfileBindings({
+                fromProfileName: String(opts.from || "").trim(),
+                toProfileName: targetProfileName,
+                apiBase: opts.api || cfg.apiBase || DEFAULT_API_BASE,
+              });
+              console.log(`✅ ${result.note}`);
+              console.log(`Source: ${result.sourceRegistryPath}`);
+              console.log(`Target: ${result.targetRegistryPath}`);
+              if (result.sourceAutoBootNote) console.log(`Source startup cleanup: ${result.sourceAutoBootNote}`);
+              if (result.targetAutoBootNote) console.log(`Target startup cleanup: ${result.targetAutoBootNote}`);
+            } catch (err) {
+              console.error(`❌ Failed to migrate profile bindings: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
             }
           });
@@ -1362,7 +1527,7 @@ const plugin = {
           .option("--path <file>", "Profile file path")
           .option("--api <url>", "Override API base URL")
           .option("--decision-cmd <command>", "Local command that returns a JSON decision for each live Mafia turn")
-          .option("--no-auto-start", "Save this agent but exclude it from future `agents start --all` runs")
+          .option("--auto-start", "Include this agent in future `agents start --all` runs")
           .option("--start", "Start the newly created binding immediately")
           .action(async (opts: {
             agent: string;
@@ -1406,7 +1571,7 @@ const plugin = {
 
             try {
               const entries = opts.all
-                ? listBindingEntries(registry).filter(([, binding]) => binding.autoStart !== false)
+                ? listBindingEntries(registry).filter(([, binding]) => binding.autoStart === true)
                 : (() => {
                     const selected = findBindingEntry(registry, name || registry.defaultAgent || "");
                     return selected ? [[selected.localName, selected.binding] as [string, SavedAgentBinding]] : [];
@@ -1560,6 +1725,19 @@ const plugin = {
       { commands: ["clawofdeceit"] },
     );
   },
+};
+
+export const __test__ = {
+  ISOLATED_PROFILE_NAME,
+  LEGACY_MIGRATION_SOURCE_PROFILE,
+  defaultRegistry,
+  normalizeSavedAgentBinding,
+  normalizeRegistry,
+  readBindingRegistry,
+  getRegistryPath,
+  getLaunchAgentPath,
+  migrateProfileBindings,
+  keepBindingLiveAfterConnect,
 };
 
 export default plugin;

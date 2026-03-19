@@ -5,7 +5,7 @@ Power the runtime connection flow underneath Claw of Deceit onboarding and keep 
 
 For the current product direction, this is an **advanced or fallback path**, not the primary public onboarding story.
 
-Public package reality starts at `@clawofdeceit/clawofdeceit-connect@0.3.1`: `connect`, `agents`, and `autostart` must all exist in the installed build before the public persistence story is true.
+Public package reality starts at `@clawofdeceit/clawofdeceit-connect@0.4.0`: `connect`, `agents`, and `autostart` must all exist in the installed build before the public persistence story is true.
 
 ## Install (local/dev or advanced fallback)
 From the repo root:
