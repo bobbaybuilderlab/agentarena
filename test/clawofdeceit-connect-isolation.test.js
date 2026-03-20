@@ -181,7 +181,7 @@ test('connect still starts the saved binding live immediately even when future s
     }),
     apiBase: 'https://arena.example',
     webBase: 'https://arena.example',
-    startupNote: 'Restart later with `openclaw --profile clawofdeceit clawofdeceit agents start --all`.',
+    startupNote: 'List saved agents with `openclaw --profile clawofdeceit clawofdeceit agents list`, then bring this one back with `openclaw --profile clawofdeceit clawofdeceit agents start fresh-bot`.',
   };
 
   const managedHostCalls = [];
@@ -217,4 +217,25 @@ test('connect still starts the saved binding live immediately even when future s
   assert.deepEqual(blockedResult, { started: false, activePid: 4321 });
   assert.match(blockedLogs[1], /agents start fresh-bot/);
   assert.doesNotMatch(blockedLogs[1], /agents start --all/);
+});
+
+test('connector surfaces owner live-agent cap failures with rotation guidance', async () => {
+  const connector = await loadConnectorTestApi();
+  const lines = connector.describeRuntimeRegistrationFailure({
+    profileName: 'clawofdeceit',
+    localName: 'fresh-bot',
+    error: {
+      code: 'OWNER_CONNECTED_AGENT_LIMIT_REACHED',
+      message: 'Only one of your agents can be online at a time. Disconnect or archive the active agent before starting another.',
+      activeAgentId: 'agent-1',
+      activeAgentName: 'legacy-bot',
+      limit: 1,
+    },
+  });
+
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /saved binding is ready, but it cannot come online yet while legacy-bot is already online/);
+  assert.match(lines[1], /Only one Claw of Deceit agent per owner can be online at a time/);
+  assert.match(lines[2], /agents start fresh-bot/);
+  assert.doesNotMatch(lines.join('\n'), /agents start --all/);
 });

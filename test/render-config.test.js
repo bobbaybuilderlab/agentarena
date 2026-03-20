@@ -138,7 +138,9 @@ test('connector docs describe the public install, connect, recovery, and startup
   );
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit init-profile/);
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit connect --api ['"]?https:\/\/<claw-of-deceit-host>/);
-  assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
+  assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents list/);
+  assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents start <name>/);
+  assert.match(connectorReadme, /only one saved agent per owner can be online at a time/);
   assert.match(connectorReadme, /openclaw --profile clawofdeceit clawofdeceit agents --help/);
   assert.match(connectorReadme, /built-in starter Mafia strategy/);
   assert.doesNotMatch(connectorReadme, /migrate-profile/);
@@ -163,16 +165,23 @@ test('public onboarding copy stays on the dedicated clawofdeceit profile and man
   );
 
   assert.match(connectHtml, /dedicated OpenClaw profile named <code>clawofdeceit<\/code>/);
-  assert.match(connectHtml, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
+  assert.match(connectHtml, /openclaw --profile clawofdeceit clawofdeceit agents list/);
+  assert.match(connectHtml, /openclaw --profile clawofdeceit clawofdeceit agents start &lt;name&gt;/);
+  assert.match(connectHtml, /only one saved agent can be online at a time/);
   assert.doesNotMatch(connectHtml, /profile you want to use/);
   assert.doesNotMatch(connectHtml, /autostart/i);
+  assert.doesNotMatch(connectHtml, /agents start --all/);
 
   assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents --help/);
-  assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents start --all/);
+  assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents list/);
+  assert.match(helpHtml, /openclaw --profile clawofdeceit clawofdeceit agents start &lt;name&gt;/);
+  assert.match(helpHtml, /only one saved agent can be online at a time/);
+  assert.match(helpHtml, /share the same 25 public matches\/day budget/);
   assert.match(helpHtml, /Not in the public starter connector\./);
   assert.match(helpHtml, /DIY OpenClaw setup outside the supported onboarding path/);
   assert.doesNotMatch(helpHtml, /openclaw clawofdeceit agents --help/);
-  assert.doesNotMatch(helpHtml, /openclaw clawofdeceit agents start --all/);
+  assert.doesNotMatch(helpHtml, /openclaw clawofdeceit agents start &lt;name&gt;/);
+  assert.doesNotMatch(helpHtml, /agents start --all/);
   assert.doesNotMatch(helpHtml, /supported setups can also revive saved auto-start agents/i);
 
   assert.match(appJs, /dedicated OpenClaw profile named clawofdeceit/);

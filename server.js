@@ -462,6 +462,7 @@ const activeAgentMatchRooms = new Set();
 const completedMatchRecords = [];
 const publicReadCache = new Map();
 const PUBLIC_MATCH_DAILY_LIMIT = Math.max(0, Math.trunc(Number(process.env.PUBLIC_MATCH_DAILY_LIMIT || 25)));
+const OWNER_CONNECTED_AGENT_LIMIT = Math.max(0, Math.trunc(Number(process.env.OWNER_CONNECTED_AGENT_LIMIT || 1)));
 const PUBLIC_MATCHES_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_MATCHES_CACHE_TTL_MS || 15_000));
 const PUBLIC_LEADERBOARD_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_LEADERBOARD_CACHE_TTL_MS || 10_000));
 const PUBLIC_STATS_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_STATS_CACHE_TTL_MS || 15_000));
@@ -1219,6 +1220,24 @@ io.on('connection', (socket) => {
         return cb?.({ ok: false, error: { code: 'AGENT_ARCHIVED', message: 'agent archived' } });
       }
       authMode = 'legacy_connect_session';
+    }
+
+    const ownerUserId = String(agent?.ownerUserId || '').trim();
+    const activeOwnedAgents = ownerUserId
+      ? listConnectedOwnedAgents(ownerUserId, { excludeAgentId: agent.id })
+      : [];
+    if (ownerUserId && activeOwnedAgents.length >= OWNER_CONNECTED_AGENT_LIMIT) {
+      const activeAgent = activeOwnedAgents[0] || null;
+      return cb?.({
+        ok: false,
+        error: {
+          code: 'OWNER_CONNECTED_AGENT_LIMIT_REACHED',
+          message: buildOwnerConnectedAgentLimitMessage(OWNER_CONNECTED_AGENT_LIMIT),
+          limit: OWNER_CONNECTED_AGENT_LIMIT,
+          activeAgentId: activeAgent?.id || null,
+          activeAgentName: activeAgent?.name || null,
+        },
+      });
     }
 
     const prior = getAgentRuntime(agent.id);
@@ -2847,6 +2866,36 @@ async function listOwnedAgentsForUser(ownerUserId) {
   for (const record of persistedAgents) mergePersistedAgentRecord(record);
   return [...agentProfiles.values()]
     .filter((agent) => String(agent?.ownerUserId || '').trim() === cleanUserId);
+}
+
+function listConnectedOwnedAgents(ownerUserId, { excludeAgentId = '' } = {}) {
+  const cleanUserId = String(ownerUserId || '').trim();
+  const excludedAgentId = String(excludeAgentId || '').trim();
+  if (!cleanUserId) return [];
+
+  return [...agentProfiles.values()]
+    .filter((agent) => {
+      const agentId = String(agent?.id || '').trim();
+      if (!agentId || agentId === excludedAgentId) return false;
+      if (String(agent?.ownerUserId || '').trim() !== cleanUserId) return false;
+      return Boolean(getAgentRuntime(agentId)?.connected);
+    })
+    .sort((a, b) => {
+      const aConnectedAt = Number(getAgentRuntime(a.id)?.connectedAt || 0);
+      const bConnectedAt = Number(getAgentRuntime(b.id)?.connectedAt || 0);
+      return aConnectedAt - bConnectedAt || String(a?.name || a?.id || '').localeCompare(String(b?.name || b?.id || ''));
+    });
+}
+
+function buildOwnerConnectedAgentLimitMessage(limit = 1) {
+  const numericLimit = Math.max(0, Math.trunc(Number(limit || 0)));
+  if (numericLimit === 0) {
+    return 'No additional agent runtimes can be started right now.';
+  }
+  if (numericLimit === 1) {
+    return 'Only one of your agents can be online at a time. Disconnect or archive the active agent before starting another.';
+  }
+  return `Only ${numericLimit} of your agents can be online at a time. Disconnect or archive an active agent before starting another.`;
 }
 
 function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {

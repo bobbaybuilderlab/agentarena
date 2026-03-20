@@ -6,7 +6,7 @@ process.env.MAFIA_NIGHT_MS = '80';
 process.env.MAFIA_DISCUSSION_MS = '80';
 process.env.MAFIA_VOTING_MS = '80';
 process.env.MAFIA_DISCUSSION_TURN_MS = '30';
-process.env.AUTH_RATE_LIMIT_MAX = '20';
+process.env.AUTH_RATE_LIMIT_MAX = '200';
 process.env.OPS_RATE_LIMIT_MAX = '50';
 process.env.OPENCLAW_CREATE_RATE_LIMIT_MAX = '200';
 process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX = '200';
@@ -132,9 +132,8 @@ async function createSiteSessionData(url) {
   return authData.session;
 }
 
-async function createRuntimeAgent(url, name, { sessionToken } = {}) {
+async function createSavedAgent(url, name, { sessionToken } = {}) {
   assert.ok(sessionToken, 'sessionToken is required for connect-session creation');
-  const spokenDiscussionDays = new Set();
   const connectSessionRes = await fetch(`${url}/api/openclaw/connect-session`, {
     method: 'POST',
     headers: {
@@ -164,13 +163,24 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   assert.equal(callbackData.agent.persona.presetId, 'pragmatic');
   assert.equal(callbackData.agent.persona.style, 'witty');
 
+  return {
+    agentId: callbackData.agent.id,
+    agentName: callbackData.agent.name || name,
+    legacyToken: connect.id,
+    legacyProof: callbackProof,
+    runtimeCredential: callbackData.runtimeCredential || null,
+  };
+}
+
+async function connectSavedAgent(url, saved, { registerWith = 'legacy_connect_session' } = {}) {
+  const spokenDiscussionDays = new Set();
   const socket = ioc(url, { reconnection: false, autoUnref: true });
   let assignedRoomId = null;
   let playerId = null;
 
   socket.on('mafia:state', (state) => {
     assignedRoomId = assignedRoomId || state.id;
-    const me = (state.players || []).find((entry) => entry.name === name);
+    const me = (state.players || []).find((entry) => entry.name === saved.agentName);
     playerId = playerId || me?.id || null;
   });
 
@@ -213,22 +223,41 @@ async function createRuntimeAgent(url, name, { sessionToken } = {}) {
   });
 
   await once(socket, 'connect');
-  const register = await new Promise((resolve) => {
-    socket.emit('agent:runtime:register', {
-      token: connect.id,
-      proof: callbackProof,
-    }, resolve);
-  });
-  assert.equal(register.ok, true);
+  const registerPayload = registerWith === 'runtime_secret'
+    ? {
+        agentId: saved.agentId,
+        runtimeSecret: saved.runtimeCredential?.runtimeSecret,
+      }
+    : {
+        token: saved.legacyToken,
+        proof: saved.legacyProof,
+      };
+  const register = await emitAck(socket, 'agent:runtime:register', registerPayload);
 
   return {
     socket,
-    agentId: callbackData.agent.id,
-    legacyToken: connect.id,
-    legacyProof: callbackProof,
-    runtimeCredential: callbackData.runtimeCredential || null,
+    register,
+    agentId: saved.agentId,
+    agentName: saved.agentName,
+    legacyToken: saved.legacyToken,
+    legacyProof: saved.legacyProof,
+    runtimeCredential: saved.runtimeCredential || null,
     getAssignedRoomId: () => assignedRoomId,
     getPlayerId: () => playerId,
+  };
+}
+
+async function createRuntimeAgent(url, name, { sessionToken } = {}) {
+  const saved = await createSavedAgent(url, name, { sessionToken });
+  const runtime = await connectSavedAgent(url, saved);
+  assert.equal(runtime.register.ok, true);
+  return runtime;
+}
+
+function buildAgentRuntimeAuthHeaders(savedAgent) {
+  return {
+    Authorization: `Bearer ${savedAgent.runtimeCredential?.runtimeSecret || ''}`,
+    'X-OpenClaw-Agent-Id': savedAgent.agentId,
   };
 }
 
@@ -269,6 +298,201 @@ test('runtime secret can reconnect after the onboarding connect session expires'
       socket.disconnect();
     } finally {
       agent.socket.disconnect();
+    }
+  });
+});
+
+test('one owner can only keep one saved agent online at a time', async () => {
+  await withServer(async (url) => {
+    const session = await createSiteSessionData(url);
+    const firstSaved = await createSavedAgent(url, 'OwnerAlpha', {
+      sessionToken: session.token,
+    });
+    const secondSaved = await createSavedAgent(url, 'OwnerBeta', {
+      sessionToken: session.token,
+    });
+
+    const firstRuntime = await connectSavedAgent(url, firstSaved, {
+      registerWith: 'runtime_secret',
+    });
+    const secondRuntime = await connectSavedAgent(url, secondSaved, {
+      registerWith: 'runtime_secret',
+    });
+
+    try {
+      assert.equal(firstRuntime.register.ok, true);
+      assert.equal(secondRuntime.register.ok, false);
+      assert.equal(secondRuntime.register.error.code, 'OWNER_CONNECTED_AGENT_LIMIT_REACHED');
+      assert.equal(secondRuntime.register.error.limit, 1);
+      assert.equal(secondRuntime.register.error.activeAgentId, firstSaved.agentId);
+      assert.equal(secondRuntime.register.error.activeAgentName, firstSaved.agentName);
+      assert.equal(liveAgentRuntimes.get(firstSaved.agentId)?.connected, true);
+      assert.notEqual(liveAgentRuntimes.get(secondSaved.agentId)?.connected, true);
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
+    }
+  });
+});
+
+test('different owners can each bring one saved agent online', async () => {
+  await withServer(async (url) => {
+    const firstSession = await createSiteSessionData(url);
+    const secondSession = await createSiteSessionData(url);
+    const firstSaved = await createSavedAgent(url, 'OwnerOne', {
+      sessionToken: firstSession.token,
+    });
+    const secondSaved = await createSavedAgent(url, 'OwnerTwo', {
+      sessionToken: secondSession.token,
+    });
+
+    const firstRuntime = await connectSavedAgent(url, firstSaved, {
+      registerWith: 'runtime_secret',
+    });
+    const secondRuntime = await connectSavedAgent(url, secondSaved, {
+      registerWith: 'runtime_secret',
+    });
+
+    try {
+      assert.equal(firstRuntime.register.ok, true);
+      assert.equal(secondRuntime.register.ok, true);
+      assert.equal(liveAgentRuntimes.get(firstSaved.agentId)?.connected, true);
+      assert.equal(liveAgentRuntimes.get(secondSaved.agentId)?.connected, true);
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
+    }
+  });
+});
+
+test('reconnecting the same saved agent replaces the live socket without tripping the owner cap', async () => {
+  await withServer(async (url) => {
+    const session = await createSiteSessionData(url);
+    const saved = await createSavedAgent(url, 'ReconnectSame', {
+      sessionToken: session.token,
+    });
+    const firstRuntime = await connectSavedAgent(url, saved, {
+      registerWith: 'runtime_secret',
+    });
+    assert.equal(firstRuntime.register.ok, true);
+
+    const firstDisconnected = once(firstRuntime.socket, 'disconnect').catch(() => null);
+    const secondRuntime = await connectSavedAgent(url, saved, {
+      registerWith: 'runtime_secret',
+    });
+
+    try {
+      assert.equal(secondRuntime.register.ok, true);
+      await firstDisconnected;
+      const liveRuntime = liveAgentRuntimes.get(saved.agentId);
+      assert.equal(liveRuntime?.connected, true);
+      assert.equal(liveRuntime?.socketId, secondRuntime.socket.id);
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
+    }
+  });
+});
+
+test('disconnecting the live agent frees the owner slot for another saved agent', async () => {
+  await withServer(async (url) => {
+    const session = await createSiteSessionData(url);
+    const firstSaved = await createSavedAgent(url, 'RotateAlpha', {
+      sessionToken: session.token,
+    });
+    const secondSaved = await createSavedAgent(url, 'RotateBeta', {
+      sessionToken: session.token,
+    });
+    const firstRuntime = await connectSavedAgent(url, firstSaved, {
+      registerWith: 'runtime_secret',
+    });
+    assert.equal(firstRuntime.register.ok, true);
+
+    firstRuntime.socket.disconnect();
+    await waitFor(() => liveAgentRuntimes.get(firstSaved.agentId)?.connected === false, 3000, 25);
+
+    const secondRuntime = await connectSavedAgent(url, secondSaved, {
+      registerWith: 'runtime_secret',
+    });
+    try {
+      assert.equal(secondRuntime.register.ok, true);
+      assert.equal(liveAgentRuntimes.get(secondSaved.agentId)?.connected, true);
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
+    }
+  });
+});
+
+test('archiving a live agent frees the owner slot for another saved agent', async () => {
+  await withServer(async (url) => {
+    const session = await createSiteSessionData(url);
+    const firstSaved = await createSavedAgent(url, 'ArchiveAlpha', {
+      sessionToken: session.token,
+    });
+    const secondSaved = await createSavedAgent(url, 'ArchiveBeta', {
+      sessionToken: session.token,
+    });
+    const firstRuntime = await connectSavedAgent(url, firstSaved, {
+      registerWith: 'runtime_secret',
+    });
+    assert.equal(firstRuntime.register.ok, true);
+
+    const archiveRes = await fetch(`${url}/api/openclaw/agents/${encodeURIComponent(firstSaved.agentId)}/archive`, {
+      method: 'POST',
+      headers: buildAgentRuntimeAuthHeaders(firstSaved),
+    });
+    const archiveData = await archiveRes.json();
+    assert.equal(archiveRes.status, 200);
+    assert.equal(archiveData.ok, true);
+    await waitFor(() => liveAgentRuntimes.get(firstSaved.agentId)?.connected === false, 3000, 25);
+
+    const secondRuntime = await connectSavedAgent(url, secondSaved, {
+      registerWith: 'runtime_secret',
+    });
+    try {
+      assert.equal(secondRuntime.register.ok, true);
+      assert.equal(agentProfiles.get(firstSaved.agentId)?.lifecycleState, 'archived');
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
+    }
+  });
+});
+
+test('rotating a live agent runtime credential frees the owner slot for another saved agent', async () => {
+  await withServer(async (url) => {
+    const session = await createSiteSessionData(url);
+    const firstSaved = await createSavedAgent(url, 'RotateCredAlpha', {
+      sessionToken: session.token,
+    });
+    const secondSaved = await createSavedAgent(url, 'RotateCredBeta', {
+      sessionToken: session.token,
+    });
+    const firstRuntime = await connectSavedAgent(url, firstSaved, {
+      registerWith: 'runtime_secret',
+    });
+    assert.equal(firstRuntime.register.ok, true);
+
+    const rotateRes = await fetch(`${url}/api/agents/${encodeURIComponent(firstSaved.agentId)}/runtime-credential/rotate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+      },
+    });
+    const rotateData = await rotateRes.json();
+    assert.equal(rotateRes.status, 200);
+    assert.equal(rotateData.ok, true);
+    await waitFor(() => liveAgentRuntimes.get(firstSaved.agentId)?.connected === false, 3000, 25);
+
+    const secondRuntime = await connectSavedAgent(url, secondSaved, {
+      registerWith: 'runtime_secret',
+    });
+    try {
+      assert.equal(secondRuntime.register.ok, true);
+    } finally {
+      secondRuntime.socket.disconnect();
+      firstRuntime.socket.disconnect();
     }
   });
 });
@@ -514,21 +738,15 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
   await withServer(async (url) => {
     const agents = [];
     try {
-      const authRes = await fetch(`${url}/api/auth/session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const authData = await authRes.json();
-      assert.equal(authData.ok, true);
-      const sessionToken = authData.session.token;
-      assert.ok(sessionToken);
-
       const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
       for (const name of names) {
-        agents.push(await createRuntimeAgent(url, name, {
-          sessionToken,
-        }));
+        const session = await createSiteSessionData(url);
+        agents.push({
+          ...(await createRuntimeAgent(url, name, {
+            sessionToken: session.token,
+          })),
+          sessionToken: session.token,
+        });
       }
 
       const seatedRoomId = await waitFor(async () => {
@@ -611,14 +829,14 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(typeof statsData.mafiasCaught, 'number');
 
       const mineRes = await fetch(`${url}/api/agents/mine`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${agents[5].sessionToken}` },
       });
       const mineData = await mineRes.json();
       assert.equal(mineData.ok, true);
       assert.equal(mineData.session.agentId, agents[5].agentId);
       assert.equal(mineData.session.primaryAgentId, agents[5].agentId);
       assert.equal(Array.isArray(mineData.agents), true);
-      assert.equal(mineData.agents.length, 6);
+      assert.equal(mineData.agents.length, 1);
       assert.equal(mineData.selectedAgentId, agents[5].agentId);
       assert.equal(mineData.agent.id, agents[5].agentId);
       assert.match(mineData.agent.arenaUrl, /\/connect\.html\?agentId=/);
@@ -631,7 +849,7 @@ test('six runtime-connected agents auto-seat into a live Mafia match and finish 
       assert.equal(typeof mineData.stats.nightKillCredits, 'number');
 
       const mineMatchesRes = await fetch(`${url}/api/matches/mine?limit=5`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${agents[5].sessionToken}` },
       });
       const mineMatchesData = await mineMatchesRes.json();
       assert.equal(mineMatchesData.ok, true);

@@ -45,6 +45,20 @@ type AgentArenaStatus = {
   activeRoomId?: string | null;
 };
 
+type RuntimeRegistrationError = {
+  code?: string;
+  message?: string;
+  limit?: number;
+  activeAgentId?: string | null;
+  activeAgentName?: string | null;
+};
+
+type RuntimeRegistrationResponse = {
+  ok?: boolean;
+  error?: RuntimeRegistrationError;
+  arena?: AgentArenaStatus;
+};
+
 type DecisionRequestPayload = {
   kind: "night_request" | "discussion_request" | "vote_request";
   roomId: string;
@@ -632,6 +646,26 @@ async function printSavedAgentsList(profileName: string, apiBase: string) {
   }
 }
 
+function describeRuntimeRegistrationFailure(args: {
+  profileName: string;
+  localName: string;
+  error?: RuntimeRegistrationError | null;
+}) {
+  const error = args.error || {};
+  if (error.code === "OWNER_CONNECTED_AGENT_LIMIT_REACHED") {
+    const activeAgentName = String(error.activeAgentName || "").trim();
+    const activeLabel = activeAgentName
+      ? ` while ${activeAgentName} is already online`
+      : " while another saved agent is already online";
+    return [
+      `[${args.localName}] saved binding is ready, but it cannot come online yet${activeLabel}.`,
+      `[${args.localName}] Only one Claw of Deceit agent per owner can be online at a time.`,
+      `[${args.localName}] Stop the current host or archive the active agent, then run \`openclaw --profile ${args.profileName} clawofdeceit agents start ${args.localName}\`.`,
+    ];
+  }
+  return [`[${args.localName}] runtime registration failed: ${error.message || "unknown error"}`];
+}
+
 function describeStrategyMode() {
   return "built-in starter Mafia strategy";
 }
@@ -752,10 +786,18 @@ async function runManagedHost(args: {
       socket.emit("agent:runtime:register", {
         agentId: binding.agentId,
         runtimeSecret: binding.agentToken,
-      }, (response: { ok?: boolean; error?: { message?: string }; arena?: AgentArenaStatus }) => {
+      }, (response: RuntimeRegistrationResponse) => {
         if (!response?.ok) {
-          console.error(`[${localName}] runtime registration failed: ${response?.error?.message || "unknown error"}`);
-          updateSavedBinding(args.profileName, localName, { status: "auth_failed" });
+          for (const line of describeRuntimeRegistrationFailure({
+            profileName: args.profileName,
+            localName,
+            error: response?.error,
+          })) {
+            console.error(line);
+          }
+          updateSavedBinding(args.profileName, localName, {
+            status: response?.error?.code === "OWNER_CONNECTED_AGENT_LIMIT_REACHED" ? "offline" : "auth_failed",
+          });
           return;
         }
         console.log(`[${localName}] runtime connected as ${binding.serverName} (${describeStrategyMode()})`);
@@ -900,7 +942,7 @@ const plugin = {
           });
           const localName = sanitizeBindingName(created.response.agent?.name || opts.agent || created.binding.serverName);
           saveBinding(profileName, apiBase, localName, created.binding);
-          const startupNote = `Restart the same saved agent later with \`openclaw --profile ${profileName} clawofdeceit agents start --all\`.`;
+          const startupNote = `List saved agents with \`openclaw --profile ${profileName} clawofdeceit agents list\`, then bring this one back with \`openclaw --profile ${profileName} clawofdeceit agents start ${localName}\`.`;
 
           console.log("✅ Bound permanent Claw of Deceit agent");
           console.log(`Profile: ${profileName}`);
@@ -1204,7 +1246,7 @@ const plugin = {
               await archiveManagedAgent(apiBase, selected.binding);
               removeSavedBinding(profileName, selected.localName);
               console.log(`✅ Archived ${selected.binding.serverName} and removed local binding ${selected.localName}`);
-              console.log(`Restart any remaining saved agents later with \`openclaw --profile ${profileName} clawofdeceit agents start --all\`.`);
+              console.log(`List any remaining saved agents with \`openclaw --profile ${profileName} clawofdeceit agents list\`, then start one with \`openclaw --profile ${profileName} clawofdeceit agents start <name>\`.`);
             } catch (err) {
               console.error(`❌ Failed to delete saved agent: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
@@ -1225,6 +1267,7 @@ export const __test__ = {
   readBindingRegistry,
   getRegistryPath,
   migrateProfileBindings,
+  describeRuntimeRegistrationFailure,
   keepBindingLiveAfterConnect,
 };
 

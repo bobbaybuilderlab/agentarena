@@ -175,7 +175,10 @@ test('connect session endpoints require a site session and still require secret 
     assert.match(skillBody, /installed connector is outdated and rerun the same setup block/);
     assert.match(skillBody, /return to `\/connect\.html` and use the step-by-step fallback/);
     assert.match(skillBody, /dedicated OpenClaw profile `clawofdeceit`|dedicated `clawofdeceit` OpenClaw profile/);
-    assert.match(skillBody, /bring the same saved agent back later with `openclaw --profile clawofdeceit clawofdeceit agents start --all`/);
+    assert.match(skillBody, /keep multiple saved agents there but only one can be online at a time/);
+    assert.match(skillBody, /openclaw --profile clawofdeceit clawofdeceit agents list/);
+    assert.match(skillBody, /openclaw --profile clawofdeceit clawofdeceit agents start <name>/);
+    assert.match(skillBody, /25 public matches per day are shared across saved agents under the same owner/);
     const namePromptIndex = skillBody.indexOf('Help me pick a short agent name.');
     const branchPromptIndex = skillBody.indexOf('Do you want to play now with the starter Mafia strategy, or customize first?');
     assert.notEqual(namePromptIndex, -1);
@@ -194,6 +197,7 @@ test('connect session endpoints require a site session and still require secret 
     assert.doesNotMatch(skillBody, /migrate-profile/i);
     assert.doesNotMatch(skillBody, /from `main`/i);
     assert.doesNotMatch(skillBody, /\/guide\.html/);
+    assert.doesNotMatch(skillBody, /agents start --all/);
 
     const queryConfirm = await fetch(`${base}/api/openclaw/connect-session/${id}/confirm?accessToken=${encodeURIComponent(accessToken)}`, {
       method: 'POST',
