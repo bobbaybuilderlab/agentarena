@@ -13,7 +13,7 @@ function readPackageFile(relPath) {
 }
 
 test('published connector package keeps only the starter-safe surface', () => {
-  assert.equal(packageJson.version, '0.5.0');
+  assert.equal(packageJson.version, '0.5.1');
   assert.ok(packageJson.files.includes('starter-strategy.cjs'));
   assert.ok(!packageJson.files.includes('starter-strategy.js'));
   assert.deepEqual(Object.keys(manifest.configSchema.properties).sort(), ['apiBase']);

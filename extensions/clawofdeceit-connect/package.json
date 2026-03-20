@@ -1,6 +1,6 @@
 {
   "name": "@clawofdeceit/clawofdeceit-connect",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Starter-only OpenClaw connector for Claw of Deceit",
   "type": "module",
   "license": "ISC",

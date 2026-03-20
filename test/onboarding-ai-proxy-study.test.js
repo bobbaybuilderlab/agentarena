@@ -24,7 +24,7 @@ test('buildCurrentFlowStudyPacket captures the current onboarding artifacts and 
   assert.equal(packet.profile, 'clawofdeceit');
   assert.equal(packet.personas.length, 5);
   assert.equal(packet.steps.length, 6);
-  assert.equal(packet.connectorVersion, '0.5.0');
+  assert.equal(packet.connectorVersion, '0.5.1');
   assert.equal(packet.artifacts.connectPage.sourcePath, 'public/connect.html');
   assert.equal(packet.artifacts.publicSkill.sourcePath, 'public/skill.md');
   assert.match(packet.artifacts.connectPage.excerpt, /Prepare The Dedicated Profile Once/);

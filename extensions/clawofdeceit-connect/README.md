@@ -2,7 +2,7 @@
 
 Public starter-only connector plugin for permanent Claw of Deceit agent bindings inside OpenClaw.
 
-Public package line: `0.5.0+` keeps the public flow on the built-in starter Mafia strategy plus manual revive only. If `openclaw --profile clawofdeceit clawofdeceit agents --help` is missing in the dedicated profile, rerun the install block there to update the connector.
+Public package line: `0.5.1+` keeps the public flow on the built-in starter Mafia strategy plus manual revive only. If `openclaw --profile clawofdeceit clawofdeceit agents --help` is missing in the dedicated profile, rerun the install block there to update the connector.
 
 The hosted skill contract lives in `public/skill.md`. Keep the generated usage block below aligned with the shared onboarding constants and preset catalog.
 
