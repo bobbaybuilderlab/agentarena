@@ -8,6 +8,9 @@ process.env.MAFIA_VOTING_MS = '80';
 process.env.MAFIA_DISCUSSION_TURN_MS = '30';
 process.env.AUTH_RATE_LIMIT_MAX = '20';
 process.env.OPS_RATE_LIMIT_MAX = '50';
+process.env.OPENCLAW_CREATE_RATE_LIMIT_MAX = '200';
+process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX = '200';
+process.env.OPENCLAW_STATUS_RATE_LIMIT_MAX = '200';
 process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
 
 const {
@@ -28,6 +31,10 @@ const {
   resetPlayTelemetry,
   resetAgentArenaRuntime,
 } = require('../server');
+const {
+  createAnonymousUser,
+  consumeUserDailyMatchQuota,
+} = require('../server/db');
 
 const syntheticSocketIds = new Set();
 
@@ -81,12 +88,13 @@ function emitAck(socket, eventName, payload) {
   });
 }
 
-function addQueuedTestAgent(id, name, connectedAt) {
+function addQueuedTestAgent(id, name, connectedAt, { ownerUserId = null } = {}) {
   const agent = {
     id,
     name,
     deployed: true,
     owner: `owner-${id}`,
+    ownerUserId,
   };
   agentProfiles.set(id, agent);
   const socketId = `sock-${id}`;
@@ -109,6 +117,19 @@ function addQueuedTestAgent(id, name, connectedAt) {
     lastSeenAt: connectedAt,
   });
   return agent;
+}
+
+async function createSiteSessionData(url) {
+  const authRes = await fetch(`${url}/api/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const authData = await authRes.json();
+  assert.equal(authData.ok, true);
+  assert.ok(authData.session?.token);
+  assert.ok(authData.session?.userId);
+  return authData.session;
 }
 
 async function createRuntimeAgent(url, name, { sessionToken } = {}) {
@@ -252,14 +273,68 @@ test('runtime secret can reconnect after the onboarding connect session expires'
   });
 });
 
+test('connect callback rejects sessions missing owner binding', async () => {
+  await withServer(async (url) => {
+    const connectId = 'ownerless-connect-session';
+    connectSessions.set(connectId, {
+      id: connectId,
+      email: 'anonymous',
+      status: 'pending_confirmation',
+      callbackUrl: `${url}/api/openclaw/callback`,
+      callbackProof: 'ownerless-proof',
+      accessToken: 'ownerless-access',
+      accessTokenHash: '',
+      callbackProofHash: '',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      ownerUserId: null,
+      agentId: null,
+      agentName: null,
+      connectedAt: null,
+    });
+
+    const callbackRes = await fetch(`${url}/api/openclaw/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: connectId,
+        proof: 'ownerless-proof',
+        agentName: 'OwnerlessBot',
+        style: 'witty',
+      }),
+    });
+    const callbackData = await callbackRes.json();
+
+    assert.equal(callbackRes.status, 409);
+    assert.equal(callbackData.ok, false);
+    assert.equal(callbackData.code, 'CONNECT_SESSION_OWNER_REQUIRED');
+    assert.equal(agentProfiles.size, 0);
+    assert.equal(connectSessions.get(connectId)?.status, 'pending_confirmation');
+  });
+});
+
 test('public arena match completion updates recency and changes the next batch', async () => {
   await withServer(async (url) => {
     void url;
 
-    const repeatGroup = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
-      .map((name, index) => addQueuedTestAgent(`history-${index + 1}`, name, index + 1));
-    const freshGroup = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo']
-      .map((name, index) => addQueuedTestAgent(`history-fresh-${index + 1}`, name, repeatGroup.length + index + 1));
+    const repeatNames = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
+    const freshNames = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo'];
+    const ownerIds = Array.from(
+      { length: repeatNames.length + freshNames.length },
+      (_unused, index) => `history-owner-${Date.now()}-${index + 1}`,
+    );
+    for (const ownerUserId of ownerIds) {
+      await createAnonymousUser(ownerUserId);
+    }
+
+    const repeatGroup = repeatNames
+      .map((name, index) => addQueuedTestAgent(`history-${index + 1}`, name, index + 1, {
+        ownerUserId: ownerIds[index],
+      }));
+    const freshGroup = freshNames
+      .map((name, index) => addQueuedTestAgent(`history-fresh-${index + 1}`, name, repeatGroup.length + index + 1, {
+        ownerUserId: ownerIds[repeatGroup.length + index],
+      }));
 
     const firstRoom = createPublicArenaMafiaRoom(repeatGroup);
     assert.ok(firstRoom);
@@ -290,8 +365,18 @@ test('public arena queue does not double-book agents across simultaneous room cr
   await withServer(async (url) => {
     void url;
 
+    const ownerIds = Array.from(
+      { length: 12 },
+      (_unused, index) => `pool-owner-${Date.now()}-${index + 1}`,
+    );
+    for (const ownerUserId of ownerIds) {
+      await createAnonymousUser(ownerUserId);
+    }
+
     const agents = Array.from({ length: 12 }, (_unused, index) => (
-      addQueuedTestAgent(`pool-${index + 1}`, `Agent ${index + 1}`, index + 1)
+      addQueuedTestAgent(`pool-${index + 1}`, `Agent ${index + 1}`, index + 1, {
+        ownerUserId: ownerIds[index],
+      })
     ));
     await processPublicArenaQueue();
 
@@ -301,6 +386,127 @@ test('public arena queue does not double-book agents across simultaneous room cr
     const seatedAgentIds = rooms.flatMap((room) => room.players.map((player) => player.agentId));
     assert.equal(seatedAgentIds.length, agents.length);
     assert.equal(new Set(seatedAgentIds).size, agents.length);
+  });
+});
+
+test('over-cap owners stay connected but are skipped by the public arena queue', async () => {
+  await withServer(async (url) => {
+    const agents = [];
+    try {
+      const blockedSession = await createSiteSessionData(url);
+      for (let index = 0; index < 25; index += 1) {
+        await consumeUserDailyMatchQuota(blockedSession.userId);
+      }
+
+      const blockedAgent = await createRuntimeAgent(url, 'BlockedBot', {
+        sessionToken: blockedSession.token,
+      });
+      agents.push({ ...blockedAgent, sessionToken: blockedSession.token, userId: blockedSession.userId });
+
+      const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
+      for (const name of names) {
+        const session = await createSiteSessionData(url);
+        const agent = await createRuntimeAgent(url, name, {
+          sessionToken: session.token,
+        });
+        agents.push({ ...agent, sessionToken: session.token, userId: session.userId });
+      }
+
+      const activeRoom = await waitFor(() => (
+        [...mafiaRooms.values()].find((room) => room.publicArena && room.status === 'in_progress') || null
+      ), 4000, 25);
+      assert.ok(activeRoom, 'expected an active public arena room');
+
+      const seatedAgentIds = new Set((activeRoom.players || []).map((player) => player.agentId || player.userId));
+      assert.equal(seatedAgentIds.has(blockedAgent.agentId), false);
+
+      const mineRes = await fetch(`${url}/api/agents/mine`, {
+        headers: { Authorization: `Bearer ${blockedSession.token}` },
+      });
+      const mineData = await mineRes.json();
+      assert.equal(mineData.ok, true);
+      assert.equal(mineData.quota.dailyLimit, 25);
+      assert.equal(mineData.quota.used, 25);
+      assert.equal(mineData.quota.remaining, 0);
+      assert.equal(mineData.quota.blocked, true);
+      assert.equal(mineData.agent.arena.queueStatus, 'daily_limit_reached');
+      assert.equal(liveAgentRuntimes.get(blockedAgent.agentId)?.connected, true);
+    } finally {
+      agents.forEach(({ socket }) => socket.disconnect());
+    }
+  });
+});
+
+test('public read cache invalidates after a newly recorded match', async (t) => {
+  await withServer(async (url) => {
+    const agents = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot']
+      .map((name, index) => addQueuedTestAgent(`cache-${index + 1}`, name, index + 1));
+
+    const firstRoom = createPublicArenaMafiaRoom(agents);
+    assert.ok(firstRoom);
+    firstRoom.status = 'finished';
+    firstRoom.phase = 'finished';
+    firstRoom.winner = 'town';
+    firstRoom.finishedAt = Math.max(Date.now(), Number(firstRoom.startedAt || 0) + 1000);
+    firstRoom._phaseScheduleKey = null;
+    firstRoom._discussionTurnKey = null;
+    firstRoom.phaseEndsAt = null;
+    firstRoom.liveAgentPromptKey = null;
+    recordFirstMatchCompletion('mafia', firstRoom.id);
+
+    const trackedAgentId = agents[0].id;
+    const firstSnapshot = await waitFor(async () => {
+      const statsRes = await fetch(`${url}/api/stats`);
+      const stats = await statsRes.json();
+      const leaderboardRes = await fetch(`${url}/api/leaderboard?window=12h&limit=25`);
+      const leaderboard = await leaderboardRes.json();
+      const trackedAgent = (leaderboard.topAgents || []).find((entry) => entry.id === trackedAgentId);
+      return Number(stats.totalGames || 0) >= 1 && trackedAgent
+        ? { stats, leaderboard, trackedAgent }
+        : null;
+    }, 4000, 50);
+    assert.ok(firstSnapshot, 'expected the first completed match to persist');
+
+    if (firstSnapshot.stats.source !== 'database' || firstSnapshot.leaderboard.source !== 'database') {
+      t.skip('public read cache only applies to database-backed leaderboard and stats responses');
+      return;
+    }
+
+    const firstStatsRes = await fetch(`${url}/api/stats`);
+    const firstStats = await firstStatsRes.json();
+    const firstLeaderboardRes = await fetch(`${url}/api/leaderboard?window=12h&limit=25`);
+    const firstLeaderboard = await firstLeaderboardRes.json();
+    const firstTrackedAgent = (firstLeaderboard.topAgents || []).find((entry) => entry.id === trackedAgentId);
+    assert.ok(firstTrackedAgent);
+    assert.equal(Number(firstStats.totalGames || 0), Number(firstSnapshot.stats.totalGames || 0));
+    assert.equal(Number(firstTrackedAgent.gamesPlayed || 0), Number(firstSnapshot.trackedAgent.gamesPlayed || 0));
+
+    const secondRoom = createPublicArenaMafiaRoom(agents);
+    assert.ok(secondRoom, 'expected to create a second public arena room');
+    secondRoom.status = 'finished';
+    secondRoom.phase = 'finished';
+    secondRoom.winner = 'mafia';
+    secondRoom.finishedAt = Math.max(Date.now(), Number(secondRoom.startedAt || 0) + 1000);
+    secondRoom._phaseScheduleKey = null;
+    secondRoom._discussionTurnKey = null;
+    secondRoom.phaseEndsAt = null;
+    secondRoom.liveAgentPromptKey = null;
+    recordFirstMatchCompletion('mafia', secondRoom.id);
+
+    const secondSnapshot = await waitFor(async () => {
+      const statsRes = await fetch(`${url}/api/stats`);
+      const stats = await statsRes.json();
+      const leaderboardRes = await fetch(`${url}/api/leaderboard?window=12h&limit=25`);
+      const leaderboard = await leaderboardRes.json();
+      const trackedAgent = (leaderboard.topAgents || []).find((entry) => entry.id === trackedAgentId);
+      return Number(stats.totalGames || 0) >= Number(firstStats.totalGames || 0) + 1
+        && Number(trackedAgent?.gamesPlayed || 0) >= Number(firstTrackedAgent.gamesPlayed || 0) + 1
+        ? { stats, leaderboard, trackedAgent }
+        : null;
+    }, 4000, 50);
+    assert.ok(secondSnapshot, 'expected cache invalidation to expose the newly recorded match');
+    assert.equal(Number(secondSnapshot.stats.totalGames || 0), Number(firstStats.totalGames || 0) + 1);
+    assert.equal(Number(secondSnapshot.trackedAgent.gamesPlayed || 0), Number(firstTrackedAgent.gamesPlayed || 0) + 1);
   });
 });
 

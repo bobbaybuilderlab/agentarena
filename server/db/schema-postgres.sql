@@ -8,6 +8,16 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_daily_match_usage (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  usage_date DATE NOT NULL,
+  matches_started INTEGER NOT NULL DEFAULT 0,
+  last_match_started_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, usage_date)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -190,6 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_daily_match_usage_date ON user_daily_match_usage(usage_date);
 CREATE INDEX IF NOT EXISTS idx_match_results_room ON match_results(room_id);
 CREATE INDEX IF NOT EXISTS idx_match_results_mode ON match_results(mode);
 CREATE INDEX IF NOT EXISTS idx_match_results_party_chain ON match_results(party_chain_id);
@@ -206,6 +217,8 @@ CREATE INDEX IF NOT EXISTS idx_agents_owner_user ON agents(owner_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_name_normalized_unique ON agents(name_normalized);
 CREATE INDEX IF NOT EXISTS idx_connect_sessions_owner_user ON connect_sessions(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_connect_sessions_expires_at ON connect_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_connect_sessions_owner_created_at ON connect_sessions(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_user ON magic_link_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_expires_at ON magic_link_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_email_created_at ON magic_link_tokens(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);

@@ -16,6 +16,14 @@ const { createConnectedOpenClawAgent } = require('../services/agent-registry');
 const { buildOnboardingContract, buildSessionSkillMarkdown } = require('../services/onboarding-contract');
 const { cleanStylePhrase, normalizePresetToken } = require('../../extensions/clawofdeceit-connect/style-presets.cjs');
 
+function readBooleanEnv(name, fallback) {
+  const raw = String(process.env[name] || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
 function createLimiterHandler(errorMessage) {
   return (req, res, _next, options) => {
     const retryAfterHeader = res.getHeader('Retry-After');
@@ -65,6 +73,24 @@ function normalizeAgentPresetId(value) {
   return normalizePresetToken(value).slice(0, 32);
 }
 
+function sendThrottleResponse(res, {
+  error,
+  code,
+  retryAfterMs,
+  extra = null,
+}) {
+  const retryAfterSec = Math.max(1, Math.ceil(Math.max(0, Number(retryAfterMs) || 0) / 1000) || 1);
+  res.set('Retry-After', String(retryAfterSec));
+  return res.status(429).json({
+    ok: false,
+    error,
+    code,
+    retryAfterSec,
+    retryAfterMs: retryAfterSec * 1000,
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  });
+}
+
 function appendConnectStarted(roomEvents, connect) {
   roomEvents.append('growth', connect.id, 'CONNECT_SESSION_STARTED', {
     status: connect.status,
@@ -85,6 +111,7 @@ function createOpenClawRouter({
   bindOwnedAgent,
   agentProfiles,
   connectSessions,
+  getOwnerDailyMatchQuota,
   incrementGrowthMetric,
   issueRuntimeCredential,
   persistState,
@@ -97,27 +124,52 @@ function createOpenClawRouter({
 }) {
   const router = express.Router();
   const createLimiter = createOpenClawLimiter(
-    Number(process.env.OPENCLAW_CREATE_RATE_LIMIT_MAX || 20),
+    Number(process.env.OPENCLAW_CREATE_RATE_LIMIT_MAX || 5),
     'Too many onboarding attempts. Please try again shortly.',
   );
   const callbackLimiter = createOpenClawLimiter(
-    Number(process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX || 120),
+    Number(process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX || 30),
     'Too many connector callbacks. Please retry in a moment.',
   );
   const statusLimiter = createOpenClawLimiter(
-    Number(process.env.OPENCLAW_STATUS_RATE_LIMIT_MAX || 240),
+    Number(process.env.OPENCLAW_STATUS_RATE_LIMIT_MAX || 60),
     'Too many onboarding status checks. Please wait a moment and retry.',
   );
+  const openClawConnectEnabled = readBooleanEnv('OPENCLAW_CONNECT_ENABLED', true);
 
-  function sendConnectSession(res, connect, req, includeSecrets = false) {
+  async function buildConnectSessionPayload(connect, req, includeSecrets = false) {
+    const payload = sanitizeConnectSession(connect, {
+      includeSecrets,
+      publicBaseUrl: resolvePublicBaseUrl(req),
+      sanitizeArenaState,
+      summarizeAgentArenaState,
+    });
+    const ownerUserId = String(connect?.ownerUserId || '').trim() || null;
+    if (!ownerUserId) {
+      if (payload.arena?.runtimeConnected) {
+        const queueStatus = String(payload.arena.queueStatus || 'offline').trim().toLowerCase();
+        if (queueStatus !== 'in_match' && queueStatus !== 'reserved') {
+          payload.arena.queueStatus = 'ownership_required';
+        }
+      }
+      return payload;
+    }
+    if (typeof getOwnerDailyMatchQuota !== 'function') return payload;
+    const quota = await getOwnerDailyMatchQuota(ownerUserId);
+    payload.quota = quota;
+    if (payload.arena?.runtimeConnected && quota?.blocked) {
+      const queueStatus = String(payload.arena.queueStatus || 'offline').trim().toLowerCase();
+      if (queueStatus !== 'in_match' && queueStatus !== 'reserved') {
+        payload.arena.queueStatus = 'daily_limit_reached';
+      }
+    }
+    return payload;
+  }
+
+  async function sendConnectSession(res, connect, req, includeSecrets = false) {
     res.json({
       ok: true,
-      connect: sanitizeConnectSession(connect, {
-        includeSecrets,
-        publicBaseUrl: resolvePublicBaseUrl(req),
-        sanitizeArenaState,
-        summarizeAgentArenaState,
-      }),
+      connect: await buildConnectSessionPayload(connect, req, includeSecrets),
     });
   }
 
@@ -157,10 +209,7 @@ function createOpenClawRouter({
 
       res.json({
         ok: true,
-        connect: sanitizeConnectSession(connect, {
-          publicBaseUrl: resolvePublicBaseUrl(req),
-          summarizeAgentArenaState,
-        }),
+        connect: await buildConnectSessionPayload(connect, req, false),
         agent,
         runtimeCredential,
       });
@@ -172,12 +221,25 @@ function createOpenClawRouter({
           code: 'AGENT_NAME_TAKEN',
         });
       }
+      if (error?.code === 'AGENT_OWNER_REQUIRED') {
+        return res.status(409).json({
+          ok: false,
+          error: 'connect session missing owner binding',
+          code: 'CONNECT_SESSION_OWNER_REQUIRED',
+        });
+      }
       throw error;
     }
   }
 
   router.post('/connect-session', createLimiter, async (req, res) => {
-    incrementGrowthMetric('funnel.connectSessionStarts', 1);
+    if (!openClawConnectEnabled) {
+      return res.status(503).json({
+        ok: false,
+        error: 'New connect messages are temporarily disabled.',
+        code: 'OPENCLAW_CONNECT_DISABLED',
+      });
+    }
     const siteSession = typeof resolveSiteSession === 'function' ? await resolveSiteSession(req) : null;
     const ownerUserId = siteSession?.userId || null;
 
@@ -188,15 +250,33 @@ function createOpenClawRouter({
       });
     }
 
-    const connect = await createConnectSession({
-      connectSessions,
-      email: req.body?.email,
-      ownerUserId,
-      publicBaseUrl: resolvePublicBaseUrl(req),
-      shortId,
-    });
-    appendConnectStarted(roomEvents, connect);
-    sendConnectSession(res, connect, req, true);
+    try {
+      const created = await createConnectSession({
+        connectSessions,
+        email: req.body?.email,
+        ownerUserId,
+        publicBaseUrl: resolvePublicBaseUrl(req),
+        shortId,
+      });
+      const connect = created.connect;
+      if (!created.reusedExisting) {
+        incrementGrowthMetric('funnel.connectSessionStarts', 1);
+        appendConnectStarted(roomEvents, connect);
+      } else {
+        res.set('X-Connect-Session-Reused', '1');
+      }
+      await sendConnectSession(res, connect, req, true);
+    } catch (error) {
+      if (error?.statusCode === 429) {
+        return sendThrottleResponse(res, {
+          error: error.message || 'Too many connect messages. Please try again later.',
+          code: error.code || 'OPENCLAW_CONNECT_LIMIT_REACHED',
+          retryAfterMs: error.retryAfterMs,
+          extra: error.extra,
+        });
+      }
+      throw error;
+    }
   });
 
   router.get('/onboarding', (req, res) => {
@@ -220,7 +300,7 @@ function createOpenClawRouter({
     if (!connect) return res.status(404).json({ ok: false, error: 'connect session not found' });
     if (isConnectSessionExpired(connect)) return res.status(410).json({ ok: false, error: 'connect session expired' });
     if (!authorizeConnectSessionRead(req, connect)) return res.status(401).json({ ok: false, error: 'connect session auth required' });
-    sendConnectSession(res, connect, req, false);
+    await sendConnectSession(res, connect, req, false);
   });
 
   router.get('/connect-session/:id/skill.md', statusLimiter, async (req, res) => {

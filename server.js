@@ -45,6 +45,10 @@ const {
   createSession,
   upgradeUser,
   deleteSessionsByUserId,
+  getUserDailyMatchUsage,
+  getUserDailyMatchUsages,
+  consumeUserDailyMatchQuota,
+  releaseUserDailyMatchQuota,
   incrementMetricCounter,
   getMetricCounters,
   saveOpsSnapshot,
@@ -59,8 +63,10 @@ const {
   getAgentRuntimeCredential,
   touchAgentRuntimeCredential,
   revokeAgentRuntimeCredential,
+  countMagicLinkTokensByEmail,
   createMagicLinkTokenRecord,
   consumeMagicLinkTokenRecord,
+  getLatestMagicLinkTokenRecordByEmail,
   createReport,
   getReports,
   updateReportStatus,
@@ -177,6 +183,7 @@ const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
 const MAGIC_LINK_FROM_RAW = String(process.env.MAGIC_LINK_FROM || '').trim();
 const MAGIC_LINK_FROM = MAGIC_LINK_FROM_RAW || 'Claw of Deceit <noreply@clawofdeceit.com>';
+const MAGIC_LINK_ENABLED = readBooleanEnv('MAGIC_LINK_ENABLED', true);
 const PUBLIC_ROOM_EVENT_ROUTES_ENABLED = readBooleanEnv('PUBLIC_ROOM_EVENT_ROUTES', !IS_PRODUCTION);
 const ROOM_EVENT_FILE_PERSISTENCE_ENABLED = readBooleanEnv('ROOM_EVENT_FILE_PERSISTENCE', !IS_PRODUCTION);
 const ALLOW_INSECURE_DEV_SURFACES = readBooleanEnv('ALLOW_INSECURE_DEV_SURFACES', false);
@@ -453,6 +460,164 @@ const liveAgentRuntimes = new Map();
 const agentRuntimeSockets = new Map();
 const activeAgentMatchRooms = new Set();
 const completedMatchRecords = [];
+const publicReadCache = new Map();
+const PUBLIC_MATCH_DAILY_LIMIT = Math.max(0, Math.trunc(Number(process.env.PUBLIC_MATCH_DAILY_LIMIT || 25)));
+const PUBLIC_MATCHES_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_MATCHES_CACHE_TTL_MS || 15_000));
+const PUBLIC_LEADERBOARD_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_LEADERBOARD_CACHE_TTL_MS || 10_000));
+const PUBLIC_STATS_CACHE_TTL_MS = Math.max(0, Number(process.env.PUBLIC_STATS_CACHE_TTL_MS || 15_000));
+const MAGIC_LINK_COOLDOWN_MS = Math.max(0, Number(process.env.MAGIC_LINK_COOLDOWN_MS || 60_000));
+const MAGIC_LINK_HOURLY_LIMIT = Math.max(0, Number(process.env.MAGIC_LINK_HOURLY_LIMIT || 5));
+const MAGIC_LINK_DAILY_LIMIT = Math.max(0, Number(process.env.MAGIC_LINK_DAILY_LIMIT || 10));
+
+function currentUtcUsageDate(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+function startOfUtcDayIso(now = Date.now()) {
+  const resetAt = new Date(now);
+  resetAt.setUTCHours(0, 0, 0, 0);
+  return resetAt.toISOString();
+}
+
+function nextUtcMidnightIso(now = Date.now()) {
+  const resetAt = new Date(now);
+  resetAt.setUTCHours(24, 0, 0, 0);
+  return resetAt.toISOString();
+}
+
+function buildOwnerMatchQuota(usageRow, {
+  now = Date.now(),
+  dailyLimit = PUBLIC_MATCH_DAILY_LIMIT,
+} = {}) {
+  const used = Math.max(0, Number(usageRow?.matchesStarted || usageRow?.matches_started || 0));
+  const remaining = Math.max(0, dailyLimit - used);
+  return {
+    dailyLimit,
+    used,
+    remaining,
+    usageDate: String(usageRow?.usageDate || usageRow?.usage_date || currentUtcUsageDate(now)).trim() || currentUtcUsageDate(now),
+    resetsAt: nextUtcMidnightIso(now),
+    blocked: remaining <= 0,
+  };
+}
+
+async function getOwnerDailyMatchQuota(ownerUserId, {
+  now = Date.now(),
+} = {}) {
+  const cleanOwnerUserId = String(ownerUserId || '').trim();
+  if (!cleanOwnerUserId) {
+    return buildOwnerMatchQuota(null, { now });
+  }
+  const usage = await getUserDailyMatchUsage(cleanOwnerUserId, {
+    usageDate: currentUtcUsageDate(now),
+  });
+  return buildOwnerMatchQuota(usage, { now });
+}
+
+async function getOwnerDailyMatchQuotaMap(ownerUserIds = [], {
+  now = Date.now(),
+} = {}) {
+  const ids = [...new Set((Array.isArray(ownerUserIds) ? ownerUserIds : [ownerUserIds]).map((value) => String(value || '').trim()).filter(Boolean))];
+  const usageDate = currentUtcUsageDate(now);
+  const usageByOwnerId = await getUserDailyMatchUsages(ids, { usageDate });
+  const quotaByOwnerId = new Map();
+  for (const ownerUserId of ids) {
+    quotaByOwnerId.set(
+      ownerUserId,
+      buildOwnerMatchQuota(usageByOwnerId.get(ownerUserId) || null, { now }),
+    );
+  }
+  return quotaByOwnerId;
+}
+
+function applyOwnershipRequirementToArenaPayload(arena = null, ownerUserId = null) {
+  if (!arena || !arena.runtimeConnected) return arena;
+  if (String(ownerUserId || '').trim()) return arena;
+  const currentStatus = String(arena.queueStatus || 'offline').trim().toLowerCase();
+  if (currentStatus === 'in_match' || currentStatus === 'reserved') return arena;
+  return {
+    ...arena,
+    queueStatus: 'ownership_required',
+  };
+}
+
+function applyQuotaToArenaPayload(arena = null, quota = null) {
+  if (!arena || !quota?.blocked || !arena.runtimeConnected) return arena;
+  const currentStatus = String(arena.queueStatus || 'offline').trim().toLowerCase();
+  if (currentStatus === 'in_match' || currentStatus === 'reserved') return arena;
+  return {
+    ...arena,
+    queueStatus: 'daily_limit_reached',
+  };
+}
+
+function buildLeaderboardCacheKey(window, limit) {
+  return `leaderboard:${String(window || '12h').trim().toLowerCase()}:${Number(limit) || 25}`;
+}
+
+function buildStatsCacheKey(mode = 'mafia') {
+  return `stats:${String(mode || 'mafia').trim().toLowerCase() || 'mafia'}`;
+}
+
+function buildMatchesCacheKey(agentId, limit) {
+  return `matches:${String(agentId || '').trim()}:${Number(limit) || 10}`;
+}
+
+function setPublicReadCacheHeaders(res, ttlMs) {
+  const maxAgeSec = Math.max(0, Math.ceil(Math.max(0, Number(ttlMs) || 0) / 1000));
+  if (maxAgeSec <= 0) {
+    res.set('Cache-Control', 'no-store');
+    return;
+  }
+  res.set('Cache-Control', `public, max-age=${maxAgeSec}, stale-while-revalidate=${maxAgeSec}`);
+}
+
+function readPublicReadCache(key) {
+  const cleanKey = String(key || '').trim();
+  if (!cleanKey) return null;
+  const entry = publicReadCache.get(cleanKey);
+  if (!entry) {
+    logStructured('cache.public.miss', { key: cleanKey, reason: 'not_found' });
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    publicReadCache.delete(cleanKey);
+    logStructured('cache.public.miss', { key: cleanKey, reason: 'expired' });
+    return null;
+  }
+  logStructured('cache.public.hit', { key: cleanKey });
+  return entry.payload;
+}
+
+function writePublicReadCache(key, payload, ttlMs) {
+  const cleanKey = String(key || '').trim();
+  const safeTtlMs = Math.max(0, Number(ttlMs) || 0);
+  if (!cleanKey || !payload || safeTtlMs <= 0) return payload;
+  publicReadCache.set(cleanKey, {
+    payload,
+    expiresAt: Date.now() + safeTtlMs,
+  });
+  return payload;
+}
+
+function invalidatePublicReadCache(predicate = null) {
+  const matcher = typeof predicate === 'function'
+    ? predicate
+    : () => true;
+  const invalidatedKeys = [];
+  for (const key of publicReadCache.keys()) {
+    if (!matcher(key)) continue;
+    publicReadCache.delete(key);
+    invalidatedKeys.push(key);
+  }
+  if (invalidatedKeys.length) {
+    logStructured('cache.public.invalidate', {
+      keys: invalidatedKeys,
+      count: invalidatedKeys.length,
+    });
+  }
+  return invalidatedKeys.length;
+}
 
 function clearAllGameTimers() {
   clearPublicArenaQueueRetryTimer();
@@ -461,6 +626,7 @@ function clearAllGameTimers() {
   resetPlayTelemetry();
   growthMetrics = buildEmptyGrowthMetrics();
   growthMetricsLoaded = false;
+  publicReadCache.clear();
   resetFallbackPersistence();
 }
 
@@ -1406,9 +1572,45 @@ const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
 const API_RATE_LIMIT_MAX = Number(process.env.API_RATE_LIMIT_MAX || 100);
 const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX || 10);
 const OPS_RATE_LIMIT_MAX = Number(process.env.OPS_RATE_LIMIT_MAX || 5);
-const apiLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
-const authLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: AUTH_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
-const opsLimiter = rateLimit({ windowMs: RATE_LIMIT_WINDOW_MS, max: OPS_RATE_LIMIT_MAX, standardHeaders: true, legacyHeaders: false, keyGenerator: rateLimitKey });
+
+function createJsonRateLimitHandler(errorMessage, code = 'RATE_LIMITED') {
+  return (_req, res, _next, options) => {
+    const retryAfterHeader = res.getHeader('Retry-After');
+    const retryAfterSec = Math.max(1, Number(retryAfterHeader) || Math.ceil((options.windowMs || RATE_LIMIT_WINDOW_MS) / 1000));
+    res.status(options.statusCode).json({
+      ok: false,
+      error: errorMessage,
+      code,
+      retryAfterSec,
+      retryAfterMs: retryAfterSec * 1000,
+    });
+  };
+}
+
+const apiLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: API_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  handler: createJsonRateLimitHandler('Too many requests. Please try again shortly.', 'API_RATE_LIMITED'),
+});
+const authLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: AUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  handler: createJsonRateLimitHandler('Too many auth requests. Please wait a moment and retry.', 'AUTH_RATE_LIMITED'),
+});
+const opsLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: OPS_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKey,
+  handler: createJsonRateLimitHandler('Too many ops requests. Please wait a moment and retry.', 'OPS_RATE_LIMITED'),
+});
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/ops/', opsLoopbackApiGate);
@@ -1941,6 +2143,11 @@ function recordFirstMatchCompletion(mode, roomId) {
       currentRatings: buildCurrentRatingsForMatch(matchRecord),
     })
       .then((recorded) => {
+        invalidatePublicReadCache((key) => (
+          key.startsWith('leaderboard:')
+          || key.startsWith('matches:')
+          || key === buildStatsCacheKey('mafia')
+        ));
         matchRecord.ratingUpdates = Array.isArray(recorded?.ratingUpdates) ? recorded.ratingUpdates : [];
         syncAgentRatingMirrors(matchRecord.ratingUpdates);
       })
@@ -2023,7 +2230,7 @@ function buildPublicArenaState(arena = null) {
   };
 }
 
-function decorateLeaderboardEntry(entry) {
+function decorateLeaderboardEntry(entry, quotaByOwnerId = null) {
   const agent = agentProfiles.get(entry.id);
   const arena = agent ? summarizeAgentArenaState(agent.id) : {
     runtimeConnected: false,
@@ -2031,7 +2238,13 @@ function decorateLeaderboardEntry(entry) {
     activeRoomId: null,
     requiredAgents: 6,
   };
-  const publicArena = buildPublicArenaState(arena);
+  const ownerUserId = String(agent?.ownerUserId || '').trim() || null;
+  const publicArena = buildPublicArenaState(
+    applyQuotaToArenaPayload(
+      applyOwnershipRequirementToArenaPayload(arena, ownerUserId),
+      ownerUserId ? quotaByOwnerId?.get(ownerUserId) || null : null,
+    ),
+  );
   return {
     ...entry,
     ...publicArena,
@@ -2105,7 +2318,12 @@ async function getLeaderboardSummary({ mode = 'mafia', window = '12h', limit = 2
     entries = entries.map((entry) => summarizeLeaderboardEntry(entry));
   }
 
-  entries = entries.map((entry) => decorateLeaderboardEntry(entry));
+  const ownerUserIds = [...new Set(entries.map((entry) => String(agentProfiles.get(entry.id)?.ownerUserId || '').trim()).filter(Boolean))];
+  const quotaByOwnerId = ownerUserIds.length
+    ? await getOwnerDailyMatchQuotaMap(ownerUserIds)
+    : new Map();
+
+  entries = entries.map((entry) => decorateLeaderboardEntry(entry, quotaByOwnerId));
 
   return {
     mode,
@@ -2670,6 +2888,7 @@ function summarizeOwnedAgentProfile(agentOrId, { stats = null } = {}) {
 async function listRenderableOwnedAgentsForUser(ownerUserId) {
   const ownedAgents = await listOwnedAgentsForUser(ownerUserId);
   if (!ownedAgents.length) return [];
+  const quota = await getOwnerDailyMatchQuota(ownerUserId);
 
   const summaries = await Promise.all(ownedAgents.map(async (agent) => {
     const statsBundle = await buildOwnedAgentStats(agent.id);
@@ -2677,6 +2896,10 @@ async function listRenderableOwnedAgentsForUser(ownerUserId) {
       stats: statsBundle?.stats || null,
     });
     if (!summary) return null;
+    summary.arena = {
+      ...summary.arena,
+      ...applyQuotaToArenaPayload(summary.arena, quota),
+    };
 
     if (summary.arena?.runtimeConnected) return summary;
     if (summary.lastPlayedAt) return summary;
@@ -3044,6 +3267,135 @@ function schedulePublicArenaQueueRetry(waitMs) {
   }
 }
 
+async function buildQuotaEligibleIdleAgents(idleAgents, {
+  now = Date.now(),
+} = {}) {
+  const quotaByOwnerId = await getOwnerDailyMatchQuotaMap(
+    idleAgents.map((agent) => agent?.ownerUserId),
+    { now },
+  );
+  const remainingByOwnerId = new Map();
+  const eligibleAgents = [];
+
+  for (const agent of idleAgents) {
+    const ownerUserId = String(agent?.ownerUserId || '').trim();
+    if (!ownerUserId) {
+      logStructured('quota.ownerless_agent_blocked', {
+        agentId: agent?.id || null,
+      });
+      continue;
+    }
+
+    const quota = quotaByOwnerId.get(ownerUserId) || buildOwnerMatchQuota(null, { now });
+    const remaining = remainingByOwnerId.has(ownerUserId)
+      ? remainingByOwnerId.get(ownerUserId)
+      : quota.remaining;
+
+    if (remaining <= 0) {
+      logStructured('quota.publicArena.blocked', {
+        ownerUserId,
+        agentId: agent.id,
+        used: quota.used,
+        remaining,
+        dailyLimit: quota.dailyLimit,
+        resetsAt: quota.resetsAt,
+      });
+      continue;
+    }
+
+    eligibleAgents.push(agent);
+    remainingByOwnerId.set(ownerUserId, remaining - 1);
+  }
+
+  return { eligibleAgents, quotaByOwnerId };
+}
+
+async function reservePublicArenaBatchQuota(batch, {
+  now = Date.now(),
+} = {}) {
+  const reservations = [];
+  const usageDate = currentUtcUsageDate(now);
+
+  for (const agent of batch) {
+    const ownerUserId = String(agent?.ownerUserId || '').trim();
+    if (!ownerUserId) {
+      logStructured('quota.ownerless_agent_blocked', {
+        agentId: agent?.id || null,
+        stage: 'reservation',
+      });
+      return {
+        ok: false,
+        blockedOwnerUserId: null,
+        blockedAgentId: agent?.id || null,
+        reservations,
+        quota: null,
+      };
+    }
+
+    const result = await consumeUserDailyMatchQuota(ownerUserId, {
+      limit: PUBLIC_MATCH_DAILY_LIMIT,
+      usageDate,
+      now,
+    });
+
+    const quota = buildOwnerMatchQuota(result?.row || null, { now });
+    if (!result?.allowed) {
+      logStructured('quota.publicArena.blocked', {
+        ownerUserId,
+        agentId: agent.id,
+        used: quota.used,
+        remaining: quota.remaining,
+        dailyLimit: quota.dailyLimit,
+        resetsAt: quota.resetsAt,
+      });
+      return {
+        ok: false,
+        blockedOwnerUserId: ownerUserId,
+        blockedAgentId: agent.id,
+        reservations,
+        quota,
+      };
+    }
+
+    reservations.push({
+      ownerUserId,
+      agentId: agent.id,
+      usageDate,
+    });
+    logStructured('quota.publicArena.reserved', {
+      ownerUserId,
+      agentId: agent.id,
+      used: quota.used,
+      remaining: quota.remaining,
+      dailyLimit: quota.dailyLimit,
+      usageDate: quota.usageDate,
+    });
+  }
+
+  return {
+    ok: true,
+    reservations,
+  };
+}
+
+async function refundPublicArenaBatchQuota(reservations = []) {
+  for (const reservation of reservations) {
+    if (!reservation?.ownerUserId) continue;
+    const row = await releaseUserDailyMatchQuota(reservation.ownerUserId, {
+      usageDate: reservation.usageDate,
+    });
+    const quota = buildOwnerMatchQuota(row || null);
+    logStructured('quota.publicArena.refunded', {
+      ownerUserId: reservation.ownerUserId,
+      agentId: reservation.agentId || null,
+      used: quota.used,
+      remaining: quota.remaining,
+      dailyLimit: quota.dailyLimit,
+      usageDate: quota.usageDate,
+    });
+  }
+}
+
 function attachLiveAgentToMafiaSeat(room, player, agent, runtime) {
   if (!room || !player || !agent || !runtime) return;
   player.isLiveAgent = true;
@@ -3299,7 +3651,10 @@ async function processPublicArenaQueue() {
   try {
     let idleAgents = idleLaunchAgents();
     while (idleAgents.length >= PUBLIC_ARENA_REQUIRED_AGENTS) {
-      const selection = selectPublicArenaBatch(idleAgents);
+      const { eligibleAgents } = await buildQuotaEligibleIdleAgents(idleAgents);
+      if (eligibleAgents.length < PUBLIC_ARENA_REQUIRED_AGENTS) break;
+
+      const selection = selectPublicArenaBatch(eligibleAgents);
       if (!selection.batch?.length) {
         if (selection.reason === 'blocked_recent_overlap') {
           logStructured('mafia.publicArena.batch_deferred', {
@@ -3314,12 +3669,26 @@ async function processPublicArenaQueue() {
       }
 
       const batch = selection.batch;
+      const reservation = await reservePublicArenaBatchQuota(batch);
+      if (!reservation.ok) {
+        await refundPublicArenaBatchQuota(reservation.reservations);
+        const blockedAgentId = String(reservation.blockedAgentId || '').trim();
+        const blockedOwnerUserId = String(reservation.blockedOwnerUserId || '').trim();
+        if (blockedAgentId) {
+          idleAgents = idleAgents.filter((agent) => String(agent?.id || '').trim() !== blockedAgentId);
+        } else if (blockedOwnerUserId) {
+          idleAgents = idleAgents.filter((agent) => String(agent?.ownerUserId || '').trim() !== blockedOwnerUserId);
+        }
+        continue;
+      }
+
       const preservedIdleSince = new Map(
         batch.map((agent) => [agent.id, Number(getAgentRuntime(agent.id)?.idleSince || 0)]),
       );
       batch.forEach((agent) => setAgentRuntimeStatus(agent.id, 'reserved'));
       const room = createPublicArenaMafiaRoom(batch, { matchmaking: selection });
       if (!room) {
+        await refundPublicArenaBatchQuota(reservation.reservations);
         logStructured('mafia.publicArena.batch_failed', {
           reason: selection.reason,
           agentIds: batch.map((agent) => agent.id),
@@ -3488,6 +3857,13 @@ app.post('/api/auth/upgrade', async (req, res) => {
 
     const existingUser = await getUserByEmail(email);
     if (existingUser && existingUser.id !== user.id) {
+      if (!MAGIC_LINK_ENABLED) {
+        return res.status(503).json({
+          ok: false,
+          error: 'Magic-link login is temporarily disabled.',
+          code: 'MAGIC_LINK_DISABLED',
+        });
+      }
       const issued = await issueMagicLink({
         req,
         email,
@@ -3495,14 +3871,14 @@ app.post('/api/auth/upgrade', async (req, res) => {
         intent: 'claim',
         sourceUserId: user.id,
       });
-      if (!issued.emailSent && !insecureDevSurfacesAllowed(req)) {
+      if (issued.deliveryUnavailable && !insecureDevSurfacesAllowed(req)) {
         return res.status(503).json({ ok: false, error: 'Magic link delivery unavailable' });
       }
       return res.json({
         ok: true,
         claimLinkSent: true,
         emailSent: issued.emailSent,
-        ...(issued.emailSent || !insecureDevSurfacesAllowed(req) ? {} : { magicUrl: issued.magicUrl }),
+        ...(issued.magicUrl && !issued.throttled && insecureDevSurfacesAllowed(req) ? { magicUrl: issued.magicUrl } : {}),
       });
     }
 
@@ -3523,6 +3899,81 @@ app.post('/api/auth/upgrade', async (req, res) => {
 
 // ── Magic link login ──
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+function getMagicLinkThrottleDelayMs(latestRecord, now = Date.now()) {
+  const latestCreatedAtMs = new Date(latestRecord?.created_at || 0).getTime();
+  if (!Number.isFinite(latestCreatedAtMs) || latestCreatedAtMs <= 0) return 0;
+  return Math.max(0, (latestCreatedAtMs + MAGIC_LINK_COOLDOWN_MS) - now);
+}
+
+async function getMagicLinkThrottleState(email, {
+  now = Date.now(),
+} = {}) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail) {
+    return {
+      blocked: false,
+      code: null,
+      retryAfterMs: 0,
+      hourlyCount: 0,
+      dailyCount: 0,
+      latestRecord: null,
+    };
+  }
+
+  const [latestRecord, hourlyCount, dailyCount] = await Promise.all([
+    getLatestMagicLinkTokenRecordByEmail(cleanEmail),
+    countMagicLinkTokensByEmail(cleanEmail, {
+      createdAfter: new Date(now - (60 * 60 * 1000)).toISOString(),
+    }),
+    countMagicLinkTokensByEmail(cleanEmail, {
+      createdAfter: startOfUtcDayIso(now),
+    }),
+  ]);
+
+  const cooldownDelayMs = MAGIC_LINK_COOLDOWN_MS > 0
+    ? getMagicLinkThrottleDelayMs(latestRecord, now)
+    : 0;
+  if (cooldownDelayMs > 0) {
+    return {
+      blocked: true,
+      code: 'MAGIC_LINK_COOLDOWN',
+      retryAfterMs: cooldownDelayMs,
+      hourlyCount,
+      dailyCount,
+      latestRecord,
+    };
+  }
+  if (MAGIC_LINK_HOURLY_LIMIT > 0 && hourlyCount >= MAGIC_LINK_HOURLY_LIMIT) {
+    return {
+      blocked: true,
+      code: 'MAGIC_LINK_HOURLY_LIMIT',
+      retryAfterMs: Math.max(60_000, 60 * 60 * 1000),
+      hourlyCount,
+      dailyCount,
+      latestRecord,
+    };
+  }
+  if (MAGIC_LINK_DAILY_LIMIT > 0 && dailyCount >= MAGIC_LINK_DAILY_LIMIT) {
+    return {
+      blocked: true,
+      code: 'MAGIC_LINK_DAILY_LIMIT',
+      retryAfterMs: Math.max(60_000, new Date(nextUtcMidnightIso(now)).getTime() - now),
+      hourlyCount,
+      dailyCount,
+      latestRecord,
+    };
+  }
+
+  return {
+    blocked: false,
+    code: null,
+    retryAfterMs: 0,
+    hourlyCount,
+    dailyCount,
+    latestRecord,
+  };
+}
 
 async function sendMagicLinkEmail(toEmail, magicUrl) {
   if (!RESEND_API_KEY) {
@@ -3554,7 +4005,6 @@ async function sendMagicLinkEmail(toEmail, magicUrl) {
 
 async function ensureMagicLinkUser(email) {
   let user = await getUserByEmail(email);
-  let isNewUser = false;
 
   if (!user) {
     try {
@@ -3562,7 +4012,6 @@ async function ensureMagicLinkUser(email) {
       await createAnonymousUser(userId);
       await upgradeUser(userId, { email });
       user = await getUserById(userId);
-      isNewUser = true;
     } catch (err) {
       if (/unique|duplicate key/i.test(String(err.message || ''))) {
         user = await getUserByEmail(email);
@@ -3572,7 +4021,7 @@ async function ensureMagicLinkUser(email) {
     }
   }
 
-  return { user, isNewUser };
+  return { user };
 }
 
 async function issueMagicLink({
@@ -3581,9 +4030,29 @@ async function issueMagicLink({
   userId,
   intent = 'login',
   sourceUserId = null,
+  now = Date.now(),
 }) {
+  const throttleState = await getMagicLinkThrottleState(email, { now });
+  if (throttleState.blocked) {
+    logStructured('auth.magicLink.throttled', {
+      emailDomain: String(email || '').split('@')[1] || null,
+      code: throttleState.code,
+      hourlyCount: throttleState.hourlyCount,
+      dailyCount: throttleState.dailyCount,
+    });
+    return {
+      accepted: true,
+      throttled: true,
+      throttleCode: throttleState.code,
+      retryAfterMs: throttleState.retryAfterMs,
+      emailSent: false,
+      deliveryUnavailable: false,
+      magicUrl: null,
+    };
+  }
+
   const magicToken = randomSecret(24);
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString();
+  const expiresAt = new Date(now + MAGIC_LINK_TTL_MS).toISOString();
   await createMagicLinkTokenRecord({
     tokenHash: hashSecret(magicToken),
     userId,
@@ -3598,8 +4067,11 @@ async function issueMagicLink({
   const sendResult = await sendMagicLinkEmail(email, magicUrl);
 
   return {
+    accepted: true,
+    throttled: false,
     magicUrl,
     emailSent: sendResult.sent,
+    deliveryUnavailable: !sendResult.sent,
   };
 }
 
@@ -3645,6 +4117,13 @@ function sendRetiredApiResponse(res, message) {
 }
 
 app.post('/api/auth/magic-link', async (req, res) => {
+  if (!MAGIC_LINK_ENABLED) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Magic-link login is temporarily disabled.',
+      code: 'MAGIC_LINK_DISABLED',
+    });
+  }
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!email || !email.includes('@')) {
     return res.status(400).json({ ok: false, error: 'Valid email is required' });
@@ -3668,15 +4147,14 @@ app.post('/api/auth/magic-link', async (req, res) => {
     intent: 'login',
   });
 
-  if (!issued.emailSent && !insecureDevSurfacesAllowed(req)) {
+  if (issued.deliveryUnavailable && !insecureDevSurfacesAllowed(req)) {
     return res.status(503).json({ ok: false, error: 'Magic link delivery unavailable' });
   }
 
   res.json({
     ok: true,
-    isNewUser: Boolean(resolved.isNewUser),
     emailSent: issued.emailSent,
-    ...(issued.emailSent || !insecureDevSurfacesAllowed(req) ? {} : { magicUrl: issued.magicUrl }),
+    ...(issued.magicUrl && !issued.throttled && insecureDevSurfacesAllowed(req) ? { magicUrl: issued.magicUrl } : {}),
   });
 });
 
@@ -3757,10 +4235,11 @@ app.use('/api/openclaw', createOpenClawRouter({
   agentProfiles,
   connectSessions,
   incrementGrowthMetric,
-  issueRuntimeCredential: issueAgentRuntimeCredential,
-  persistState,
-  resolvePublicBaseUrl,
-  resolveSiteSession,
+    issueRuntimeCredential: issueAgentRuntimeCredential,
+    getOwnerDailyMatchQuota,
+    persistState,
+    resolvePublicBaseUrl,
+    resolveSiteSession,
   roomEvents,
   sanitizeArenaState: buildPublicArenaState,
   shortId,
@@ -3889,6 +4368,7 @@ app.get('/api/agents/mine', async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Invalid or expired session' });
   }
 
+  const quota = await getOwnerDailyMatchQuota(siteSession.userId);
   const ownedContext = await buildOwnedArenaContext(siteSession, {
     requestedAgentId: req.query.agentId,
     includeStats: true,
@@ -3940,6 +4420,7 @@ app.get('/api/agents/mine', async (req, res) => {
     statsSource: ownedContext.statsBundle?.source || 'none',
     statsDurability: ownedContext.statsBundle?.durability || 'none',
     statsCapped: Boolean(ownedContext.statsBundle?.capped),
+    quota,
     streak,
     rank,
     arena: buildArenaAvailability(),
@@ -3986,22 +4467,40 @@ app.post('/api/agents/:id/runtime-credential/rotate', async (req, res) => {
 });
 
 app.get('/api/stats', async (_req, res) => {
+  const cacheKey = buildStatsCacheKey('mafia');
+  setPublicReadCacheHeaders(res, PUBLIC_STATS_CACHE_TTL_MS);
+  const cached = readPublicReadCache(cacheKey);
+  if (cached) return res.json(cached);
+
   const statsBundle = await buildGlobalStats('mafia');
-  res.json({
+  const payload = {
     ok: true,
     ...statsBundle.stats,
     source: statsBundle.source,
     durable: statsBundle.durable,
     capped: statsBundle.capped,
     durability: statsBundle.durability,
-  });
+  };
+  if (statsBundle.source === 'database') {
+    writePublicReadCache(cacheKey, payload, PUBLIC_STATS_CACHE_TTL_MS);
+  }
+  res.json(payload);
 });
 
 app.get('/api/leaderboard', async (req, res) => {
   const window = String(req.query.window || '12h').trim().toLowerCase();
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+  const cacheKey = buildLeaderboardCacheKey(window, limit);
+  setPublicReadCacheHeaders(res, PUBLIC_LEADERBOARD_CACHE_TTL_MS);
+  const cached = readPublicReadCache(cacheKey);
+  if (cached) return res.json(cached);
+
   const leaderboard = await getLeaderboardSummary({ mode: 'mafia', window, limit });
-  res.json({ ok: true, ...leaderboard });
+  const payload = { ok: true, ...leaderboard };
+  if (leaderboard.source === 'database') {
+    writePublicReadCache(cacheKey, payload, PUBLIC_LEADERBOARD_CACHE_TTL_MS);
+  }
+  res.json(payload);
 });
 
 app.get('/api/matches', async (req, res) => {
@@ -4013,6 +4512,10 @@ app.get('/api/matches', async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
   try {
     const targetAgentId = requestedAgentId || await resolveMatchAgentId(requestedUserId);
+    const cacheKey = buildMatchesCacheKey(targetAgentId, limit);
+    setPublicReadCacheHeaders(res, PUBLIC_MATCHES_CACHE_TTL_MS);
+    const cached = readPublicReadCache(cacheKey);
+    if (cached) return res.json(cached);
     let matches = await getPlayerMatches(targetAgentId, limit);
     let source = 'database';
     let durability = 'database';
@@ -4021,7 +4524,11 @@ app.get('/api/matches', async (req, res) => {
       source = 'memory';
       durability = 'ephemeral_memory';
     }
-    res.json({ ok: true, agentId: targetAgentId, matches: decorateMatchesForClient(matches), source, durability });
+    const payload = { ok: true, agentId: targetAgentId, matches: decorateMatchesForClient(matches), source, durability };
+    if (source === 'database') {
+      writePublicReadCache(cacheKey, payload, PUBLIC_MATCHES_CACHE_TTL_MS);
+    }
+    res.json(payload);
   } catch (err) {
     logStructured('error.getPlayerMatches', { error: err.message });
     res.status(500).json({ ok: false, error: 'failed to fetch matches' });
@@ -4889,6 +5396,7 @@ function resetAgentArenaRuntime() {
   activeAgentMatchRooms.clear();
   completedMatchRooms.clear();
   completedMatchRecords.length = 0;
+  publicReadCache.clear();
   publicArenaQueueRunning = false;
 }
 

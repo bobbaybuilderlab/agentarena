@@ -2,8 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
+process.env.ALLOW_INSECURE_DEV_SURFACES = '1';
+process.env.OPENCLAW_CREATE_RATE_LIMIT_MAX = '100';
+process.env.OPENCLAW_CALLBACK_RATE_LIMIT_MAX = '100';
+process.env.OPENCLAW_STATUS_RATE_LIMIT_MAX = '100';
+
 const { app, agentProfiles, connectSessions, liveAgentRuntimes } = require('../server');
 const {
+  countConnectSessionsCreatedByOwnerUserId,
+  countMagicLinkTokensByEmail,
   createAnonymousUser,
   upgradeUser,
   createMagicLinkTokenRecord,
@@ -108,6 +115,10 @@ test('connect session endpoints require a site session and still require secret 
       created.connect.onboarding.agentPrompt,
       `Read this Claw of Deceit skill and follow it exactly: ${created.connect.onboarding.sessionSkillUrl}`,
     );
+    assert.equal(created.connect.quota.dailyLimit, 25);
+    assert.equal(created.connect.quota.used, 0);
+    assert.equal(created.connect.quota.remaining, 25);
+    assert.equal(created.connect.quota.blocked, false);
     assert.equal(created.connect.onboarding.defaultPresetId, 'pragmatic');
     assert.equal(created.connect.onboarding.stylePresets.length, 8);
     assert.equal(created.connect.onboarding.advancedSetupUrl, '/connect.html');
@@ -144,6 +155,10 @@ test('connect session endpoints require a site session and still require secret 
     assert.equal(statusData.connect.onboarding.agentPrompt, null);
     assert.equal(statusData.connect.onboarding.sessionSkillUrl, null);
     assert.equal(statusData.connect.onboarding.stylePresets.length, 8);
+    assert.equal(statusData.connect.quota.dailyLimit, 25);
+    assert.equal(statusData.connect.quota.used, 0);
+    assert.equal(statusData.connect.quota.remaining, 25);
+    assert.equal(statusData.connect.quota.blocked, false);
 
     const authSkill = await fetch(`${base}/api/openclaw/connect-session/${id}/skill.md?accessToken=${encodeURIComponent(accessToken)}`);
     assert.equal(authSkill.status, 200);
@@ -160,7 +175,7 @@ test('connect session endpoints require a site session and still require secret 
     assert.match(skillBody, /installed connector is outdated and rerun the same setup block/);
     assert.match(skillBody, /return to `\/connect\.html` and use the step-by-step fallback/);
     assert.match(skillBody, /dedicated OpenClaw profile `clawofdeceit`|dedicated `clawofdeceit` OpenClaw profile/);
-    assert.match(skillBody, /future startup remains manual unless I explicitly enable it later/);
+    assert.match(skillBody, /bring the same saved agent back later with `openclaw --profile clawofdeceit clawofdeceit agents start --all`/);
     const namePromptIndex = skillBody.indexOf('Help me pick a short agent name.');
     const branchPromptIndex = skillBody.indexOf('Do you want to play now with the starter Mafia strategy, or customize first?');
     assert.notEqual(namePromptIndex, -1);
@@ -196,6 +211,92 @@ test('connect session endpoints require a site session and still require secret 
   });
 });
 
+test('connect session creation reuses the active pending session for the same owner', async () => {
+  await withServer(async (base) => {
+    const sessionToken = await createSiteSession(base);
+    const siteSession = await getSessionByToken(sessionToken);
+    assert.ok(siteSession?.user_id);
+
+    const firstRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(firstRes.status, 200);
+    const first = await firstRes.json();
+    assert.equal(first.ok, true);
+
+    const secondRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(secondRes.status, 200);
+    assert.equal(secondRes.headers.get('x-connect-session-reused'), '1');
+    const second = await secondRes.json();
+    assert.equal(second.ok, true);
+    assert.equal(second.connect.id, first.connect.id);
+    assert.equal(second.connect.accessToken, first.connect.accessToken);
+    assert.equal(second.connect.callbackProof, first.connect.callbackProof);
+
+    const createdToday = await countConnectSessionsCreatedByOwnerUserId(siteSession.user_id, {
+      createdAfter: new Date(Date.now() - (5 * 60 * 1000)).toISOString(),
+    });
+    assert.equal(createdToday, 1);
+  });
+});
+
+test('connect session creation enforces the per-owner daily creation limit', async () => {
+  await withServer(async (base) => {
+    const sessionToken = await createSiteSession(base);
+    const siteSession = await getSessionByToken(sessionToken);
+    assert.ok(siteSession?.user_id);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const res = await fetch(`${base}/api/openclaw/connect-session`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      assert.equal(res.status, 200, `expected attempt ${attempt + 1} to succeed`);
+      const data = await res.json();
+      assert.equal(data.ok, true);
+      const stored = connectSessions.get(data.connect.id);
+      assert.ok(stored);
+      stored.expiresAt = Date.now() - 1;
+    }
+
+    const blockedRes = await fetch(`${base}/api/openclaw/connect-session`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(blockedRes.status, 429);
+    assert.match(blockedRes.headers.get('retry-after') || '', /\d+/);
+    const blocked = await blockedRes.json();
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, 'OPENCLAW_CONNECT_DAILY_LIMIT');
+    assert.ok(Number(blocked.retryAfterSec) > 0);
+
+    const createdToday = await countConnectSessionsCreatedByOwnerUserId(siteSession.user_id, {
+      createdAfter: new Date(Date.now() - (5 * 60 * 1000)).toISOString(),
+    });
+    assert.equal(createdToday, 20);
+  });
+});
+
 test('duplicate agent names are rejected during permanent binding', async () => {
   await withServer(async (base) => {
     const sharedName = `duplicate_agent_${Date.now()}`;
@@ -217,6 +318,44 @@ test('duplicate agent names are rejected during permanent binding', async () => 
     assert.equal(secondConfirm.response.status, 409);
     assert.equal(secondConfirm.json.ok, false);
     assert.equal(secondConfirm.json.code, 'AGENT_NAME_TAKEN');
+  });
+});
+
+test('magic-link requests honor cooldowns and keep the response generic', async () => {
+  await withServer(async (base) => {
+    const email = `magic-${Date.now()}@example.com`;
+
+    const firstRes = await fetch(`${base}/api/auth/magic-link`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    assert.equal(firstRes.status, 200);
+    const first = await firstRes.json();
+    assert.equal(first.ok, true);
+    assert.equal('isNewUser' in first, false);
+    assert.equal(typeof first.emailSent, 'boolean');
+
+    const createdAfterFirst = await countMagicLinkTokensByEmail(email, {
+      createdAfter: new Date(Date.now() - (5 * 60 * 1000)).toISOString(),
+    });
+    assert.equal(createdAfterFirst, 1);
+
+    const secondRes = await fetch(`${base}/api/auth/magic-link`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    assert.equal(secondRes.status, 200);
+    const second = await secondRes.json();
+    assert.equal(second.ok, true);
+    assert.equal('isNewUser' in second, false);
+    assert.equal(second.magicUrl ?? null, null);
+
+    const createdAfterSecond = await countMagicLinkTokensByEmail(email, {
+      createdAfter: new Date(Date.now() - (5 * 60 * 1000)).toISOString(),
+    });
+    assert.equal(createdAfterSecond, 1);
   });
 });
 

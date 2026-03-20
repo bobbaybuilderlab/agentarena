@@ -10,6 +10,16 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS user_daily_match_usage (
+  user_id TEXT NOT NULL REFERENCES users(id),
+  usage_date TEXT NOT NULL,
+  matches_started INTEGER NOT NULL DEFAULT 0,
+  last_match_started_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, usage_date)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -98,6 +108,7 @@ CREATE TABLE IF NOT EXISTS agent_rating_events (
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_daily_match_usage_date ON user_daily_match_usage(usage_date);
 CREATE INDEX IF NOT EXISTS idx_magic_links_token_hash ON magic_links(token_hash);
 CREATE INDEX IF NOT EXISTS idx_magic_links_email ON magic_links(email);
 CREATE INDEX IF NOT EXISTS idx_owner_tokens_user ON owner_tokens(user_id);
@@ -170,6 +181,7 @@ CREATE TABLE IF NOT EXISTS connect_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_connect_sessions_owner_user ON connect_sessions(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_connect_sessions_expires_at ON connect_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_connect_sessions_owner_created_at ON connect_sessions(owner_user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS magic_link_tokens (
   token_hash TEXT PRIMARY KEY,
@@ -184,3 +196,4 @@ CREATE TABLE IF NOT EXISTS magic_link_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_user ON magic_link_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_expires_at ON magic_link_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_email_created_at ON magic_link_tokens(email, created_at);

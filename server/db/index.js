@@ -39,6 +39,7 @@ const fallbackRuntimeCredentials = new Map();
 const fallbackConnectSessions = new Map();
 const fallbackMagicLinkTokens = new Map();
 const fallbackMetricCounters = new Map();
+const fallbackUserDailyMatchUsage = new Map();
 const fallbackOpsSnapshots = new Map();
 const fallbackKpiRoomEvents = new Map();
 
@@ -242,6 +243,31 @@ function normalizeSessionRow(row) {
     ...row,
     expires_at: normalizeIso(row.expires_at) || row.expires_at || null,
     created_at: normalizeIso(row.created_at) || row.created_at || null,
+  };
+}
+
+function normalizeUsageDate(value, fallback = new Date().toISOString().slice(0, 10)) {
+  const normalized = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return fallback;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeUserDailyMatchUsageRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    user_id: String(row.user_id || row.userId || '').trim() || null,
+    userId: String(row.user_id || row.userId || '').trim() || null,
+    usage_date: normalizeUsageDate(row.usage_date || row.usageDate),
+    usageDate: normalizeUsageDate(row.usage_date || row.usageDate),
+    matches_started: toNumber(row.matches_started, 0),
+    matchesStarted: toNumber(row.matches_started, 0),
+    last_match_started_at: normalizeIso(row.last_match_started_at) || row.last_match_started_at || null,
+    lastMatchStartedAt: normalizeIso(row.last_match_started_at) || row.last_match_started_at || null,
+    created_at: normalizeIso(row.created_at) || row.created_at || null,
+    updated_at: normalizeIso(row.updated_at) || row.updated_at || null,
   };
 }
 
@@ -1064,6 +1090,288 @@ async function deleteSessionsByUserId(userId) {
   return toNumber(result.changes, 0);
 }
 
+async function getUserDailyMatchUsage(userId, {
+  usageDate = normalizeUsageDate(),
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanUserId = String(userId || '').trim();
+  const cleanUsageDate = normalizeUsageDate(usageDate);
+  if (!cleanUserId) return null;
+
+  if (!adapter || adapter.kind === 'none') {
+    return normalizeUserDailyMatchUsageRow(
+      fallbackUserDailyMatchUsage.get(`${cleanUserId}:${cleanUsageDate}`) || null,
+    );
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      SELECT *
+      FROM user_daily_match_usage
+      WHERE user_id = $1
+        AND usage_date = $2
+      LIMIT 1
+    `, [cleanUserId, cleanUsageDate]);
+    return normalizeUserDailyMatchUsageRow(result.rows[0] || null);
+  }
+
+  const row = adapter.database.prepare(`
+    SELECT *
+    FROM user_daily_match_usage
+    WHERE user_id = ?
+      AND usage_date = ?
+    LIMIT 1
+  `).get(cleanUserId, cleanUsageDate);
+  return normalizeUserDailyMatchUsageRow(row || null);
+}
+
+async function getUserDailyMatchUsages(userIds = [], {
+  usageDate = normalizeUsageDate(),
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanUsageDate = normalizeUsageDate(usageDate);
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : [userIds]).map((value) => String(value || '').trim()).filter(Boolean))];
+  const usageByUserId = new Map();
+
+  if (!ids.length) return usageByUserId;
+
+  if (!adapter || adapter.kind === 'none') {
+    for (const userId of ids) {
+      const row = normalizeUserDailyMatchUsageRow(
+        fallbackUserDailyMatchUsage.get(`${userId}:${cleanUsageDate}`) || null,
+      );
+      if (row?.userId) usageByUserId.set(row.userId, row);
+    }
+    return usageByUserId;
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      SELECT *
+      FROM user_daily_match_usage
+      WHERE usage_date = $1
+        AND user_id = ANY($2::text[])
+    `, [cleanUsageDate, ids]);
+    for (const row of result.rows || []) {
+      const normalized = normalizeUserDailyMatchUsageRow(row);
+      if (normalized?.userId) usageByUserId.set(normalized.userId, normalized);
+    }
+    return usageByUserId;
+  }
+
+  const rows = adapter.database.prepare(`
+    SELECT *
+    FROM user_daily_match_usage
+    WHERE usage_date = ?
+      AND user_id IN (${ids.map(() => '?').join(', ')})
+  `).all(cleanUsageDate, ...ids);
+  for (const row of rows || []) {
+    const normalized = normalizeUserDailyMatchUsageRow(row);
+    if (normalized?.userId) usageByUserId.set(normalized.userId, normalized);
+  }
+  return usageByUserId;
+}
+
+async function consumeUserDailyMatchQuota(userId, {
+  limit = 25,
+  usageDate = normalizeUsageDate(),
+  now = Date.now(),
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanUserId = String(userId || '').trim();
+  const cleanUsageDate = normalizeUsageDate(usageDate);
+  const safeLimit = Math.max(0, Math.trunc(Number(limit) || 0));
+  const startedAtIso = normalizeIso(now) || nowIso();
+  if (!cleanUserId) {
+    return { allowed: false, row: null };
+  }
+  if (safeLimit <= 0) {
+    return {
+      allowed: false,
+      row: await getUserDailyMatchUsage(cleanUserId, { usageDate: cleanUsageDate }),
+    };
+  }
+
+  if (!adapter || adapter.kind === 'none') {
+    const key = `${cleanUserId}:${cleanUsageDate}`;
+    const existing = normalizeUserDailyMatchUsageRow(
+      fallbackUserDailyMatchUsage.get(key) || {
+        user_id: cleanUserId,
+        usage_date: cleanUsageDate,
+        matches_started: 0,
+        last_match_started_at: null,
+        created_at: startedAtIso,
+        updated_at: startedAtIso,
+      },
+    );
+    if (existing.matchesStarted >= safeLimit) {
+      return { allowed: false, row: existing };
+    }
+    const row = normalizeUserDailyMatchUsageRow({
+      ...existing,
+      matches_started: existing.matchesStarted + 1,
+      last_match_started_at: startedAtIso,
+      updated_at: startedAtIso,
+    });
+    fallbackUserDailyMatchUsage.set(key, row);
+    return { allowed: true, row };
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      WITH upserted AS (
+        INSERT INTO user_daily_match_usage (
+          user_id,
+          usage_date,
+          matches_started,
+          last_match_started_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, 1, $3, NOW(), NOW())
+        ON CONFLICT (user_id, usage_date) DO UPDATE
+        SET matches_started = user_daily_match_usage.matches_started + 1,
+            last_match_started_at = EXCLUDED.last_match_started_at,
+            updated_at = NOW()
+        WHERE user_daily_match_usage.matches_started < $4
+        RETURNING *
+      )
+      SELECT upserted.*, TRUE AS allowed
+      FROM upserted
+      UNION ALL
+      SELECT usage.*, FALSE AS allowed
+      FROM user_daily_match_usage AS usage
+      WHERE usage.user_id = $1
+        AND usage.usage_date = $2
+        AND NOT EXISTS (SELECT 1 FROM upserted)
+      LIMIT 1
+    `, [cleanUserId, cleanUsageDate, startedAtIso, safeLimit]);
+    const row = result.rows[0] || null;
+    return {
+      allowed: Boolean(row?.allowed),
+      row: normalizeUserDailyMatchUsageRow(row),
+    };
+  }
+
+  const transaction = adapter.database.transaction((normalizedUserId, normalizedUsageDate, limitCap, timestampIso) => {
+    const existing = adapter.database.prepare(`
+      SELECT *
+      FROM user_daily_match_usage
+      WHERE user_id = ?
+        AND usage_date = ?
+      LIMIT 1
+    `).get(normalizedUserId, normalizedUsageDate);
+
+    if (!existing) {
+      adapter.database.prepare(`
+        INSERT INTO user_daily_match_usage (
+          user_id,
+          usage_date,
+          matches_started,
+          last_match_started_at,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, 1, ?, datetime('now'), datetime('now'))
+      `).run(normalizedUserId, normalizedUsageDate, timestampIso);
+      return {
+        allowed: true,
+        row: adapter.database.prepare(`
+          SELECT *
+          FROM user_daily_match_usage
+          WHERE user_id = ?
+            AND usage_date = ?
+          LIMIT 1
+        `).get(normalizedUserId, normalizedUsageDate),
+      };
+    }
+
+    const normalizedExisting = normalizeUserDailyMatchUsageRow(existing);
+    if (normalizedExisting.matchesStarted >= limitCap) {
+      return {
+        allowed: false,
+        row: existing,
+      };
+    }
+
+    adapter.database.prepare(`
+      UPDATE user_daily_match_usage
+      SET matches_started = matches_started + 1,
+          last_match_started_at = ?,
+          updated_at = datetime('now')
+      WHERE user_id = ?
+        AND usage_date = ?
+    `).run(timestampIso, normalizedUserId, normalizedUsageDate);
+
+    return {
+      allowed: true,
+      row: adapter.database.prepare(`
+        SELECT *
+        FROM user_daily_match_usage
+        WHERE user_id = ?
+          AND usage_date = ?
+        LIMIT 1
+      `).get(normalizedUserId, normalizedUsageDate),
+    };
+  });
+
+  const result = transaction(cleanUserId, cleanUsageDate, safeLimit, startedAtIso);
+  return {
+    allowed: Boolean(result?.allowed),
+    row: normalizeUserDailyMatchUsageRow(result?.row || null),
+  };
+}
+
+async function releaseUserDailyMatchQuota(userId, {
+  usageDate = normalizeUsageDate(),
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanUserId = String(userId || '').trim();
+  const cleanUsageDate = normalizeUsageDate(usageDate);
+  if (!cleanUserId) return null;
+
+  if (!adapter || adapter.kind === 'none') {
+    const key = `${cleanUserId}:${cleanUsageDate}`;
+    const existing = normalizeUserDailyMatchUsageRow(fallbackUserDailyMatchUsage.get(key) || null);
+    if (!existing) return null;
+    const row = normalizeUserDailyMatchUsageRow({
+      ...existing,
+      matches_started: Math.max(0, existing.matchesStarted - 1),
+      updated_at: nowIso(),
+    });
+    fallbackUserDailyMatchUsage.set(key, row);
+    return row;
+  }
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      UPDATE user_daily_match_usage
+      SET matches_started = GREATEST(0, matches_started - 1),
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND usage_date = $2
+      RETURNING *
+    `, [cleanUserId, cleanUsageDate]);
+    return normalizeUserDailyMatchUsageRow(result.rows[0] || null);
+  }
+
+  adapter.database.prepare(`
+    UPDATE user_daily_match_usage
+    SET matches_started = MAX(0, matches_started - 1),
+        updated_at = datetime('now')
+    WHERE user_id = ?
+      AND usage_date = ?
+  `).run(cleanUserId, cleanUsageDate);
+  const row = adapter.database.prepare(`
+    SELECT *
+    FROM user_daily_match_usage
+    WHERE user_id = ?
+      AND usage_date = ?
+    LIMIT 1
+  `).get(cleanUserId, cleanUsageDate);
+  return normalizeUserDailyMatchUsageRow(row || null);
+}
+
 async function upsertAgentRecord(agent = {}) {
   const adapter = await ensureDb();
   const id = String(agent.id || '').trim();
@@ -1628,6 +1936,67 @@ async function updateConnectSessionRecord(id, updates = {}) {
   });
 }
 
+async function countConnectSessionsCreatedByOwnerUserId(ownerUserId, {
+  createdAfter = null,
+  createdBefore = null,
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanOwnerUserId = String(ownerUserId || '').trim();
+  const normalizedCreatedAfter = normalizeIso(createdAfter);
+  const normalizedCreatedBefore = normalizeIso(createdBefore);
+  if ((!adapter || adapter.kind === 'none') && cleanOwnerUserId) {
+    let count = 0;
+    const createdAfterMs = normalizedCreatedAfter ? new Date(normalizedCreatedAfter).getTime() : null;
+    const createdBeforeMs = normalizedCreatedBefore ? new Date(normalizedCreatedBefore).getTime() : null;
+    for (const row of fallbackConnectSessions.values()) {
+      const normalized = normalizeConnectSessionRow(row);
+      if (String(normalized?.owner_user_id || '').trim() !== cleanOwnerUserId) continue;
+      const createdAtMs = new Date(normalized?.created_at || 0).getTime();
+      if (createdAfterMs != null && createdAtMs < createdAfterMs) continue;
+      if (createdBeforeMs != null && createdAtMs >= createdBeforeMs) continue;
+      count += 1;
+    }
+    return count;
+  }
+  if (!adapter || adapter.kind === 'none' || !cleanOwnerUserId) return 0;
+
+  if (adapter.kind === 'postgres') {
+    const conditions = ['owner_user_id = $1'];
+    const values = [cleanOwnerUserId];
+    if (normalizedCreatedAfter) {
+      values.push(normalizedCreatedAfter);
+      conditions.push(`created_at >= $${values.length}`);
+    }
+    if (normalizedCreatedBefore) {
+      values.push(normalizedCreatedBefore);
+      conditions.push(`created_at < $${values.length}`);
+    }
+    const result = await adapter.pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM connect_sessions
+      WHERE ${conditions.join(' AND ')}
+    `, values);
+    return toNumber(result.rows[0]?.count, 0);
+  }
+
+  const conditions = ['owner_user_id = ?'];
+  const values = [cleanOwnerUserId];
+  if (normalizedCreatedAfter) {
+    conditions.push('created_at >= ?');
+    values.push(normalizedCreatedAfter);
+  }
+  if (normalizedCreatedBefore) {
+    conditions.push('created_at < ?');
+    values.push(normalizedCreatedBefore);
+  }
+  const row = adapter.database.prepare(`
+    SELECT COUNT(*) AS count
+    FROM connect_sessions
+    WHERE ${conditions.join(' AND ')}
+  `).get(...values);
+  return toNumber(row?.count, 0);
+}
+
 async function createMagicLinkTokenRecord(tokenRecord = {}) {
   const adapter = await ensureDb();
   const tokenHash = String(tokenRecord.tokenHash || tokenRecord.token_hash || '').trim();
@@ -1737,6 +2106,105 @@ async function consumeMagicLinkTokenRecord(tokenHash) {
     ...row,
     consumed_at: new Date().toISOString(),
   });
+}
+
+async function countMagicLinkTokensByEmail(email, {
+  createdAfter = null,
+  createdBefore = null,
+} = {}) {
+  const adapter = await ensureDb();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const normalizedCreatedAfter = normalizeIso(createdAfter);
+  const normalizedCreatedBefore = normalizeIso(createdBefore);
+  if ((!adapter || adapter.kind === 'none') && cleanEmail) {
+    let count = 0;
+    const createdAfterMs = normalizedCreatedAfter ? new Date(normalizedCreatedAfter).getTime() : null;
+    const createdBeforeMs = normalizedCreatedBefore ? new Date(normalizedCreatedBefore).getTime() : null;
+    for (const row of fallbackMagicLinkTokens.values()) {
+      const normalized = normalizeMagicLinkTokenRow(row);
+      if (String(normalized?.email || '').trim().toLowerCase() !== cleanEmail) continue;
+      const createdAtMs = new Date(normalized?.created_at || 0).getTime();
+      if (createdAfterMs != null && createdAtMs < createdAfterMs) continue;
+      if (createdBeforeMs != null && createdAtMs >= createdBeforeMs) continue;
+      count += 1;
+    }
+    return count;
+  }
+  if (!adapter || adapter.kind === 'none' || !cleanEmail) return 0;
+
+  if (adapter.kind === 'postgres') {
+    const conditions = ['email = $1'];
+    const values = [cleanEmail];
+    if (normalizedCreatedAfter) {
+      values.push(normalizedCreatedAfter);
+      conditions.push(`created_at >= $${values.length}`);
+    }
+    if (normalizedCreatedBefore) {
+      values.push(normalizedCreatedBefore);
+      conditions.push(`created_at < $${values.length}`);
+    }
+    const result = await adapter.pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM magic_link_tokens
+      WHERE ${conditions.join(' AND ')}
+    `, values);
+    return toNumber(result.rows[0]?.count, 0);
+  }
+
+  const conditions = ['email = ?'];
+  const values = [cleanEmail];
+  if (normalizedCreatedAfter) {
+    conditions.push('created_at >= ?');
+    values.push(normalizedCreatedAfter);
+  }
+  if (normalizedCreatedBefore) {
+    conditions.push('created_at < ?');
+    values.push(normalizedCreatedBefore);
+  }
+  const row = adapter.database.prepare(`
+    SELECT COUNT(*) AS count
+    FROM magic_link_tokens
+    WHERE ${conditions.join(' AND ')}
+  `).get(...values);
+  return toNumber(row?.count, 0);
+}
+
+async function getLatestMagicLinkTokenRecordByEmail(email) {
+  const adapter = await ensureDb();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if ((!adapter || adapter.kind === 'none') && cleanEmail) {
+    let latest = null;
+    let latestCreatedAtMs = -1;
+    for (const row of fallbackMagicLinkTokens.values()) {
+      const normalized = normalizeMagicLinkTokenRow(row);
+      if (String(normalized?.email || '').trim().toLowerCase() !== cleanEmail) continue;
+      const createdAtMs = new Date(normalized?.created_at || 0).getTime();
+      if (createdAtMs <= latestCreatedAtMs) continue;
+      latest = normalized;
+      latestCreatedAtMs = createdAtMs;
+    }
+    return latest;
+  }
+  if (!adapter || adapter.kind === 'none' || !cleanEmail) return null;
+
+  if (adapter.kind === 'postgres') {
+    const result = await adapter.pool.query(`
+      SELECT *
+      FROM magic_link_tokens
+      WHERE email = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [cleanEmail]);
+    return normalizeMagicLinkTokenRow(result.rows[0] || null);
+  }
+
+  return normalizeMagicLinkTokenRow(adapter.database.prepare(`
+    SELECT *
+    FROM magic_link_tokens
+    WHERE email = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(cleanEmail));
 }
 
 async function recordMatch({
@@ -2688,6 +3156,7 @@ function resetFallbackPersistence() {
   fallbackConnectSessions.clear();
   fallbackMagicLinkTokens.clear();
   fallbackMetricCounters.clear();
+  fallbackUserDailyMatchUsage.clear();
   fallbackOpsSnapshots.clear();
   fallbackKpiRoomEvents.clear();
 }
@@ -2705,6 +3174,10 @@ module.exports = {
   createSession,
   getSessionByToken,
   deleteSessionsByUserId,
+  getUserDailyMatchUsage,
+  getUserDailyMatchUsages,
+  consumeUserDailyMatchQuota,
+  releaseUserDailyMatchQuota,
   incrementMetricCounter,
   getMetricCounters,
   saveOpsSnapshot,
@@ -2725,8 +3198,11 @@ module.exports = {
   createConnectSessionRecord,
   getConnectSessionRecord,
   updateConnectSessionRecord,
+  countConnectSessionsCreatedByOwnerUserId,
   createMagicLinkTokenRecord,
   consumeMagicLinkTokenRecord,
+  countMagicLinkTokensByEmail,
+  getLatestMagicLinkTokenRecordByEmail,
   recordMatch,
   getMatchesByUser,
   getPlayerMatches,

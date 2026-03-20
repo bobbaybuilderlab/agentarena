@@ -14,6 +14,10 @@ const {
   clearAllGameTimers,
   resetAgentArenaRuntime,
 } = require('../server');
+const {
+  createAnonymousUser,
+  consumeUserDailyMatchQuota,
+} = require('../server/db');
 
 const syntheticSocketIds = new Set();
 
@@ -42,13 +46,14 @@ function seedCompletedArenaMatch(agentIds, { publicArena = true } = {}) {
   });
 }
 
-function seedIdleAgent(id, offsetMs, { idleSince, withSocket = false } = {}) {
+function seedIdleAgent(id, offsetMs, { idleSince, withSocket = false, ownerUserId = null } = {}) {
   const timestamp = Date.now() - offsetMs;
   agentProfiles.set(id, {
     id,
     name: id,
     deployed: true,
     owner: `owner-${id}`,
+    ownerUserId,
   });
   liveAgentRuntimes.set(id, {
     agentId: id,
@@ -135,8 +140,16 @@ test('public arena selector allows the blocked rematch once repeated agents wait
 test('public arena queue self-wakes after the repeat timeout without another external event', async () => {
   process.env.PUBLIC_ARENA_REPEAT_IDLE_FALLBACK_MS = '30';
   seedCompletedArenaMatch(['A', 'B', 'C', 'D', 'E', 'F']);
+  const ownerIds = Array.from({ length: 6 }, (_unused, index) => `repeat-owner-${Date.now()}-${index + 1}`);
+  for (const ownerUserId of ownerIds) {
+    await createAnonymousUser(ownerUserId);
+  }
   ['A', 'B', 'C', 'D', 'E', 'F'].forEach((id, index) => {
-    seedIdleAgent(id, 120000 - (index * 1000), { idleSince: Date.now() - 5, withSocket: true });
+    seedIdleAgent(id, 120000 - (index * 1000), {
+      idleSince: Date.now() - 5,
+      withSocket: true,
+      ownerUserId: ownerIds[index],
+    });
   });
 
   await processPublicArenaQueue();
@@ -151,8 +164,16 @@ test('public arena queue self-wakes after the repeat timeout without another ext
 
 test('failed public arena room creation preserves idleSince for the retried batch', async () => {
   seedCompletedArenaMatch(['A', 'B', 'C', 'D', 'E', 'F']);
+  const ownerIds = Array.from({ length: 6 }, (_unused, index) => `broken-owner-${Date.now()}-${index + 1}`);
+  for (const ownerUserId of ownerIds) {
+    await createAnonymousUser(ownerUserId);
+  }
   ['A', 'B', 'C', 'D', 'E', 'F'].forEach((id, index) => {
-    seedIdleAgent(id, 120000 - (index * 1000), { idleSince: Date.now() - 50000, withSocket: true });
+    seedIdleAgent(id, 120000 - (index * 1000), {
+      idleSince: Date.now() - 50000,
+      withSocket: true,
+      ownerUserId: ownerIds[index],
+    });
   });
   const beforeIdleSince = liveAgentRuntimes.get('A')?.idleSince;
   const brokenSocketId = liveAgentRuntimes.get('F')?.socketId;
@@ -177,4 +198,76 @@ test('private or human matches do not influence the public arena overlap check',
 
   assert.equal(selection.reason, 'no_recent_public_table');
   assert.deepEqual(selection.batch.map((agent) => agent.id), ['A', 'B', 'C', 'D', 'E', 'F']);
+});
+
+test('public arena queue only seats one agent when an owner has one daily match remaining', async () => {
+  const timestampPrefix = Date.now();
+  const sharedOwnerUserId = `quota-owner-shared-${timestampPrefix}`;
+  await createAnonymousUser(sharedOwnerUserId);
+  for (let index = 0; index < 24; index += 1) {
+    await consumeUserDailyMatchQuota(sharedOwnerUserId);
+  }
+
+  seedIdleAgent('Owner-A', 120000, {
+    idleSince: Date.now() - 10000,
+    withSocket: true,
+    ownerUserId: sharedOwnerUserId,
+  });
+  seedIdleAgent('Owner-B', 119000, {
+    idleSince: Date.now() - 10000,
+    withSocket: true,
+    ownerUserId: sharedOwnerUserId,
+  });
+
+  const otherOwnerIds = Array.from({ length: 5 }, (_unused, index) => `quota-owner-${timestampPrefix}-${index + 1}`);
+  for (const ownerUserId of otherOwnerIds) {
+    await createAnonymousUser(ownerUserId);
+  }
+  ['Gamma', 'Hotel', 'India', 'Juliet', 'Kilo'].forEach((id, index) => {
+    seedIdleAgent(id, 118000 - (index * 1000), {
+      idleSince: Date.now() - 10000,
+      withSocket: true,
+      ownerUserId: otherOwnerIds[index],
+    });
+  });
+
+  await processPublicArenaQueue();
+
+  const roomAgentIds = await waitFor(() => (
+    mafiaRooms.size === 1 ? currentRoomAgentIds() : null
+  ), 1000, 25);
+
+  assert.ok(roomAgentIds, 'expected a public arena room');
+  const sharedSeats = roomAgentIds.filter((id) => id === 'Owner-A' || id === 'Owner-B');
+  assert.equal(sharedSeats.length, 1);
+});
+
+test('ownerless agents are skipped by the public arena queue', async () => {
+  const timestampPrefix = Date.now();
+  seedIdleAgent('Ownerless', 125000, {
+    idleSince: Date.now() - 10000,
+    withSocket: true,
+  });
+
+  const ownerIds = Array.from({ length: 6 }, (_unused, index) => `owned-owner-${timestampPrefix}-${index + 1}`);
+  for (const ownerUserId of ownerIds) {
+    await createAnonymousUser(ownerUserId);
+  }
+  ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'].forEach((id, index) => {
+    seedIdleAgent(id, 124000 - (index * 1000), {
+      idleSince: Date.now() - 10000,
+      withSocket: true,
+      ownerUserId: ownerIds[index],
+    });
+  });
+
+  await processPublicArenaQueue();
+
+  const roomAgentIds = await waitFor(() => (
+    mafiaRooms.size === 1 ? currentRoomAgentIds() : null
+  ), 1000, 25);
+
+  assert.ok(roomAgentIds, 'expected a public arena room');
+  assert.equal(roomAgentIds.includes('Ownerless'), false);
+  assert.equal(roomAgentIds.length, 6);
 });

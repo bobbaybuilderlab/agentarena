@@ -2,12 +2,14 @@ const { buildOnboardingContract } = require('./onboarding-contract');
 const { URLSearchParams } = require('url');
 const {
   createConnectSessionRecord,
+  countConnectSessionsCreatedByOwnerUserId,
   getConnectSessionRecord,
   updateConnectSessionRecord,
 } = require('../db');
 const { hashSecret, secretMatches, randomSecret } = require('./secret-tokens');
 
 const CONNECT_SESSION_TTL_MS = 15 * 60_000;
+const CONNECT_SESSION_DAILY_LIMIT = Math.max(0, Number(process.env.OPENCLAW_CONNECT_DAILY_LIMIT || 20));
 
 function toMillis(value, fallback = 0) {
   if (!value) return fallback;
@@ -52,13 +54,87 @@ function hydrateConnectSession(row) {
   };
 }
 
+function startOfUtcDayIso(now = Date.now()) {
+  const date = new Date(now);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.toISOString();
+}
+
+function nextUtcMidnightMs(now = Date.now()) {
+  const date = new Date(now);
+  date.setUTCHours(24, 0, 0, 0);
+  return date.getTime();
+}
+
+function buildConnectSessionLimitError(message, {
+  code = 'OPENCLAW_CONNECT_LIMIT_REACHED',
+  retryAfterMs = 60_000,
+  extra = null,
+} = {}) {
+  const error = new Error(message);
+  error.statusCode = 429;
+  error.code = code;
+  error.retryAfterMs = Math.max(1_000, Number(retryAfterMs) || 60_000);
+  if (extra && typeof extra === 'object') error.extra = extra;
+  return error;
+}
+
+function listReusablePendingConnectSessions(connectSessions, ownerUserId, {
+  now = Date.now(),
+} = {}) {
+  const cleanOwnerUserId = String(ownerUserId || '').trim();
+  if (!cleanOwnerUserId || !(connectSessions instanceof Map)) return [];
+  return [...connectSessions.values()]
+    .filter((connect) => {
+      if (!connect) return false;
+      if (String(connect.ownerUserId || '').trim() !== cleanOwnerUserId) return false;
+      if (String(connect.status || '').trim() !== 'pending_confirmation') return false;
+      if (!connect.accessToken || !connect.callbackProof) return false;
+      return toMillis(connect.expiresAt) > now;
+    })
+    .sort((left, right) => toMillis(right?.createdAt) - toMillis(left?.createdAt));
+}
+
 async function createConnectSession({
   connectSessions,
   email,
   ownerUserId,
   publicBaseUrl,
   shortId,
+  now = Date.now(),
+  dailyCreateLimit = CONNECT_SESSION_DAILY_LIMIT,
 }) {
+  const reusablePendingSessions = listReusablePendingConnectSessions(connectSessions, ownerUserId, { now });
+  if (reusablePendingSessions.length > 0) {
+    return {
+      connect: reusablePendingSessions[0],
+      reusedExisting: true,
+      activePendingCount: reusablePendingSessions.length,
+    };
+  }
+
+  const cleanOwnerUserId = String(ownerUserId || '').trim() || null;
+  if (cleanOwnerUserId && dailyCreateLimit > 0) {
+    const createdToday = await countConnectSessionsCreatedByOwnerUserId(cleanOwnerUserId, {
+      createdAfter: startOfUtcDayIso(now),
+    });
+    if (createdToday >= dailyCreateLimit) {
+      const retryAfterMs = Math.max(1_000, nextUtcMidnightMs(now) - now);
+      throw buildConnectSessionLimitError(
+        'You have reached today\'s connect-message limit. Try again after midnight UTC.',
+        {
+          code: 'OPENCLAW_CONNECT_DAILY_LIMIT',
+          retryAfterMs,
+          extra: {
+            dailyLimit: dailyCreateLimit,
+            createdToday,
+            resetsAt: new Date(now + retryAfterMs).toISOString(),
+          },
+        },
+      );
+    }
+  }
+
   const id = shortId(18);
   const callbackUrl = `${String(publicBaseUrl || '').replace(/\/+$/, '')}/api/openclaw/callback`;
   const callbackProof = randomSecret(16);
@@ -72,9 +148,9 @@ async function createConnectSession({
     accessToken,
     accessTokenHash: hashSecret(accessToken),
     callbackProofHash: hashSecret(callbackProof),
-    createdAt: Date.now(),
-    expiresAt: Date.now() + CONNECT_SESSION_TTL_MS,
-    ownerUserId: String(ownerUserId || '').trim() || null,
+    createdAt: now,
+    expiresAt: now + CONNECT_SESSION_TTL_MS,
+    ownerUserId: cleanOwnerUserId,
     agentId: null,
     agentName: null,
     connectedAt: null,
@@ -94,7 +170,11 @@ async function createConnectSession({
     expiresAt: toIso(connect.expiresAt),
     connectedAt: toIso(connect.connectedAt),
   });
-  return connect;
+  return {
+    connect,
+    reusedExisting: false,
+    activePendingCount: 1,
+  };
 }
 
 async function getConnectSession(connectSessions, id) {
@@ -233,11 +313,13 @@ module.exports = {
   CONNECT_SESSION_TTL_MS,
   authorizeConnectSessionRead,
   authorizeConnectSessionWrite,
+  buildConnectSessionLimitError,
   createConnectSession,
   getConnectSession,
   getConnectArenaUrl,
   hydrateConnectSession,
   isConnectSessionExpired,
+  listReusablePendingConnectSessions,
   readConnectAccessToken,
   readConnectCallbackProof,
   saveConnectSession,

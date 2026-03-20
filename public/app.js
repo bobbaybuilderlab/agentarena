@@ -93,6 +93,20 @@ function getConnectedAgentId() {
   return getStoredValue(STORAGE_KEYS.agentId);
 }
 
+function formatQuotaResetTime(value) {
+  const parsed = new Date(value || '');
+  if (Number.isNaN(parsed.getTime())) return 'midnight UTC';
+  return `${parsed.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  })}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -139,6 +153,8 @@ let connectCommand = '';
 let connectExpiresAt = null;
 let connectAccessToken = getSessionValue(SESSION_KEYS.connectAccessToken) || '';
 let statusPoll = null;
+let statusPollStartedAt = 0;
+let statusPollRequestInFlight = false;
 let publicOnboarding = null;
 
 function getOnboarding(connect) {
@@ -166,6 +182,48 @@ function currentConnectStatusUrl() {
 function resolveConnectStatusUrl(entity) {
   const arenaUrl = String(entity?.arenaUrl || '').trim();
   return arenaUrl || currentConnectStatusUrl();
+}
+
+function documentIsHidden() {
+  return Boolean(document && 'hidden' in document && document.hidden);
+}
+
+function clearStatusPoll() {
+  if (statusPoll) clearTimeout(statusPoll);
+  statusPoll = null;
+}
+
+function setGenerateButtonVisible(visible) {
+  if (!generateCmdBtn) return;
+  generateCmdBtn.style.display = visible ? '' : 'none';
+  if (visible) generateCmdBtn.disabled = false;
+}
+
+function clearConnectAccessToken() {
+  connectAccessToken = '';
+  setSessionValue(SESSION_KEYS.connectAccessToken, '');
+}
+
+function clearStoredConnectSession({ preserveGeneratedFlag = true } = {}) {
+  connectSessionId = null;
+  connectExpiresAt = null;
+  clearStoredValue(STORAGE_KEYS.connectSessionId);
+  clearConnectAccessToken();
+  if (!preserveGeneratedFlag) clearStoredValue(STORAGE_KEYS.hasGeneratedCommand);
+  refreshFirstWinChecklist();
+}
+
+function nextStatusPollDelayMs() {
+  if (!statusPollStartedAt) return 5000;
+  return Date.now() - statusPollStartedAt < 60_000 ? 5000 : 10_000;
+}
+
+function scheduleStatusPoll(delayMs = nextStatusPollDelayMs()) {
+  clearStatusPoll();
+  if (!connectSessionId || documentIsHidden()) return;
+  statusPoll = setTimeout(() => {
+    void checkConnectionStatus();
+  }, Math.max(1000, Number(delayMs) || 5000));
 }
 
 async function loadPublicOnboarding() {
@@ -237,12 +295,12 @@ generateCmdBtn?.addEventListener('click', async () => {
     setStoredValue(STORAGE_KEYS.connectSessionId, connectSessionId);
     setSessionValue(SESSION_KEYS.connectAccessToken, connectAccessToken);
     refreshFirstWinChecklist();
-    generateCmdBtn.style.display = 'none';
+    setGenerateButtonVisible(false);
     statusEl.textContent = 'Ready. Paste this into OpenClaw.';
-    if (statusPoll) clearInterval(statusPoll);
-    statusPoll = setInterval(checkConnectionStatus, 3000);
+    statusPollStartedAt = Date.now();
+    scheduleStatusPoll();
   } catch (err) {
-    generateCmdBtn.disabled = false;
+    setGenerateButtonVisible(true);
     statusEl.textContent = `Could not start connect flow: ${err.message}`;
   }
 });
@@ -264,24 +322,34 @@ copyCmdBtn?.addEventListener('click', async () => {
 });
 
 async function checkConnectionStatus() {
-  if (!connectSessionId) return;
+  if (!connectSessionId || statusPollRequestInFlight || documentIsHidden() || !statusEl) return;
+  statusPollRequestInFlight = true;
   try {
     const headers = connectAccessToken
       ? { 'x-connect-access-token': connectAccessToken }
       : {};
     const res = await fetch(`${API_BASE}/api/openclaw/connect-session/${connectSessionId}`, { headers });
-    const data = await res.json();
-    if (!data.ok) {
-      if (statusEl) statusEl.textContent = data.error || 'Session error. Generate a new one-time message.';
-      connectAccessToken = '';
-      setSessionValue(SESSION_KEYS.connectAccessToken, '');
-      if (statusPoll) clearInterval(statusPoll);
+    const data = await readJsonResponse(res);
+    if (!res.ok || !data?.ok) {
+      if (res.status === 429) {
+        clearStatusPoll();
+        if (statusEl) {
+          const retryAfterSec = Math.max(1, Number(data?.retryAfterSec) || 0);
+          statusEl.textContent = retryAfterSec > 0
+            ? `${data?.error || 'Too many status checks.'} Wait about ${retryAfterSec}s, then use Check Status.`
+            : (data?.error || 'Too many status checks. Please wait a moment and retry.');
+        }
+        return;
+      }
+      if (statusEl) statusEl.textContent = data?.error || 'Session error. Generate a new one-time message.';
+      clearStatusPoll();
+      clearStoredConnectSession();
+      setGenerateButtonVisible(true);
       return;
     }
     if (data.connect.status === 'connected') {
-      if (statusPoll) clearInterval(statusPoll);
-      connectAccessToken = '';
-      setSessionValue(SESSION_KEYS.connectAccessToken, '');
+      clearStatusPoll();
+      clearStoredConnectSession();
       setStoredValue(STORAGE_KEYS.connectorInstalled, '1');
       if (data.connect.agentId) setStoredValue(STORAGE_KEYS.agentId, data.connect.agentId);
       syncArenaEntryButton();
@@ -300,6 +368,14 @@ async function checkConnectionStatus() {
         statusEl.textContent = `${safeAgentName} is live now. Use the leaderboard to track the latest results.`;
         return;
       }
+      if (data.connect.arena?.queueStatus === 'ownership_required') {
+        statusEl.textContent = `${safeAgentName} is connected, but account ownership is missing. Reconnect from the website session that created this agent.`;
+        return;
+      }
+      if (data.connect.quota?.blocked) {
+        statusEl.textContent = `${safeAgentName} is connected, but today's match budget is used up. New seats open after ${formatQuotaResetTime(data.connect.quota.resetsAt)}.`;
+        return;
+      }
       if (data.connect.arena?.runtimeConnected) {
         statusEl.textContent = `${safeAgentName} is online and waiting for enough agents to open the next table.`;
         return;
@@ -308,27 +384,42 @@ async function checkConnectionStatus() {
       return;
     }
     if (data.connect.expiresAt && Date.now() > data.connect.expiresAt) {
-      if (statusPoll) clearInterval(statusPoll);
-      connectAccessToken = '';
-      setSessionValue(SESSION_KEYS.connectAccessToken, '');
+      clearStatusPoll();
+      clearStoredConnectSession();
+      setGenerateButtonVisible(true);
       statusEl.textContent = 'Session expired. Generate a new one-time message.';
       return;
     }
     statusEl.textContent = 'Waiting for OpenClaw to connect...';
+    scheduleStatusPoll();
   } catch {
-    // keep silent during polling jitter
+    scheduleStatusPoll();
+  } finally {
+    statusPollRequestInFlight = false;
   }
 }
 
 function resumeConnectFlow() {
   if (!statusEl || !connectSessionId) return;
-  if (statusPoll) clearInterval(statusPoll);
+  setGenerateButtonVisible(false);
+  clearStatusPoll();
   statusEl.textContent = 'Checking your last connect message...';
+  statusPollStartedAt = Date.now();
   void checkConnectionStatus();
-  statusPoll = setInterval(checkConnectionStatus, 3000);
 }
 
 checkStatusBtn?.addEventListener('click', checkConnectionStatus);
+
+document.addEventListener('visibilitychange', () => {
+  if (!connectSessionId || !statusEl) return;
+  if (documentIsHidden()) {
+    clearStatusPoll();
+    return;
+  }
+  statusEl.textContent = 'Resuming your last connect message...';
+  if (!statusPollStartedAt) statusPollStartedAt = Date.now();
+  scheduleStatusPoll(1000);
+});
 
 // Leaderboard + live rooms
 const leaderboardList = document.getElementById('leaderboardList');

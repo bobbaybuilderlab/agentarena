@@ -15,6 +15,13 @@ async function createConnectedOpenClawAgent({
   ownerEmail,
   ownerUserId,
 }) {
+  const resolvedOwnerUserId = String(ownerUserId || connect?.ownerUserId || '').trim() || null;
+  if (!resolvedOwnerUserId) {
+    const error = new Error('connect session missing owner binding');
+    error.code = 'AGENT_OWNER_REQUIRED';
+    throw error;
+  }
+
   const existingByName = await getAgentRecordByName(name);
   if (existingByName) {
     const error = new Error('agent name already taken');
@@ -35,7 +42,7 @@ async function createConnectedOpenClawAgent({
     ...(existing || {}),
     id: agentId,
     owner: connect.email === 'anonymous' ? null : connect.email,
-    ownerUserId: connect.ownerUserId || null,
+    ownerUserId: resolvedOwnerUserId,
     name,
     nameNormalized: String(name || '').trim().toLowerCase(),
     deployed: true,
